@@ -11,28 +11,33 @@ struct ContentView: View {
     @StateObject private var viewModel = AuthenticationViewModel()
     
     var body: some View {
-        ZStack {
-            switch viewModel.currentScreen {
-            case .welcome:
-                WelcomeView(viewModel: viewModel) {
-                    handleLogin()
-                }
-            case .signup:
-                SignUpView(viewModel: viewModel) {
-                    handleLogin()
-                }
-            case .login:
-                LoginView(viewModel: viewModel) {
-                    handleLogin()
+        Group {
+            if viewModel.isAuthenticated {
+                MainTabView()
+            } else {
+                ZStack {
+                    switch viewModel.currentScreen {
+                    case .welcome:
+                        WelcomeView(viewModel: viewModel) {
+                            handleLogin()
+                        }
+                    case .signup:
+                        SignUpView(viewModel: viewModel) {
+                            handleLogin()
+                        }
+                    case .login:
+                        LoginView(viewModel: viewModel) {
+                            handleLogin()
+                        }
+                    }
                 }
             }
         }
     }
     
     private func handleLogin() {
-        // Handle successful login - navigate to main app
-        print("User logged in successfully")
-        // In a real app, you would navigate to the main app screen here
+        // Authentication state is now handled by the viewModel
+        // The view will automatically update when isAuthenticated changes
     }
 }
 

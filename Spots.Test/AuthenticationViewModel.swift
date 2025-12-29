@@ -22,10 +22,15 @@ class AuthenticationViewModel: ObservableObject {
     @Published var passwordError = ""
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published var isAuthenticated: Bool = false
     
     @Published var formData = FormData()
     
     private let supabase = SupabaseManager.shared.client
+    
+    init() {
+        checkSession()
+    }
     
     struct FormData {
         var username: String = ""
@@ -95,6 +100,7 @@ class AuthenticationViewModel: ObservableObject {
             
             await MainActor.run {
                 isLoading = false
+                isAuthenticated = true
                 onSuccess()
             }
         } catch {
@@ -129,12 +135,45 @@ class AuthenticationViewModel: ObservableObject {
             
             await MainActor.run {
                 isLoading = false
+                isAuthenticated = true
                 onSuccess()
             }
         } catch {
             await MainActor.run {
                 isLoading = false
                 errorMessage = error.localizedDescription
+            }
+        }
+    }
+    
+    // MARK: - Session Management
+    func checkSession() {
+        Task {
+            do {
+                let session = try await supabase.auth.session
+                await MainActor.run {
+                    isAuthenticated = session != nil
+                }
+            } catch {
+                // If there's an error or no session, user is not authenticated
+                await MainActor.run {
+                    isAuthenticated = false
+                }
+            }
+        }
+    }
+    
+    func signOut() {
+        Task {
+            do {
+                try await supabase.auth.signOut()
+                await MainActor.run {
+                    isAuthenticated = false
+                    currentScreen = .welcome
+                    resetForm()
+                }
+            } catch {
+                print("Error signing out: \(error)")
             }
         }
     }
