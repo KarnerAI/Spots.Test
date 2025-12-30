@@ -17,6 +17,16 @@ class PlacesAPIService {
         return Config.googlePlacesAPIKey
     }
     
+    // Bundle identifier is required for iOS app restrictions
+    // Google requires this header to verify the request is from the correct app
+    private var bundleIdentifier: String {
+        guard let bundleId = Bundle.main.bundleIdentifier else {
+            print("⚠️ WARNING: Bundle identifier not found. iOS app restrictions may not work correctly.")
+            return ""
+        }
+        return bundleId
+    }
+    
     private let baseURL = "https://places.googleapis.com/v1/places:autocomplete"
     
     private init() {}
@@ -169,6 +179,17 @@ class PlacesAPIService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        
+        // Add bundle identifier header for iOS app restrictions
+        // This is required when API key has iOS app restrictions enabled
+        let bundleId = bundleIdentifier
+        if !bundleId.isEmpty {
+            request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
+            print("📱 Sending API request with bundle ID: \(bundleId)")
+        } else {
+            print("⚠️ WARNING: Bundle identifier is empty. iOS app restrictions may not work.")
+        }
+        
         // Note: Field mask is optional for autocomplete - try without it first
         // If needed, uncomment and adjust format:
         // request.setValue("suggestions.placePrediction.placeId,suggestions.placePrediction.text", forHTTPHeaderField: "X-Goog-FieldMask")
@@ -486,6 +507,14 @@ extension PlacesAPIService {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        
+        // Add bundle identifier header for iOS app restrictions
+        // This is required when API key has iOS app restrictions enabled
+        let bundleId = bundleIdentifier
+        if !bundleId.isEmpty {
+            request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
+        }
+        
         request.setValue("location", forHTTPHeaderField: "X-Goog-FieldMask")
         
         URLSession.shared.dataTask(with: request) { data, response, error in

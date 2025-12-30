@@ -15,28 +15,45 @@ struct Config {
     // 2. Create or select a project
     // 3. Enable "Places API (New)" in the API Library
     // 4. Go to Credentials and create an API key
-    // 5. (Recommended) Restrict the API key to your iOS app bundle ID
-    // 6. Replace the value below with your API key
+    // 5. (Recommended) Restrict the API key to your iOS app bundle ID and API restrictions
+    // 6. Add the key to Info.plist as "GooglePlacesAPIKey" (String type)
     //
-    // Alternatively, you can set this via environment variable or Info.plist
-    // For production, consider using a secure configuration system
+    // Alternatively, you can set this via environment variable GOOGLE_PLACES_API_KEY (for CI/CD)
     
     static let googlePlacesAPIKey: String = {
-        // Option 1: Check Info.plist first
+        // Option 1: Check Info.plist first (RECOMMENDED)
         if let apiKey = Bundle.main.object(forInfoDictionaryKey: "GooglePlacesAPIKey") as? String,
            !apiKey.isEmpty {
+            // Debug logging: Show source and first few characters
+            let keyPrefix = String(apiKey.prefix(8))
+            print("✅ Google Places API key loaded from Info.plist (starts with: \(keyPrefix)...)")
+            
+            // Validate key format (Google API keys start with "AIza")
+            if !apiKey.hasPrefix("AIza") {
+                print("⚠️ WARNING: API key format may be incorrect. Google API keys typically start with 'AIza'")
+            }
+            
             return apiKey
         }
         
         // Option 2: Check environment variable (for CI/CD)
         if let apiKey = ProcessInfo.processInfo.environment["GOOGLE_PLACES_API_KEY"],
            !apiKey.isEmpty {
+            // Debug logging: Show source and first few characters
+            let keyPrefix = String(apiKey.prefix(8))
+            print("✅ Google Places API key loaded from environment variable (starts with: \(keyPrefix)...)")
+            
+            // Validate key format
+            if !apiKey.hasPrefix("AIza") {
+                print("⚠️ WARNING: API key format may be incorrect. Google API keys typically start with 'AIza'")
+            }
+            
             return apiKey
         }
         
-        // Option 3: Hardcoded fallback (NOT RECOMMENDED for production)
-        // Replace this with your actual API key or use one of the methods above
-        return "AIzaSyAK2BCSCWDS1uwAZmcG2jie4eNP8QrhGUw"
+        // No API key found - fail explicitly with helpful error message
+        print("❌ ERROR: Google Places API key not found in Info.plist or environment variables")
+        fatalError("Google Places API key is not configured. Please add it to Info.plist as 'GooglePlacesAPIKey' or set the GOOGLE_PLACES_API_KEY environment variable.")
     }()
 }
 
