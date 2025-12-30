@@ -202,15 +202,13 @@ class LocationSavingService {
     
     /// Get spot count for a list
     func getSpotCount(listId: UUID) async throws -> Int {
-        // Query spot_list_items and count results
-        let response: [SpotListItem] = try await supabase
-            .from("spot_list_items")
-            .select("id")
-            .eq("list_id", value: listId.uuidString)
+        // PostgREST returns scalar function results as the scalar value directly
+        let count: Int = try await supabase
+            .rpc("get_list_spot_count", params: ["list_id": listId.uuidString])
             .execute()
             .value
         
-        return response.count
+        return count
     }
     
     // MARK: - Saving/Removing Spots
