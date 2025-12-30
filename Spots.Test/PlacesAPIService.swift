@@ -241,7 +241,7 @@ class PlacesAPIService {
                 let decoder = JSONDecoder()
                 // Try to parse as new API format first (Places API New)
                 let newResponse = try decoder.decode(NewPlacesAutocompleteResponse.self, from: data)
-                var predictions = newResponse.suggestions.compactMap { suggestion -> PlaceAutocompleteResult? in
+                let predictions = newResponse.suggestions.compactMap { suggestion -> PlaceAutocompleteResult? in
                     let placePrediction = suggestion.placePrediction
                     
                     // Use structuredFormat if available (preferred), otherwise parse from text

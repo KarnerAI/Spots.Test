@@ -61,6 +61,8 @@ struct SearchView: View {
     @State private var autocompleteResults: [PlaceAutocompleteResult] = []
     @State private var isLoadingPlaces: Bool = false
     @State private var placesError: String?
+    @StateObject private var locationSavingVM = LocationSavingViewModel()
+    @State private var selectedSpotForSaving: PlaceAutocompleteResult?
     
     init(
         onSelectSpot: @escaping (String) -> Void,
@@ -226,6 +228,19 @@ struct SearchView: View {
         .transition(.move(edge: .trailing))
         .onAppear {
             locationManager.requestLocationPermission()
+            Task {
+                await locationSavingVM.loadUserLists()
+            }
+        }
+        .sheet(item: $selectedSpotForSaving) { spot in
+            ListPickerView(
+                spotData: spot,
+                viewModel: locationSavingVM,
+                onSaveComplete: {
+                    // Dismiss both the sheet and the SearchView to return to Explore
+                    dismiss()
+                }
+            )
         }
     }
     
@@ -619,8 +634,8 @@ struct SearchView: View {
     
     private func autocompleteResultRow(result: PlaceAutocompleteResult) -> some View {
         Button(action: {
-            onSelectSpot(result.name)
-            dismiss()
+            // Show save sheet when tapping on the place
+            selectedSpotForSaving = result
         }) {
             HStack(spacing: 12) {
                 // Map Pin Icon
@@ -650,6 +665,12 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
                 Spacer()
+                
+                // Bookmark icon indicator
+                Image(systemName: "bookmark")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(Color(red: 0.36, green: 0.69, blue: 0.72))
+                    .frame(width: 44, height: 44)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)

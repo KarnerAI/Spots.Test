@@ -88,7 +88,7 @@ class AuthenticationViewModel: ObservableObject {
         
         do {
             // Sign up with Supabase
-            let response = try await supabase.auth.signUp(
+            _ = try await supabase.auth.signUp(
                 email: formData.email,
                 password: formData.password,
                 data: [
@@ -128,7 +128,7 @@ class AuthenticationViewModel: ObservableObject {
         }
         
         do {
-            let response = try await supabase.auth.signIn(
+            _ = try await supabase.auth.signIn(
                 email: formData.email,
                 password: formData.password
             )
@@ -150,9 +150,9 @@ class AuthenticationViewModel: ObservableObject {
     func checkSession() {
         Task {
             do {
-                let session = try await supabase.auth.session
+                _ = try await supabase.auth.session
                 await MainActor.run {
-                    isAuthenticated = session != nil
+                    isAuthenticated = true
                 }
             } catch {
                 // If there's an error or no session, user is not authenticated
