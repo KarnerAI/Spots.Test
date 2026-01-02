@@ -6,9 +6,13 @@
 //
 
 import SwiftUI
+import GoogleMaps
 
 struct ExploreView: View {
     @State private var showSearchView = false
+    @StateObject private var viewModel = MapViewModel()
+    @State private var mapView: GMSMapView?
+    @State private var markers: [GMSMarker] = []
     
     var body: some View {
         ZStack {
@@ -41,23 +45,63 @@ struct ExploreView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 0)
                 
-                // Placeholder Map View
+                // Google Map View
                 ZStack {
-                    // Placeholder background to simulate map appearance
-                    // This will be replaced with actual Google Maps integration later
-                    Color(red: 0.96, green: 0.95, blue: 0.93) // Light beige/gray to simulate map
-                        .ignoresSafeArea()
+                    GoogleMapView(
+                        cameraPosition: $viewModel.cameraPosition,
+                        markers: $markers,
+                        showUserLocation: .constant(true),
+                        onMapReady: { mapView in
+                            self.mapView = mapView
+                            viewModel.setupMap(mapView)
+                        },
+                        onCameraChanged: { position in
+                            // Handle camera changes if needed
+                            let radius = viewModel.calculateRadius(for: position.zoom)
+                            print("Map zoom: \(position.zoom), calculated radius: \(radius)m")
+                        }
+                    )
+                    .ignoresSafeArea()
                     
-                    // Optional: Add some visual elements to make it look more like a map
+                    // Locate Me Button
                     VStack {
                         Spacer()
-                        Text("Map View")
-                            .font(.system(size: 14))
-                            .foregroundColor(.gray400)
-                            .padding(.bottom, 100)
+                        HStack {
+                            Spacer()
+                            Button(action: {
+                                viewModel.requestLocation()
+                                // Wait a moment for location to update, then center
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                    if let location = viewModel.currentLocation {
+                                        viewModel.centerOnLocation(location)
+                                    }
+                                }
+                            }) {
+                                Image(systemName: "scope")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundColor(.gray900)
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.white)
+                                    .clipShape(Circle())
+                                    .shadow(color: Color.black.opacity(0.15), radius: 4, x: 0, y: 2)
+                            }
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 120) // Positioned higher above bottom navigation bar
+                        }
                     }
                 }
             }
+        }
+        .onAppear {
+            // Request location permission and load saved places
+            viewModel.requestLocation()
+            Task {
+                await viewModel.loadSavedPlaces()
+                updateMarkers()
+            }
+        }
+        .onChange(of: viewModel.savedPlaces.count) { oldValue, newValue in
+            updateMarkers()
         }
         .fullScreenCover(isPresented: $showSearchView) {
             SearchView(
@@ -82,6 +126,10 @@ struct ExploreView: View {
                 }
             )
         }
+    }
+    
+    private func updateMarkers() {
+        markers = viewModel.createMarkers()
     }
 }
 
