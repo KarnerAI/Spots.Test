@@ -6,6 +6,40 @@
 //
 
 import SwiftUI
+import Foundation
+import UIKit
+
+// #region agent log
+func debugLog(_ message: String, data: [String: Any] = [:]) {
+    let logPath = "/Users/shaon/Library/CloudStorage/GoogleDrive-hussain@karnerblu.com/Shared drives/6. Spots 2.0/3. Engineering/2. CodeBase/SpotsTest/Spots.Test/.cursor/debug.log"
+    let logEntry: [String: Any] = [
+        "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+        "location": "CustomBottomNav.swift",
+        "message": message,
+        "data": data,
+        "sessionId": "debug-session",
+        "runId": "run1"
+    ]
+    // Also print to console for debugging
+    print("🔍 DEBUG: \(message) - \(data)")
+    
+    if let jsonData = try? JSONSerialization.data(withJSONObject: logEntry),
+       let jsonString = String(data: jsonData, encoding: .utf8) {
+        // Create directory if it doesn't exist
+        let fileManager = FileManager.default
+        let directory = (logPath as NSString).deletingLastPathComponent
+        try? fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: nil)
+        
+        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
+            fileHandle.seekToEndOfFile()
+            fileHandle.write((jsonString + "\n").data(using: .utf8)!)
+            fileHandle.closeFile()
+        } else {
+            try? jsonString.write(toFile: logPath, atomically: true, encoding: .utf8)
+        }
+    }
+}
+// #endregion
 
 struct CustomBottomNav: View {
     @Binding var selectedTab: Int
@@ -33,10 +67,13 @@ struct CustomBottomNav: View {
                 
                 // Explore Tab
                 TabButton(
-                    icon: "compass",
+                    icon: "safari",
                     label: "Explore",
                     isSelected: selectedTab == 1,
                     action: {
+                        // #region agent log
+                        debugLog("Explore tab clicked", data: ["icon": "safari", "selectedTab": selectedTab, "hypothesisId": "A"])
+                        // #endregion
                         selectedTab = 1
                         onTabChange(1)
                     }
@@ -76,11 +113,25 @@ struct TabButton: View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 20, weight: .regular))
+                    // #region agent log
+                    .onAppear {
+                        debugLog("Image view appeared", data: ["icon": icon, "label": label, "isSelected": isSelected, "hypothesisId": "A"])
+                    }
+                    // #endregion
+                    .font(.system(size: 24, weight: .regular))
                     .foregroundColor(isSelected ? .gray900 : .gray400)
+                    // #region agent log
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear.onAppear {
+                                debugLog("Image frame size", data: ["icon": icon, "width": geometry.size.width, "height": geometry.size.height, "hypothesisId": "B"])
+                            }
+                        }
+                    )
+                    // #endregion
                 
                 Text(label)
-                    .font(.system(size: 10, weight: .regular))
+                    .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
                     .foregroundColor(isSelected ? .gray900 : .gray400)
             }
             .frame(maxWidth: .infinity)
@@ -88,6 +139,11 @@ struct TabButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
+        // #region agent log
+        .onAppear {
+            debugLog("TabButton view appeared", data: ["icon": icon, "label": label, "isSelected": isSelected, "hypothesisId": "C"])
+        }
+        // #endregion
     }
 }
 
