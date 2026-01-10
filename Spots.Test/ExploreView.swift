@@ -10,85 +10,91 @@ import GoogleMaps
 
 struct ExploreView: View {
     @State private var showSearchView = false
+    @State private var showFiltersPlaceholder = false
     @StateObject private var viewModel = MapViewModel()
     @State private var mapView: GMSMapView?
     @State private var markers: [GMSMarker] = []
     
     var body: some View {
         ZStack {
-            Color.white
-                .ignoresSafeArea()
+            // Full screen map
+            GoogleMapView(
+                cameraPosition: $viewModel.cameraPosition,
+                markers: $markers,
+                showUserLocation: .constant(true),
+                forceCameraUpdate: $viewModel.forceCameraUpdate,
+                onMapReady: { mapView in
+                    self.mapView = mapView
+                    viewModel.setupMap(mapView)
+                    // Track initial camera position
+                    viewModel.currentCameraPosition = mapView.camera
+                },
+                onCameraChanged: { position in
+                    // Update current camera position in ViewModel
+                    viewModel.currentCameraPosition = position
+                    // Handle camera changes if needed
+                    let radius = viewModel.calculateRadius(for: position.zoom)
+                    print("Map zoom: \(position.zoom), calculated radius: \(radius)m")
+                }
+            )
+            .ignoresSafeArea()
             
+            // Floating search bar overlay
             VStack(spacing: 0) {
-                // Search Bar
-                Button(action: {
-                    showSearchView = true
-                }) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 16))
-                            .foregroundColor(.gray400)
-                        
-                        Text("Search for places...")
-                            .font(.system(size: 16))
-                            .foregroundColor(.gray400)
-                        
-                        Spacer()
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Color.white)
-                    .cornerRadius(24)
-                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+                // Search Bar with integrated filter
+                HStack(spacing: 12) {
+                    // Magnifying glass icon
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16))
+                        .foregroundColor(.gray400)
+                    
+                    // Search text
+                    Text("Search spots, friends...")
+                        .font(.system(size: 16))
+                        .foregroundColor(.gray400)
+                    
+                    Spacer()
+                    
+                    // Filter icon (integrated)
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(.gray900)
+                        .onTapGesture {
+                            showFiltersPlaceholder = true
+                        }
                 }
                 .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color.white)
+                .cornerRadius(24)
+                .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 2)
+                .onTapGesture {
+                    showSearchView = true
+                }
+                .padding(.horizontal, 20) // ADJUSTABLE: Controls search bar width
                 .padding(.top, 8)
-                .padding(.bottom, 0)
                 
-                // Google Map View
-                ZStack {
-                    GoogleMapView(
-                        cameraPosition: $viewModel.cameraPosition,
-                        markers: $markers,
-                        showUserLocation: .constant(true),
-                        onMapReady: { mapView in
-                            self.mapView = mapView
-                            viewModel.setupMap(mapView)
-                        },
-                        onCameraChanged: { position in
-                            // Handle camera changes if needed
-                            let radius = viewModel.calculateRadius(for: position.zoom)
-                            print("Map zoom: \(position.zoom), calculated radius: \(radius)m")
-                        }
-                    )
-                    .ignoresSafeArea()
-                    
-                    // Locate Me Button
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Button(action: {
-                                viewModel.requestLocation()
-                                // Wait a moment for location to update, then center
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                    if let location = viewModel.currentLocation {
-                                        viewModel.centerOnLocation(location)
-                                    }
-                                }
-                            }) {
-                                Image(systemName: "scope")
-                                    .font(.system(size: 18, weight: .medium))
-                                    .foregroundColor(.gray900)
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.white)
-                                    .clipShape(Circle())
-                                    .shadow(color: Color.black.opacity(0.15), radius: 4, x: 0, y: 2)
-                            }
-                            .padding(.trailing, 16)
-                            .padding(.bottom, 120) // Positioned higher above bottom navigation bar
-                        }
+                Spacer()
+            }
+            
+            // Locate Me Button
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        viewModel.centerOnCurrentLocation()
+                    }) {
+                        Image(systemName: "scope")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(.gray900)
+                            .frame(width: 44, height: 44)
+                            .background(Color.white)
+                            .clipShape(Circle())
+                            .shadow(color: Color.black.opacity(0.15), radius: 4, x: 0, y: 2)
                     }
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 120) // Positioned higher above bottom navigation bar
                 }
             }
         }
@@ -125,6 +131,11 @@ struct ExploreView: View {
                     // Handle follow/unfollow here
                 }
             )
+        }
+        .alert("Filters Coming Soon", isPresented: $showFiltersPlaceholder) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Filter functionality will be available in a future update.")
         }
     }
     

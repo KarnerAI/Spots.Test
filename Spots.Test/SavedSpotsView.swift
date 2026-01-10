@@ -57,7 +57,9 @@ struct SavedSpotsView: View {
         errorMessage = nil
         
         do {
-            spots = try await viewModel.getSpotsInList(listId: list.id)
+            // Use the list's type, defaulting to starred if not set
+            let listType = list.listType ?? .starred
+            spots = try await viewModel.getSpotsInList(listId: list.id, listType: listType)
         } catch {
             errorMessage = "Failed to load spots: \(error.localizedDescription)"
             print("Error loading spots: \(error)")

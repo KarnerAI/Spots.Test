@@ -93,6 +93,7 @@ extension Color {
     static let gray600 = Color(red: 0.45, green: 0.45, blue: 0.45)
     static let gray500 = Color(red: 0.51, green: 0.51, blue: 0.51)
     static let gray400 = Color(red: 0.63, green: 0.63, blue: 0.63)
+    static let gray300 = Color(red: 0.7, green: 0.7, blue: 0.7)
     static let gray200 = Color(red: 0.88, green: 0.88, blue: 0.88)
     static let spotsTeal = Color(red: 0.36, green: 0.69, blue: 0.72)
 }

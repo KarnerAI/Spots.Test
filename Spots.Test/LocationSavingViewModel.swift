@@ -69,8 +69,8 @@ class LocationSavingViewModel: ObservableObject {
     
     // MARK: - Get Spots in List
     
-    func getSpotsInList(listId: UUID) async throws -> [SpotWithMetadata] {
-        return try await service.getSpotsInList(listId: listId)
+    func getSpotsInList(listId: UUID, listType: ListType) async throws -> [SpotWithMetadata] {
+        return try await service.getSpotsInList(listId: listId, listType: listType)
     }
     
     // MARK: - Get Spot Count

@@ -13,6 +13,7 @@ struct GoogleMapView: UIViewRepresentable {
     @Binding var cameraPosition: GMSCameraPosition?
     @Binding var markers: [GMSMarker]
     @Binding var showUserLocation: Bool
+    @Binding var forceCameraUpdate: Bool
     var onMapReady: ((GMSMapView) -> Void)?
     var onCameraChanged: ((GMSCameraPosition) -> Void)?
     
@@ -21,11 +22,12 @@ struct GoogleMapView: UIViewRepresentable {
         let defaultCamera = GMSCameraPosition.camera(
             withLatitude: 40.7128,
             longitude: -74.0060,
-            zoom: 13.0  // Closer default zoom
+            zoom: 17.0  // Building-level detail
         )
         
-        // Use the modern initializer instead of deprecated map(withFrame:camera:)
-        let mapView = GMSMapView(frame: .zero, camera: defaultCamera)
+        // Use the modern initializer
+        let mapView = GMSMapView()
+        mapView.camera = defaultCamera
         mapView.isMyLocationEnabled = showUserLocation
         mapView.settings.myLocationButton = false // We'll use custom button
         mapView.settings.compassButton = false
@@ -37,13 +39,76 @@ struct GoogleMapView: UIViewRepresentable {
         // Call onMapReady callback
         onMapReady?(mapView)
         
+        // Report initial camera position
+        DispatchQueue.main.async {
+            context.coordinator.onCameraChanged?(defaultCamera)
+        }
+        
         return mapView
     }
     
     func updateUIView(_ mapView: GMSMapView, context: Context) {
+        // #region agent log
+        print("🟢 DEBUG: updateUIView called")
+        if let camPos = cameraPosition {
+            print("🟢 DEBUG: cameraPosition = lat=\(camPos.target.latitude), lng=\(camPos.target.longitude), zoom=\(camPos.zoom)")
+        } else {
+            print("🟢 DEBUG: cameraPosition is NIL")
+        }
+        if let lastPos = context.coordinator.lastCameraPosition {
+            print("🟢 DEBUG: lastCameraPosition = lat=\(lastPos.target.latitude), lng=\(lastPos.target.longitude), zoom=\(lastPos.zoom)")
+        } else {
+            print("🟢 DEBUG: lastCameraPosition is NIL")
+        }
+        // #endregion
+        
         // Update camera position if changed
         if let cameraPosition = cameraPosition {
-            mapView.animate(to: cameraPosition)
+            // If forceCameraUpdate is true, always animate (bypass threshold check)
+            if forceCameraUpdate {
+                // #region agent log
+                print("🟣 DEBUG: FORCE ANIMATING (forceCameraUpdate=true) to lat=\(cameraPosition.target.latitude), lng=\(cameraPosition.target.longitude), zoom=\(cameraPosition.zoom)")
+                // #endregion
+                
+                mapView.animate(to: cameraPosition)
+                context.coordinator.lastCameraPosition = cameraPosition
+            } else if let lastPosition = context.coordinator.lastCameraPosition {
+                // Check if position has changed (using small threshold to account for floating point precision)
+                let latDiff = abs(lastPosition.target.latitude - cameraPosition.target.latitude)
+                let lngDiff = abs(lastPosition.target.longitude - cameraPosition.target.longitude)
+                let zoomDiff = abs(lastPosition.zoom - cameraPosition.zoom)
+                
+                let hasChanged = latDiff > 0.0001 || lngDiff > 0.0001 || zoomDiff > 0.1
+                
+                // #region agent log
+                print("🟡 DEBUG: Threshold check - latDiff=\(latDiff), lngDiff=\(lngDiff), zoomDiff=\(zoomDiff), hasChanged=\(hasChanged)")
+                // #endregion
+                
+                if hasChanged {
+                    // #region agent log
+                    print("🟣 DEBUG: ANIMATING to lat=\(cameraPosition.target.latitude), lng=\(cameraPosition.target.longitude), zoom=\(cameraPosition.zoom)")
+                    // #endregion
+                    
+                    mapView.animate(to: cameraPosition)
+                    context.coordinator.lastCameraPosition = cameraPosition
+                } else {
+                    // #region agent log
+                    print("⚫ DEBUG: Skipping animation - hasChanged is false")
+                    // #endregion
+                }
+            } else {
+                // #region agent log
+                print("🔵 DEBUG: First time setting position - lat=\(cameraPosition.target.latitude), lng=\(cameraPosition.target.longitude), zoom=\(cameraPosition.zoom)")
+                // #endregion
+                
+                // First time setting position - use direct camera assignment for instant positioning without animation
+                mapView.camera = cameraPosition
+                context.coordinator.lastCameraPosition = cameraPosition
+            }
+        } else {
+            // #region agent log
+            print("⚪ DEBUG: cameraPosition is NIL in updateUIView")
+            // #endregion
         }
         
         // Update user location visibility
@@ -64,6 +129,7 @@ struct GoogleMapView: UIViewRepresentable {
         var mapView: GMSMapView?
         var currentMarkers: [GMSMarker] = []
         var onCameraChanged: ((GMSCameraPosition) -> Void)?
+        var lastCameraPosition: GMSCameraPosition?
         
         func mapView(_ mapView: GMSMapView, didChange position: GMSCameraPosition) {
             onCameraChanged?(position)

@@ -55,5 +55,10 @@ struct Config {
         print("❌ ERROR: Google Places API key not found in Info.plist or environment variables")
         fatalError("Google Places API key is not configured. Please add it to Info.plist as 'GooglePlacesAPIKey' or set the GOOGLE_PLACES_API_KEY environment variable.")
     }()
+    
+    // MARK: - App Group Configuration
+    // App Group identifier for sharing data between main app and share extension
+    // This must match the App Group identifier configured in Xcode project settings
+    static let appGroupIdentifier = "group.com.karnerblu.Spots-Test"
 }
 

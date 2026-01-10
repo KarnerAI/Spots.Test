@@ -25,7 +25,7 @@ struct SpotListItem: Codable, Identifiable {
 struct SpotWithMetadata: Identifiable {
     let spot: Spot
     let savedAt: Date
-    let listId: UUID
+    let listTypes: Set<ListType>  // All lists this spot belongs to
     
     var id: String { spot.id }
 }

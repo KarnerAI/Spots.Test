@@ -49,7 +49,7 @@ struct CustomBottomNav: View {
         VStack(spacing: 0) {
             // Top border/separator
             Rectangle()
-                .fill(Color.gray200)
+                .fill(Color(red: 0.88, green: 0.88, blue: 0.88))
                 .frame(height: 0.5)
             
             // Navigation tabs
@@ -113,26 +113,12 @@ struct TabButton: View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Image(systemName: icon)
-                    // #region agent log
-                    .onAppear {
-                        debugLog("Image view appeared", data: ["icon": icon, "label": label, "isSelected": isSelected, "hypothesisId": "A"])
-                    }
-                    // #endregion
                     .font(.system(size: 24, weight: .regular))
-                    .foregroundColor(isSelected ? .gray900 : .gray400)
-                    // #region agent log
-                    .background(
-                        GeometryReader { geometry in
-                            Color.clear.onAppear {
-                                debugLog("Image frame size", data: ["icon": icon, "width": geometry.size.width, "height": geometry.size.height, "hypothesisId": "B"])
-                            }
-                        }
-                    )
-                    // #endregion
+                    .foregroundColor(isSelected ? Color(red: 0.13, green: 0.13, blue: 0.13) : Color(red: 0.63, green: 0.63, blue: 0.63))
                 
                 Text(label)
                     .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
-                    .foregroundColor(isSelected ? .gray900 : .gray400)
+                    .foregroundColor(isSelected ? Color(red: 0.13, green: 0.13, blue: 0.13) : Color(red: 0.63, green: 0.63, blue: 0.63))
             }
             .frame(maxWidth: .infinity)
             .frame(minHeight: 60)

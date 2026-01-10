@@ -135,7 +135,7 @@ class LocationSavingService {
     }
     
     /// Get all spots in a list (ordered by recency)
-    func getSpotsInList(listId: UUID) async throws -> [SpotWithMetadata] {
+    func getSpotsInList(listId: UUID, listType: ListType) async throws -> [SpotWithMetadata] {
         // Response structure for nested query
         struct SpotListItemResponse: Codable {
             let spot_id: String
@@ -196,7 +196,7 @@ class LocationSavingService {
                 updatedAt: updatedAt
             )
             
-            return SpotWithMetadata(spot: spot, savedAt: savedAt, listId: listId)
+            return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: [listType])
         }
     }
     
@@ -263,6 +263,24 @@ class LocationSavingService {
             .value
         
         return response.compactMap { UUID(uuidString: $0.list_id) }
+    }
+    
+    /// Check which place IDs are already in the bucketlist
+    /// - Parameter placeIds: Array of place IDs to check
+    /// - Returns: Set of place IDs that are already in the bucketlist
+    func checkPlacesInBucketlist(_ placeIds: [String]) async throws -> Set<String> {
+        // Get the bucketlist
+        guard let bucketList = try await getListByType(.bucketList) else {
+            // No bucketlist exists yet, so none of the places are in it
+            return Set<String>()
+        }
+        
+        // Get all spots in the bucketlist
+        let spotsInList = try await getSpotsInList(listId: bucketList.id, listType: .bucketList)
+        let existingPlaceIds = Set(spotsInList.map { $0.spot.placeId })
+        
+        // Return intersection of provided placeIds and existing placeIds
+        return Set(placeIds).intersection(existingPlaceIds)
     }
     
     // MARK: - Helper
