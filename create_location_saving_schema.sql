@@ -51,6 +51,8 @@ CREATE TABLE public.spots (
   latitude DOUBLE PRECISION,   -- Location latitude
   longitude DOUBLE PRECISION,  -- Location longitude
   types TEXT[],                -- Array of place types from Google (e.g., ['restaurant', 'food'])
+  photo_url TEXT,              -- Supabase Storage public URL for cover image
+  photo_reference TEXT,        -- Google Places photo reference (for refresh/backup)
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- When first saved by any user
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()   -- Last update time (for refreshing stale data)
 );
@@ -63,6 +65,8 @@ CREATE INDEX spots_location_idx ON public.spots USING GIST (
 COMMENT ON TABLE public.spots IS 'Central repository for Google Place data. Stores place information once, shared across all users. Uses Google Place ID as primary key.';
 COMMENT ON COLUMN public.spots.place_id IS 'Google Place ID - unique identifier from Google Places API';
 COMMENT ON COLUMN public.spots.types IS 'Array of place types from Google Places API (e.g., ["restaurant", "food", "point_of_interest"])';
+COMMENT ON COLUMN public.spots.photo_url IS 'Supabase Storage public URL for the spot cover image. Cached to reduce Google Places API costs.';
+COMMENT ON COLUMN public.spots.photo_reference IS 'Original Google Places photo reference. Used as backup or for refreshing the cached image.';
 
 -- ============================================
 -- Step 3: Create User Lists Table
@@ -275,7 +279,9 @@ CREATE OR REPLACE FUNCTION public.upsert_spot(
   p_address TEXT,
   p_latitude DOUBLE PRECISION,
   p_longitude DOUBLE PRECISION,
-  p_types TEXT[]
+  p_types TEXT[],
+  p_photo_url TEXT DEFAULT NULL,
+  p_photo_reference TEXT DEFAULT NULL
 )
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -289,6 +295,8 @@ BEGIN
     latitude,
     longitude,
     types,
+    photo_url,
+    photo_reference,
     created_at,
     updated_at
   )
@@ -299,6 +307,8 @@ BEGIN
     p_latitude,
     p_longitude,
     p_types,
+    p_photo_url,
+    p_photo_reference,
     NOW(),
     NOW()
   )
@@ -309,6 +319,8 @@ BEGIN
     latitude = EXCLUDED.latitude,
     longitude = EXCLUDED.longitude,
     types = EXCLUDED.types,
+    photo_url = COALESCE(EXCLUDED.photo_url, public.spots.photo_url),
+    photo_reference = COALESCE(EXCLUDED.photo_reference, public.spots.photo_reference),
     updated_at = NOW();
   
   RETURN p_place_id;

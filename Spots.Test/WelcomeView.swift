@@ -88,13 +88,15 @@ struct ScaleButtonStyle: ButtonStyle {
 
 // Color extensions for consistent styling
 extension Color {
-    static let gray900 = Color(red: 0.13, green: 0.13, blue: 0.13)
-    static let gray700 = Color(red: 0.38, green: 0.38, blue: 0.38)
-    static let gray600 = Color(red: 0.45, green: 0.45, blue: 0.45)
-    static let gray500 = Color(red: 0.51, green: 0.51, blue: 0.51)
-    static let gray400 = Color(red: 0.63, green: 0.63, blue: 0.63)
-    static let gray300 = Color(red: 0.7, green: 0.7, blue: 0.7)
-    static let gray200 = Color(red: 0.88, green: 0.88, blue: 0.88)
-    static let spotsTeal = Color(red: 0.36, green: 0.69, blue: 0.72)
+    static let gray900 = Color(red: 0.13, green: 0.13, blue: 0.13)  // #212121
+    static let gray700 = Color(red: 0.38, green: 0.38, blue: 0.38)  // #616161
+    static let gray600 = Color(red: 0.45, green: 0.45, blue: 0.45)  // #737373
+    static let gray500 = Color(red: 0.51, green: 0.51, blue: 0.51)  // #828282
+    static let gray400 = Color(red: 0.63, green: 0.63, blue: 0.63)  // #A1A1A1
+    static let gray300 = Color(red: 0.7, green: 0.7, blue: 0.7)     // #B3B3B3
+    static let gray200 = Color(red: 0.88, green: 0.88, blue: 0.88)  // #E0E0E0
+    static let gray100 = Color(red: 0.95, green: 0.95, blue: 0.95)  // #F3F4F6
+    static let gray50 = Color(red: 0.98, green: 0.98, blue: 0.98)   // #FAFAFA
+    static let spotsTeal = Color(red: 0.36, green: 0.69, blue: 0.72) // #5DB0B8
 }
 

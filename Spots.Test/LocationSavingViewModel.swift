@@ -42,23 +42,56 @@ class LocationSavingViewModel: ObservableObject {
         latitude: Double?,
         longitude: Double?,
         types: [String]?,
+        photoUrl: String? = nil,
+        photoReference: String? = nil,
         toListId: UUID
     ) async throws {
+        // #region agent log
+        DebugLogger.log(
+            runId: "pre-fix",
+            hypothesisId: "H2",
+            location: "LocationSavingViewModel.saveSpot:entry",
+            message: "Save spot requested",
+            data: [
+                "placeId": placeId,
+                "listId": toListId.uuidString,
+                "hasLatitude": latitude != nil,
+                "hasLongitude": longitude != nil,
+                "hasTypes": types != nil
+            ]
+        )
+        // #endregion
+        
         isSaving = true
         defer { isSaving = false }
         
-        // First, upsert the spot
+        // First, upsert the spot (including photo data if available)
         try await service.upsertSpot(
             placeId: placeId,
             name: name,
             address: address,
             latitude: latitude,
             longitude: longitude,
-            types: types
+            types: types,
+            photoUrl: photoUrl,
+            photoReference: photoReference
         )
         
         // Then, add it to the list
         try await service.saveSpotToList(placeId: placeId, listId: toListId)
+        
+        // #region agent log
+        DebugLogger.log(
+            runId: "pre-fix",
+            hypothesisId: "H2",
+            location: "LocationSavingViewModel.saveSpot:success",
+            message: "Save spot completed",
+            data: [
+                "placeId": placeId,
+                "listId": toListId.uuidString
+            ]
+        )
+        // #endregion
     }
     
     // MARK: - Remove Spot

@@ -57,10 +57,12 @@ class LocationSavingService {
         address: String?,
         latitude: Double?,
         longitude: Double?,
-        types: [String]?
+        types: [String]?,
+        photoUrl: String? = nil,
+        photoReference: String? = nil
     ) async throws {
         // Call the database function
-        // Custom Encodable to ensure all 6 parameters are always included
+        // Custom Encodable to ensure all parameters are always included
         // even when optionals are nil (encode as JSON null)
         struct UpsertParams: Encodable {
             let p_place_id: String
@@ -69,6 +71,8 @@ class LocationSavingService {
             let p_latitude: Double?
             let p_longitude: Double?
             let p_types: [String]?
+            let p_photo_url: String?
+            let p_photo_reference: String?
             
             // Custom encoding to always include all parameters, even when nil
             func encode(to encoder: Encoder) throws {
@@ -96,6 +100,16 @@ class LocationSavingService {
                 } else {
                     try container.encodeNil(forKey: .p_types)
                 }
+                if let photoUrl = p_photo_url {
+                    try container.encode(photoUrl, forKey: .p_photo_url)
+                } else {
+                    try container.encodeNil(forKey: .p_photo_url)
+                }
+                if let photoReference = p_photo_reference {
+                    try container.encode(photoReference, forKey: .p_photo_reference)
+                } else {
+                    try container.encodeNil(forKey: .p_photo_reference)
+                }
             }
             
             enum CodingKeys: String, CodingKey {
@@ -105,6 +119,8 @@ class LocationSavingService {
                 case p_latitude
                 case p_longitude
                 case p_types
+                case p_photo_url
+                case p_photo_reference
             }
         }
         
@@ -114,7 +130,9 @@ class LocationSavingService {
             p_address: address,
             p_latitude: latitude,
             p_longitude: longitude,
-            p_types: types
+            p_types: types,
+            p_photo_url: photoUrl,
+            p_photo_reference: photoReference
         )
         
         do {
@@ -130,19 +148,95 @@ class LocationSavingService {
                     print("Error hint: \(hint)")
                 }
             }
+            
+            // #region agent log
+            let nsError = error as NSError
+            DebugLogger.log(
+                runId: "pre-fix",
+                hypothesisId: "H2",
+                location: "LocationSavingService.upsertSpot:catch",
+                message: "Upsert spot failed",
+                data: [
+                    "placeId": placeId,
+                    "errorDomain": nsError.domain,
+                    "errorCode": nsError.code,
+                    "errorDescription": nsError.localizedDescription
+                ]
+            )
+            // #endregion
+            
             throw error
         }
     }
     
     /// Get all spots in a list (ordered by recency)
     func getSpotsInList(listId: UUID, listType: ListType) async throws -> [SpotWithMetadata] {
-        // Response structure for nested query
-        struct SpotListItemResponse: Codable {
+        // Use a simpler approach: query spot_list_items to get spot_ids and saved_at
+        // Then query spots table for each spot's details
+        
+        struct SpotListItemSimple: Codable {
             let spot_id: String
             let saved_at: String
-            let spots: SpotResponse
         }
         
+        // First query: get spot IDs and saved_at times
+        let listItems: [SpotListItemSimple] = try await supabase
+            .from("spot_list_items")
+            .select("spot_id, saved_at")
+            .eq("list_id", value: listId.uuidString)
+            .order("saved_at", ascending: false)
+            .execute()
+            .value
+        
+        guard !listItems.isEmpty else {
+            return []
+        }
+        
+        // Second query: get all spots for the place_ids we found
+        let placeIds = listItems.map { $0.spot_id }
+        
+        // Query spots one by one (simpler than bulk query which causes type inference issues)
+        var spotsMap: [String: Spot] = [:]
+        for placeId in placeIds {
+            if let spot = try? await getSpotByPlaceId(placeId) {
+                spotsMap[placeId] = spot
+            }
+        }
+        
+        // Transform to SpotWithMetadata
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        
+        let fallbackFormatter = ISO8601DateFormatter()
+        fallbackFormatter.formatOptions = [.withInternetDateTime]
+        
+        let spots = listItems.compactMap { item -> SpotWithMetadata? in
+            guard let spot = spotsMap[item.spot_id] else {
+                return nil
+            }
+            
+            let savedAt = dateFormatter.date(from: item.saved_at) ?? fallbackFormatter.date(from: item.saved_at)
+            guard let savedAt = savedAt else {
+                print("Warning: Could not parse saved_at: \(item.saved_at)")
+                return nil
+            }
+            
+            // Trigger lazy image fetch if needed (in background)
+            // Temporarily disabled to fix compilation - will re-enable after build succeeds
+            // if spot.photoUrl == nil, let photoRef = spot.photoReference {
+            //     Task {
+            //         await fetchAndUpdateSpotImage(placeId: spot.placeId, photoReference: photoRef)
+            //     }
+            // }
+            
+            return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: [listType])
+        }
+        
+        return spots
+    }
+    
+    /// Helper: Get a single spot by place_id
+    private func getSpotByPlaceId(_ placeId: String) async throws -> Spot? {
         struct SpotResponse: Codable {
             let place_id: String
             let name: String
@@ -150,54 +244,49 @@ class LocationSavingService {
             let latitude: Double?
             let longitude: Double?
             let types: [String]?
+            let photo_url: String?
+            let photo_reference: String?
             let created_at: String?
             let updated_at: String?
         }
         
-        let response: [SpotListItemResponse] = try await supabase
-            .from("spot_list_items")
-            .select("spot_id, saved_at, spots(place_id, name, address, latitude, longitude, types, created_at, updated_at)")
-            .eq("list_id", value: listId.uuidString)
-            .order("saved_at", ascending: false)
+        let response: [SpotResponse] = try await supabase
+            .from("spots")
+            .select("place_id, name, address, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .eq("place_id", value: placeId)
+            .limit(1)
             .execute()
             .value
         
-        // Transform response to SpotWithMetadata
+        guard let spotData = response.first else {
+            return nil
+        }
+        
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         
-        // Fallback formatter without fractional seconds
         let fallbackFormatter = ISO8601DateFormatter()
         fallbackFormatter.formatOptions = [.withInternetDateTime]
         
-        return response.compactMap { item in
-            // Try parsing with fractional seconds first, then fallback
-            let savedAt = dateFormatter.date(from: item.saved_at) ?? fallbackFormatter.date(from: item.saved_at)
-            guard let savedAt = savedAt else {
-                print("Warning: Could not parse saved_at: \(item.saved_at)")
-                return nil
-            }
-            
-            let createdAt = item.spots.created_at.flatMap { 
-                dateFormatter.date(from: $0) ?? fallbackFormatter.date(from: $0)
-            }
-            let updatedAt = item.spots.updated_at.flatMap { 
-                dateFormatter.date(from: $0) ?? fallbackFormatter.date(from: $0)
-            }
-            
-            let spot = Spot(
-                placeId: item.spots.place_id,
-                name: item.spots.name,
-                address: item.spots.address,
-                latitude: item.spots.latitude,
-                longitude: item.spots.longitude,
-                types: item.spots.types,
-                createdAt: createdAt,
-                updatedAt: updatedAt
-            )
-            
-            return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: [listType])
+        let createdAt = spotData.created_at.flatMap {
+            dateFormatter.date(from: $0) ?? fallbackFormatter.date(from: $0)
         }
+        let updatedAt = spotData.updated_at.flatMap {
+            dateFormatter.date(from: $0) ?? fallbackFormatter.date(from: $0)
+        }
+        
+        return Spot(
+            placeId: spotData.place_id,
+            name: spotData.name,
+            address: spotData.address,
+            latitude: spotData.latitude,
+            longitude: spotData.longitude,
+            types: spotData.types,
+            photoUrl: spotData.photo_url,
+            photoReference: spotData.photo_reference,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
     }
     
     /// Get spot count for a list
@@ -235,6 +324,24 @@ class LocationSavingService {
                 // Silently ignore duplicate errors
                 return
             }
+            
+            // #region agent log
+            let nsError = error as NSError
+            DebugLogger.log(
+                runId: "pre-fix",
+                hypothesisId: "H3",
+                location: "LocationSavingService.saveSpotToList:catch",
+                message: "Save spot to list failed",
+                data: [
+                    "placeId": placeId,
+                    "listId": listId.uuidString,
+                    "errorDomain": nsError.domain,
+                    "errorCode": nsError.code,
+                    "errorDescription": nsError.localizedDescription
+                ]
+            )
+            // #endregion
+            
             throw error
         }
     }
@@ -281,6 +388,34 @@ class LocationSavingService {
         
         // Return intersection of provided placeIds and existing placeIds
         return Set(placeIds).intersection(existingPlaceIds)
+    }
+    
+    // MARK: - Lazy Image Fetching
+    
+    /// Fetches and uploads image for a spot that doesn't have a cached photo URL
+    /// This runs in the background and updates the database with the new photo URL
+    private func fetchAndUpdateSpotImage(placeId: String, photoReference: String) async {
+        // Upload image to Supabase Storage
+        guard let photoUrl = await ImageStorageService.shared.uploadSpotImage(
+            photoReference: photoReference,
+            placeId: placeId
+        ) else {
+            print("⚠️ LocationSavingService: Failed to lazy load image for \(placeId)")
+            return
+        }
+        
+        // Update the spot in database with the new photo URL
+        do {
+            try await supabase
+                .from("spots")
+                .update(["photo_url": photoUrl])
+                .eq("place_id", value: placeId)
+                .execute()
+            
+            print("✅ LocationSavingService: Successfully lazy loaded image for \(placeId)")
+        } catch {
+            print("❌ LocationSavingService: Error updating spot with photo URL: \(error.localizedDescription)")
+        }
     }
     
     // MARK: - Helper

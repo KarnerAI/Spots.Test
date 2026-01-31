@@ -20,146 +20,114 @@ struct ListPickerView: View {
     @State private var errorMessage: String?
     
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // Backdrop
-            Color.black.opacity(0.4)
-                .ignoresSafeArea()
-                .onTapGesture {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Button(action: {
                     dismiss()
-                }
-            
-            // Bottom Sheet
-            VStack(spacing: 0) {
-                // Drag Handle
-                RoundedRectangle(cornerRadius: 2.5)
-                    .fill(Color.gray400)
-                    .frame(width: 36, height: 5)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-                
-                // Header
-                HStack {
-                    Button(action: {
-                        dismiss()
-                    }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundColor(.gray900)
-                            .frame(width: 44, height: 44)
-                    }
-                    
-                    Spacer()
-                    
-                    Text("Save to Spots")
-                        .font(.system(size: 17, weight: .semibold))
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundColor(.gray900)
-                    
-                    Spacer()
-                    
-                    // Spacer for balance
-                    Color.clear
                         .frame(width: 44, height: 44)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .overlay(
-                    Rectangle()
-                        .fill(Color.gray200)
-                        .frame(height: 0.5),
-                    alignment: .bottom
-                )
                 
-                // Lists - no ScrollView, just show the 3 lists
-                VStack(spacing: 0) {
-                    ForEach(viewModel.userLists) { list in
-                        listRow(list: list)
-                    }
+                Spacer()
+                
+                Text("Save to Spots")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.gray900)
+                
+                Spacer()
+                
+                // Spacer for balance
+                Color.clear
+                    .frame(width: 44, height: 44)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .overlay(
+                Rectangle()
+                    .fill(Color.gray200)
+                    .frame(height: 0.5),
+                alignment: .bottom
+            )
+            
+            // Lists - no ScrollView, just show the 3 lists
+            VStack(spacing: 0) {
+                ForEach(viewModel.userLists) { list in
+                    listRow(list: list)
                 }
-                
-                // Error Message Display
-                if let errorMessage = errorMessage {
-                    VStack(spacing: 0) {
-                        Rectangle()
-                            .fill(Color.gray200)
-                            .frame(height: 0.5)
-                        
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
-                                .font(.system(size: 16))
-                            
-                            Text(errorMessage)
-                                .font(.system(size: 14))
-                                .foregroundColor(.red)
-                                .multilineTextAlignment(.leading)
-                            
-                            Spacer()
-                            
-                            Button(action: {
-                                self.errorMessage = nil
-                            }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.gray400)
-                                    .font(.system(size: 16))
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(Color.red.opacity(0.1))
-                    }
-                }
-                
-                // Save Button
+            }
+            
+            // Error Message Display
+            if let errorMessage = errorMessage {
                 VStack(spacing: 0) {
                     Rectangle()
                         .fill(Color.gray200)
                         .frame(height: 0.5)
                     
-                    Button(action: {
-                        Task {
-                            await handleSave()
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.red)
+                            .font(.system(size: 16))
+                        
+                        Text(errorMessage)
+                            .font(.system(size: 14))
+                            .foregroundColor(.red)
+                            .multilineTextAlignment(.leading)
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            self.errorMessage = nil
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray400)
+                                .font(.system(size: 16))
                         }
-                    }) {
-                        HStack {
-                            if isSaving {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                            }
-                            Text(isSaving ? "Saving..." : "Save")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 56)
-                        .background(Color(red: 0.36, green: 0.69, blue: 0.72)) // #5DB0B8
-                        .cornerRadius(12)
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, 16)
-                    .padding(.bottom, 24)
-                    .disabled(isSaving || selectedListIds.isEmpty)
-                    .opacity(isSaving || selectedListIds.isEmpty ? 0.6 : 1.0)
+                    .padding(.vertical, 12)
+                    .background(Color.red.opacity(0.1))
                 }
-                .background(Color.white)
+            }
+            
+            // Save Button
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(Color.gray200)
+                    .frame(height: 0.5)
+                
+                Button(action: {
+                    Task {
+                        await handleSave()
+                    }
+                }) {
+                    HStack {
+                        if isSaving {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        }
+                        Text(isSaving ? "Saving..." : "Save")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
+                    .background(Color(red: 0.36, green: 0.69, blue: 0.72)) // #5DB0B8
+                    .cornerRadius(12)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 24)
+                .disabled(isSaving || selectedListIds.isEmpty)
+                .opacity(isSaving || selectedListIds.isEmpty ? 0.6 : 1.0)
             }
             .background(Color.white)
-            .cornerRadius(24, corners: [.topLeft, .topRight])
-            .frame(maxWidth: .infinity)
-            .fixedSize(horizontal: false, vertical: true)
-            .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: -2)
-            .gesture(
-                DragGesture()
-                    .onEnded { value in
-                        if value.translation.height > 100 {
-                            dismiss()
-                        }
-                    }
-            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .ignoresSafeArea(edges: .bottom)
-        .transition(.move(edge: .bottom))
+        .background(Color.white)
         .onAppear {
             Task {
                 await loadInitialData()
@@ -298,6 +266,19 @@ struct ListPickerView: View {
     private func handleSave() async {
         guard !selectedListIds.isEmpty else { return }
         
+        // #region agent log
+        DebugLogger.log(
+            runId: "pre-fix",
+            hypothesisId: "H1",
+            location: "ListPickerView.handleSave:entry",
+            message: "Handle save tapped",
+            data: [
+                "placeId": spotData.placeId,
+                "selectedCount": selectedListIds.count
+            ]
+        )
+        // #endregion
+        
         await MainActor.run {
             isSaving = true
             errorMessage = nil
@@ -316,6 +297,20 @@ struct ListPickerView: View {
         // Determine what changed
         let toAdd = selectedListIds.subtracting(originalListIds)
         let toRemove = originalListIds.subtracting(selectedListIds)
+        
+        // #region agent log
+        DebugLogger.log(
+            runId: "pre-fix",
+            hypothesisId: "H1",
+            location: "ListPickerView.handleSave:diff",
+            message: "Computed list diffs",
+            data: [
+                "placeId": spotData.placeId,
+                "toAddCount": toAdd.count,
+                "toRemoveCount": toRemove.count
+            ]
+        )
+        // #endregion
         
         do {
             print("Saving spot to \(toAdd.count) lists, removing from \(toRemove.count) lists")
@@ -381,6 +376,22 @@ struct ListPickerView: View {
                 print("Error domain: \(nsError.domain), code: \(nsError.code)")
                 print("Error userInfo: \(nsError.userInfo)")
             }
+            
+            // #region agent log
+            let nsError = error as NSError
+            DebugLogger.log(
+                runId: "pre-fix",
+                hypothesisId: "H4",
+                location: "ListPickerView.handleSave:catch",
+                message: "Save failed",
+                data: [
+                    "placeId": spotData.placeId,
+                    "errorDomain": nsError.domain,
+                    "errorCode": nsError.code,
+                    "errorDescription": nsError.localizedDescription
+                ]
+            )
+            // #endregion
             
             await MainActor.run {
                 errorMessage = errorMsg

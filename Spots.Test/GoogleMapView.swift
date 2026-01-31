@@ -16,6 +16,7 @@ struct GoogleMapView: UIViewRepresentable {
     @Binding var forceCameraUpdate: Bool
     var onMapReady: ((GMSMapView) -> Void)?
     var onCameraChanged: ((GMSCameraPosition) -> Void)?
+    var onMarkerTapped: ((GMSMarker) -> Void)?
     
     func makeUIView(context: Context) -> GMSMapView {
         // Default camera position (will be updated by parent)
@@ -119,6 +120,9 @@ struct GoogleMapView: UIViewRepresentable {
         
         // Update camera change handler
         context.coordinator.onCameraChanged = onCameraChanged
+        
+        // Update marker tap handler
+        context.coordinator.onMarkerTapped = onMarkerTapped
     }
     
     func makeCoordinator() -> Coordinator {
@@ -129,10 +133,17 @@ struct GoogleMapView: UIViewRepresentable {
         var mapView: GMSMapView?
         var currentMarkers: [GMSMarker] = []
         var onCameraChanged: ((GMSCameraPosition) -> Void)?
+        var onMarkerTapped: ((GMSMarker) -> Void)?
         var lastCameraPosition: GMSCameraPosition?
         
         func mapView(_ mapView: GMSMapView, didChange position: GMSCameraPosition) {
             onCameraChanged?(position)
+        }
+        
+        func mapView(_ mapView: GMSMapView, didTap marker: GMSMarker) -> Bool {
+            onMarkerTapped?(marker)
+            // Return true to indicate we handled the tap (prevents default info window)
+            return true
         }
         
         func updateMarkers(_ newMarkers: [GMSMarker], on mapView: GMSMapView) {

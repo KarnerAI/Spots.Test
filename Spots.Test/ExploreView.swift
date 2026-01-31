@@ -12,11 +12,16 @@ struct ExploreView: View {
     @State private var showSearchView = false
     @State private var showFiltersPlaceholder = false
     @StateObject private var viewModel = MapViewModel()
+    @StateObject private var locationSavingVM = LocationSavingViewModel()
     @State private var mapView: GMSMapView?
     @State private var markers: [GMSMarker] = []
     
+    // Bottom sheet state
+    @State private var spotForSaving: NearbySpot? = nil
+    @State private var spotToOpenInMaps: NearbySpot? = nil
+    
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             // Full screen map
             GoogleMapView(
                 cameraPosition: $viewModel.cameraPosition,
@@ -35,6 +40,9 @@ struct ExploreView: View {
                     // Handle camera changes if needed
                     let radius = viewModel.calculateRadius(for: position.zoom)
                     print("Map zoom: \(position.zoom), calculated radius: \(radius)m")
+                },
+                onMarkerTapped: { marker in
+                    handleMarkerTap(marker)
                 }
             )
             .ignoresSafeArea()
@@ -77,7 +85,7 @@ struct ExploreView: View {
                 Spacer()
             }
             
-            // Locate Me Button
+            // Locate Me Button - positioned above the bottom sheet
             VStack {
                 Spacer()
                 HStack {
@@ -94,8 +102,38 @@ struct ExploreView: View {
                             .shadow(color: Color.black.opacity(0.15), radius: 4, x: 0, y: 2)
                     }
                     .padding(.trailing, 16)
-                    .padding(.bottom, 120) // Positioned higher above bottom navigation bar
+                    .padding(.bottom, bottomSheetHeight + 70 + 16) // Position above bottom sheet + tab bar
                 }
+            }
+            
+            // Bottom Sheet with Spots Carousel - anchored to bottom
+            VStack {
+                Spacer()
+                
+                SpotsBottomSheetView(
+                    sheetState: $viewModel.sheetState,
+                    spots: viewModel.displayedSpots,
+                    isLoading: viewModel.isLoadingNearbySpots,
+                    hasMorePages: viewModel.hasMorePages,
+                    errorMessage: viewModel.nearbyErrorMessage,
+                    onBookmarkTap: { spot in
+                        spotForSaving = spot
+                    },
+                    onCardTap: { spot in
+                        spotToOpenInMaps = spot
+                    },
+                    onLoadMore: {
+                        Task {
+                            await viewModel.loadMoreNearbySpots()
+                        }
+                    },
+                    onRetry: {
+                        Task {
+                            await viewModel.fetchNearbySpots(refresh: true)
+                        }
+                    }
+                )
+                .padding(.bottom, 70) // Space for tab bar
             }
         }
         .onAppear {
@@ -103,10 +141,22 @@ struct ExploreView: View {
             viewModel.requestLocation()
             Task {
                 await viewModel.loadSavedPlaces()
+                await locationSavingVM.loadUserLists()
                 updateMarkers()
+                
+                // Fetch nearby spots once location is available
+                // Small delay to ensure location is ready
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await viewModel.fetchNearbySpots(refresh: true)
             }
         }
         .onChange(of: viewModel.savedPlaces.count) { oldValue, newValue in
+            updateMarkers()
+        }
+        .onChange(of: viewModel.nearbySpots) { oldValue, newValue in
+            updateMarkers()
+        }
+        .onChange(of: viewModel.selectedSpot) { oldValue, newValue in
             updateMarkers()
         }
         .fullScreenCover(isPresented: $showSearchView) {
@@ -132,6 +182,37 @@ struct ExploreView: View {
                 }
             )
         }
+        .sheet(item: $spotForSaving) { spot in
+            ListPickerView(
+                spotData: spot.toPlaceAutocompleteResult(),
+                viewModel: locationSavingVM,
+                onSaveComplete: {
+                    // Reload saved places after saving
+                    Task {
+                        await viewModel.loadSavedPlaces()
+                        updateMarkers()
+                    }
+                }
+            )
+            .presentationDetents([.height(330)])
+            .presentationDragIndicator(.visible)
+        }
+        .confirmationDialog(
+            "Open in Google Maps?",
+            isPresented: Binding(
+                get: { spotToOpenInMaps != nil },
+                set: { if !$0 { spotToOpenInMaps = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: spotToOpenInMaps
+        ) { spot in
+            Button("Open") {
+                openInGoogleMaps(spot: spot)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { spot in
+            Text(spot.name)
+        }
         .alert("Filters Coming Soon", isPresented: $showFiltersPlaceholder) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -139,8 +220,33 @@ struct ExploreView: View {
         }
     }
     
+    // MARK: - Computed Properties
+    
+    private var bottomSheetHeight: CGFloat {
+        viewModel.sheetState.height
+    }
+    
+    // MARK: - Helper Methods
+    
     private func updateMarkers() {
+        // Only show saved places markers (no nearby spot markers)
         markers = viewModel.createMarkers()
+    }
+    
+    private func handleMarkerTap(_ marker: GMSMarker) {
+        // Check if this is a nearby spot marker
+        if let placeId = marker.userData as? String,
+           let spot = viewModel.findSpot(byPlaceId: placeId) {
+            viewModel.selectSpot(spot)
+            updateMarkers()
+        }
+    }
+    
+    private func openInGoogleMaps(spot: NearbySpot) {
+        let urlString = "https://www.google.com/maps/search/?api=1&query=\(spot.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&query_place_id=\(spot.placeId)"
+        if let url = URL(string: urlString) {
+            UIApplication.shared.open(url)
+        }
     }
 }
 

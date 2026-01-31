@@ -21,8 +21,28 @@ class MapViewModel: ObservableObject {
     @Published var shouldCenterOnLocation: Bool = false
     @Published var forceCameraUpdate: Bool = false
     
+    // MARK: - Nearby Spots State
+    @Published var nearbySpots: [NearbySpot] = []
+    @Published var selectedSpot: NearbySpot? = nil
+    @Published var isLoadingNearbySpots: Bool = false
+    @Published var nearbyErrorMessage: String? = nil
+    @Published var sheetState: BottomSheetState = .expanded
+    
+    // Pagination state
+    private var nextPageToken: String? = nil
+    var hasMorePages: Bool { nextPageToken != nil }
+    
+    /// Returns displayed spots (selected single spot or all nearby spots)
+    var displayedSpots: [NearbySpot] {
+        if let selected = selectedSpot {
+            return [selected]
+        }
+        return nearbySpots
+    }
+    
     private let locationManager = LocationManager()
     private let locationSavingService = LocationSavingService.shared
+    private let placesAPIService = PlacesAPIService.shared
     private var cancellables = Set<AnyCancellable>()
     
     // Map view reference for future clustering support
@@ -30,6 +50,9 @@ class MapViewModel: ObservableObject {
     
     // Base radius in meters (5km)
     private let baseRadius: Double = 5000.0
+    
+    // Nearby search radius in meters (1km)
+    private let nearbySearchRadius: Double = 1000.0
     
     init() {
         setupLocationObserver()
@@ -128,6 +151,9 @@ class MapViewModel: ObservableObject {
     func centerOnCurrentLocation() {
         print("📍 Locate Me button clicked")
         
+        // Reset selected spot when Locate Me is pressed
+        selectedSpot = nil
+        
         guard let location = currentLocation else {
             print("⚠️ No current location available, requesting...")
             // Request location and set flag to center when it becomes available
@@ -142,8 +168,9 @@ class MapViewModel: ObservableObject {
         let currentCamera = mapView?.camera ?? currentCameraPosition
         guard let currentCamera = currentCamera else {
             print("⚠️ No camera position available, centering on location")
-            // Fallback: just center on location
+            // Fallback: just center on location and fetch spots
             centerOnLocation(location)
+            Task { await fetchNearbySpots(refresh: true) }
             return
         }
         
@@ -155,9 +182,10 @@ class MapViewModel: ObservableObject {
         
         print("🎯 Location centered: \(isCentered), at default zoom: \(isAtDefaultZoom)")
         
-        // If location is centered AND at default zoom → Do nothing
+        // If location is centered AND at default zoom → Just refresh spots
         if isCentered && isAtDefaultZoom {
-            print("✅ Location already centered at default zoom, doing nothing")
+            print("✅ Location already centered at default zoom, refreshing spots")
+            Task { await fetchNearbySpots(refresh: true) }
             return
         }
         
@@ -170,6 +198,7 @@ class MapViewModel: ObservableObject {
             if isVisible && !isCentered {
                 print("📍 Location visible but not centered, centering...")
                 centerOnLocation(location)
+                Task { await fetchNearbySpots(refresh: true) }
                 return
             }
             
@@ -177,6 +206,7 @@ class MapViewModel: ObservableObject {
             if isVisible && isCentered && !isAtDefaultZoom {
                 print("🔍 Location centered but not at default zoom, zooming...")
                 zoomToDefault(at: location.coordinate)
+                Task { await fetchNearbySpots(refresh: true) }
                 return
             }
         }
@@ -184,6 +214,83 @@ class MapViewModel: ObservableObject {
         // If location is NOT visible or any check failed → Center on it
         print("📍 Centering on location (not visible or checks failed)")
         centerOnLocation(location)
+        Task { await fetchNearbySpots(refresh: true) }
+    }
+    
+    // MARK: - Nearby Spots
+    
+    /// Fetches nearby spots from Google Places API
+    /// - Parameter refresh: If true, clears existing spots and resets pagination
+    func fetchNearbySpots(refresh: Bool = false) async {
+        guard let location = currentLocation else {
+            print("⚠️ Cannot fetch nearby spots: no current location")
+            nearbyErrorMessage = "Location not available"
+            return
+        }
+        
+        // If refreshing, reset state
+        if refresh {
+            nearbySpots = []
+            nextPageToken = nil
+            selectedSpot = nil
+        }
+        
+        // Don't fetch if already loading or no more pages
+        guard !isLoadingNearbySpots else { return }
+        if !refresh && nextPageToken == nil && !nearbySpots.isEmpty { return }
+        
+        isLoadingNearbySpots = true
+        nearbyErrorMessage = nil
+        
+        do {
+            let result = try await placesAPIService.searchNearby(
+                location: location,
+                radius: nearbySearchRadius,
+                pageToken: nextPageToken,
+                maxResults: 10
+            )
+            
+            // Append new spots (for pagination) or replace (for refresh)
+            if refresh {
+                nearbySpots = result.spots
+            } else {
+                // Filter out duplicates based on placeId
+                let existingIds = Set(nearbySpots.map { $0.placeId })
+                let newSpots = result.spots.filter { !existingIds.contains($0.placeId) }
+                nearbySpots.append(contentsOf: newSpots)
+            }
+            
+            nextPageToken = result.nextPageToken
+            isLoadingNearbySpots = false
+            
+            print("📍 Fetched \(result.spots.count) nearby spots. Total: \(nearbySpots.count). Has more: \(hasMorePages)")
+            
+        } catch {
+            isLoadingNearbySpots = false
+            nearbyErrorMessage = error.localizedDescription
+            print("❌ Error fetching nearby spots: \(error)")
+        }
+    }
+    
+    /// Loads more nearby spots (for pagination)
+    func loadMoreNearbySpots() async {
+        guard hasMorePages && !isLoadingNearbySpots else { return }
+        await fetchNearbySpots(refresh: false)
+    }
+    
+    /// Selects a spot (e.g., when user taps a marker)
+    func selectSpot(_ spot: NearbySpot) {
+        selectedSpot = spot
+    }
+    
+    /// Deselects the current spot (returns to nearby mode)
+    func deselectSpot() {
+        selectedSpot = nil
+    }
+    
+    /// Finds a spot by placeId in the nearby spots array
+    func findSpot(byPlaceId placeId: String) -> NearbySpot? {
+        return nearbySpots.first { $0.placeId == placeId }
     }
     
     // MARK: - Saved Places
@@ -336,6 +443,73 @@ class MapViewModel: ObservableObject {
     func refreshMarkers() {
         // This will be called when saved places are updated
         // Markers are created on-demand via createMarkers()
+    }
+    
+    // MARK: - Nearby Spots Markers
+    
+    /// Creates markers for nearby spots (for display on map)
+    func createNearbySpotMarkers() -> [GMSMarker] {
+        return nearbySpots.map { spot in
+            let marker = GMSMarker()
+            marker.position = CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude)
+            marker.title = spot.name
+            marker.snippet = spot.address
+            marker.userData = spot.placeId // Store placeId for tap handling
+            
+            // Use category-based icon or default marker
+            marker.icon = createNearbySpotIcon(for: spot)
+            
+            // Apply selection scaling if this spot is selected
+            if let selectedSpot = selectedSpot, selectedSpot.placeId == spot.placeId {
+                // Selected state - scale up marker
+                if let icon = marker.icon {
+                    marker.icon = scaleImage(icon, to: 1.3)
+                }
+            }
+            
+            return marker
+        }
+    }
+    
+    /// Creates icon for nearby spot based on category
+    private func createNearbySpotIcon(for spot: NearbySpot) -> UIImage? {
+        let tealColor = UIColor(red: 0.36, green: 0.69, blue: 0.72, alpha: 1.0)
+        
+        // Map category to SF Symbol
+        let iconName: String
+        switch spot.category {
+        case "Restaurant":
+            iconName = "fork.knife"
+        case "Cafe", "Coffee":
+            iconName = "cup.and.saucer.fill"
+        case "Bar":
+            iconName = "wineglass.fill"
+        case "Bakery":
+            iconName = "birthday.cake.fill"
+        case "Store":
+            iconName = "bag.fill"
+        case "Museum":
+            iconName = "building.columns.fill"
+        case "Park":
+            iconName = "tree.fill"
+        case "Gym":
+            iconName = "dumbbell.fill"
+        case "Hotel":
+            iconName = "bed.double.fill"
+        default:
+            iconName = "mappin.and.ellipse"
+        }
+        
+        return createCustomMarkerIcon(systemName: iconName, color: tealColor)
+    }
+    
+    /// Scales an image by a given factor
+    private func scaleImage(_ image: UIImage, to scale: CGFloat) -> UIImage {
+        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 }
 

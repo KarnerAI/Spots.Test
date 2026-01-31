@@ -28,6 +28,7 @@ class PlacesAPIService {
     }
     
     private let baseURL = "https://places.googleapis.com/v1/places:autocomplete"
+    private let nearbySearchURL = "https://places.googleapis.com/v1/places:searchNearby"
     
     private init() {}
     
@@ -350,6 +351,134 @@ class PlacesAPIService {
             }
         }.resume()
     }
+    
+    // MARK: - Nearby Search
+    
+    /// Searches for nearby places using Google Places Nearby Search (New) API
+    /// - Parameters:
+    ///   - location: User's current location
+    ///   - radius: Search radius in meters (default: 1000m)
+    ///   - pageToken: Optional token for pagination
+    ///   - maxResults: Maximum number of results to return (default: 10)
+    /// - Returns: Tuple of (spots, nextPageToken) for pagination support
+    func searchNearby(
+        location: CLLocation,
+        radius: Double = 1000,
+        pageToken: String? = nil,
+        maxResults: Int = 10
+    ) async throws -> (spots: [NearbySpot], nextPageToken: String?) {
+        guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
+            throw PlacesAPIError.apiKeyNotConfigured
+        }
+        
+        guard let url = URL(string: nearbySearchURL) else {
+            throw PlacesAPIError.invalidURL
+        }
+        
+        // Build request body for Nearby Search (New) API
+        var requestBody: [String: Any] = [
+            "maxResultCount": maxResults,
+            "locationRestriction": [
+                "circle": [
+                    "center": [
+                        "latitude": location.coordinate.latitude,
+                        "longitude": location.coordinate.longitude
+                    ],
+                    "radius": radius
+                ]
+            ]
+        ]
+        
+        // Add page token for pagination if provided
+        if let pageToken = pageToken {
+            requestBody["pageToken"] = pageToken
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        
+        // Add bundle identifier for iOS app restrictions
+        let bundleId = bundleIdentifier
+        if !bundleId.isEmpty {
+            request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
+        }
+        
+        // Request specific fields to optimize response
+        let fieldMask = [
+            "places.id",
+            "places.displayName",
+            "places.formattedAddress",
+            "places.shortFormattedAddress",
+            "places.addressComponents",
+            "places.location",
+            "places.types",
+            "places.rating",
+            "places.photos"
+        ].joined(separator: ",")
+        request.setValue(fieldMask, forHTTPHeaderField: "X-Goog-FieldMask")
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw PlacesAPIError.invalidResponse
+        }
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorString = String(data: data, encoding: .utf8) {
+                print("Nearby Search API Error Response: \(errorString)")
+            }
+            
+            if httpResponse.statusCode == 403 {
+                throw PlacesAPIError.apiKeyInvalid
+            } else if httpResponse.statusCode == 400 {
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let error = json["error"] as? [String: Any],
+                   let message = error["message"] as? String {
+                    throw PlacesAPIError.apiError(status: "400: \(message)")
+                }
+            }
+            throw PlacesAPIError.httpError(statusCode: httpResponse.statusCode)
+        }
+        
+        guard !data.isEmpty else {
+            throw PlacesAPIError.noData
+        }
+        
+        let decoder = JSONDecoder()
+        let nearbyResponse = try decoder.decode(NearbySearchResponse.self, from: data)
+        
+        // Convert API results to NearbySpot models
+        var spots = nearbyResponse.places?.compactMap { $0.toNearbySpot() } ?? []
+        
+        print("📸 PlacesAPIService: Converted \(spots.count) spots. Spots with photos: \(spots.filter { $0.photoReference != nil }.count)")
+        
+        // Calculate distance for each spot and sort by distance
+        spots = spots.map { $0.withDistance(from: location) }
+        spots.sort { ($0.distanceMeters ?? .infinity) < ($1.distanceMeters ?? .infinity) }
+        
+        // Upload images to Supabase Storage (asynchronously, don't block return)
+        // Images will be checked for existence and uploaded only if needed
+        Task {
+            await uploadSpotImages(spots: spots)
+        }
+        
+        return (spots: spots, nextPageToken: nearbyResponse.nextPageToken)
+    }
+    
+    /// Fetches a photo for a place using the photo name
+    /// - Parameters:
+    ///   - photoName: The photo name from the Places API (format: "places/{placeId}/photos/{photoReference}")
+    ///   - maxWidth: Maximum width of the photo
+    /// - Returns: URL for the photo
+    func getPhotoURL(photoName: String, maxWidth: Int = 400) -> URL? {
+        // For Places API (New), we need to use the media endpoint
+        let urlString = "https://places.googleapis.com/v1/\(photoName)/media?maxWidthPx=\(maxWidth)&key=\(apiKey)"
+        return URL(string: urlString)
+    }
 }
 
 // MARK: - Error Types
@@ -547,6 +676,81 @@ extension PlacesAPIService {
         
         let placeLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
         return userLocation.distance(from: placeLocation)
+    }
+    
+    /// Uploads spot images to Supabase Storage in the background
+    /// This runs asynchronously to avoid blocking the UI
+    /// Checks if image already exists before uploading to avoid duplicates
+    private func uploadSpotImages(spots: [NearbySpot]) async {
+        for spot in spots {
+            // Only process if spot has a photo reference
+            guard let photoReference = spot.photoReference else {
+                continue
+            }
+            
+            // Check if photo already exists in database
+            if await checkPhotoExists(placeId: spot.placeId) {
+                print("✅ PlacesAPIService: Photo already cached for \(spot.name)")
+                continue
+            }
+            
+            // Upload to Supabase Storage
+            let photoUrl = await ImageStorageService.shared.uploadSpotImage(
+                photoReference: photoReference,
+                placeId: spot.placeId
+            )
+            
+            if photoUrl != nil {
+                print("✅ PlacesAPIService: Uploaded image for \(spot.name)")
+                
+                // Update database with photo URL
+                await updateSpotPhotoUrl(placeId: spot.placeId, photoUrl: photoUrl, photoReference: photoReference)
+            } else {
+                print("⚠️ PlacesAPIService: Failed to upload image for \(spot.name)")
+            }
+        }
+    }
+    
+    /// Checks if a photo URL already exists for a spot
+    private func checkPhotoExists(placeId: String) async -> Bool {
+        do {
+            let supabase = SupabaseManager.shared.client
+            
+            struct SpotPhotoCheck: Codable {
+                let photo_url: String?
+            }
+            
+            let response: [SpotPhotoCheck] = try await supabase
+                .from("spots")
+                .select("photo_url")
+                .eq("place_id", value: placeId)
+                .limit(1)
+                .execute()
+                .value
+            
+            return response.first?.photo_url != nil && !(response.first?.photo_url?.isEmpty ?? true)
+        } catch {
+            // If error, assume photo doesn't exist and try to upload
+            return false
+        }
+    }
+    
+    /// Updates spot photo URL in database
+    private func updateSpotPhotoUrl(placeId: String, photoUrl: String?, photoReference: String) async {
+        guard let photoUrl = photoUrl else { return }
+        
+        do {
+            let supabase = SupabaseManager.shared.client
+            try await supabase
+                .from("spots")
+                .update(["photo_url": photoUrl, "photo_reference": photoReference])
+                .eq("place_id", value: placeId)
+                .execute()
+            
+            print("✅ PlacesAPIService: Updated database with photo URL for \(placeId)")
+        } catch {
+            print("❌ PlacesAPIService: Error updating spot photo URL: \(error.localizedDescription)")
+        }
     }
 }
 

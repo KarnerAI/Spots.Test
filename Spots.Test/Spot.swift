@@ -14,6 +14,8 @@ struct Spot: Codable, Identifiable {
     let latitude: Double?
     let longitude: Double?
     let types: [String]?
+    let photoUrl: String?
+    let photoReference: String?
     let createdAt: Date?
     let updatedAt: Date?
     
@@ -26,6 +28,8 @@ struct Spot: Codable, Identifiable {
         case latitude
         case longitude
         case types
+        case photoUrl = "photo_url"
+        case photoReference = "photo_reference"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
