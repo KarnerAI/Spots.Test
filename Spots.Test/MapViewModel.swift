@@ -425,8 +425,22 @@ class MapViewModel: ObservableObject {
             marker.position = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
             marker.title = placeWithMetadata.spot.name
             marker.snippet = placeWithMetadata.spot.address
-            marker.icon = iconForListTypes(placeWithMetadata.listTypes)
             marker.userData = placeWithMetadata.spot.placeId  // Store placeId for tap handling
+            
+            // Get base icon
+            var icon = iconForListTypes(placeWithMetadata.listTypes)
+            
+            // Scale up if this marker is selected
+            if let selectedSpot = selectedSpot,
+               selectedSpot.placeId == placeWithMetadata.spot.placeId,
+               let baseIcon = icon {
+                icon = scaleImage(baseIcon, to: 1.4)  // 40% larger
+                marker.zIndex = 1  // Bring to front
+            } else {
+                marker.zIndex = 0
+            }
+            
+            marker.icon = icon
             
             return marker
         }
@@ -478,6 +492,15 @@ class MapViewModel: ObservableObject {
                 )
                 configuredIcon.draw(in: iconRect)
             }
+        }
+    }
+    
+    /// Scales an image by the given scale factor
+    private func scaleImage(_ image: UIImage, to scale: CGFloat) -> UIImage {
+        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
         }
     }
     
