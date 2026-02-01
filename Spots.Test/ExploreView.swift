@@ -43,6 +43,16 @@ struct ExploreView: View {
                 },
                 onMarkerTapped: { marker in
                     handleMarkerTap(marker)
+                },
+                onPOITapped: { placeId, name, location in
+                    // Fetch POI details and show in carousel
+                    Task {
+                        await viewModel.fetchAndSelectPOI(placeId: placeId, name: name, location: location)
+                    }
+                },
+                onMapTapped: {
+                    // Clear selection when tapping empty map area
+                    viewModel.deselectSpot()
                 }
             )
             .ignoresSafeArea()
@@ -234,11 +244,10 @@ struct ExploreView: View {
     }
     
     private func handleMarkerTap(_ marker: GMSMarker) {
-        // Check if this is a nearby spot marker
+        // Check if this is a saved spot marker (custom markers have placeId in userData)
         if let placeId = marker.userData as? String,
-           let spot = viewModel.findSpot(byPlaceId: placeId) {
+           let spot = viewModel.findSavedPlace(byPlaceId: placeId) {
             viewModel.selectSpot(spot)
-            updateMarkers()
         }
     }
     

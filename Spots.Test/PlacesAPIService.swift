@@ -479,6 +479,72 @@ class PlacesAPIService {
         let urlString = "https://places.googleapis.com/v1/\(photoName)/media?maxWidthPx=\(maxWidth)&key=\(apiKey)"
         return URL(string: urlString)
     }
+    
+    /// Fetches place details by placeId from Google Places API
+    /// Used for getting details of tapped POI markers
+    /// - Parameter placeId: The Google Place ID
+    /// - Returns: NearbySpot with full details, or nil if not found
+    func fetchPlaceDetails(placeId: String) async throws -> NearbySpot? {
+        guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
+            throw PlacesAPIError.apiKeyNotConfigured
+        }
+        
+        let urlString = "https://places.googleapis.com/v1/places/\(placeId)"
+        guard let url = URL(string: urlString) else {
+            throw PlacesAPIError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        
+        // Add bundle identifier for iOS app restrictions
+        let bundleId = bundleIdentifier
+        if !bundleId.isEmpty {
+            request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
+        }
+        
+        // Request specific fields
+        let fieldMask = [
+            "id",
+            "displayName",
+            "formattedAddress",
+            "shortFormattedAddress",
+            "location",
+            "types",
+            "rating",
+            "photos"
+        ].joined(separator: ",")
+        request.setValue(fieldMask, forHTTPHeaderField: "X-Goog-FieldMask")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw PlacesAPIError.invalidResponse
+        }
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorString = String(data: data, encoding: .utf8) {
+                print("Place Details API Error Response: \(errorString)")
+            }
+            
+            if httpResponse.statusCode == 403 {
+                throw PlacesAPIError.apiKeyInvalid
+            } else if httpResponse.statusCode == 404 {
+                return nil // Place not found
+            }
+            throw PlacesAPIError.httpError(statusCode: httpResponse.statusCode)
+        }
+        
+        guard !data.isEmpty else {
+            throw PlacesAPIError.noData
+        }
+        
+        let decoder = JSONDecoder()
+        let placeResponse = try decoder.decode(PlaceDetailsResponse.self, from: data)
+        
+        return placeResponse.toNearbySpot()
+    }
 }
 
 // MARK: - Error Types

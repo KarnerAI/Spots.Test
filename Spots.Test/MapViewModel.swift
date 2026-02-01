@@ -288,9 +288,70 @@ class MapViewModel: ObservableObject {
         selectedSpot = nil
     }
     
-    /// Finds a spot by placeId in the nearby spots array
-    func findSpot(byPlaceId placeId: String) -> NearbySpot? {
-        return nearbySpots.first { $0.placeId == placeId }
+    /// Finds a saved place by placeId and converts to NearbySpot format
+    func findSavedPlace(byPlaceId placeId: String) -> NearbySpot? {
+        guard let savedPlace = savedPlaces.first(where: { $0.spot.placeId == placeId }) else {
+            return nil
+        }
+        let spot = savedPlace.spot
+        return NearbySpot(
+            placeId: spot.placeId,
+            name: spot.name,
+            address: spot.address ?? "",
+            category: spot.types?.first?.capitalized ?? "Place",
+            rating: nil,
+            photoReference: spot.photoReference,
+            photoUrl: spot.photoUrl,
+            latitude: spot.latitude ?? 0,
+            longitude: spot.longitude ?? 0,
+            distanceMeters: calculateDistance(to: spot)
+        )
+    }
+    
+    /// Calculates distance from user location to a spot
+    private func calculateDistance(to spot: Spot) -> Double? {
+        guard let userLoc = currentLocation,
+              let lat = spot.latitude,
+              let lng = spot.longitude else { return nil }
+        let spotLoc = CLLocation(latitude: lat, longitude: lng)
+        return userLoc.distance(from: spotLoc)
+    }
+    
+    /// Calculates distance from user location to a coordinate
+    private func calculateDistanceToCoordinate(_ coord: CLLocationCoordinate2D) -> Double? {
+        guard let userLoc = currentLocation else { return nil }
+        let spotLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        return userLoc.distance(from: spotLoc)
+    }
+    
+    /// Fetches POI details and selects it as the current spot
+    func fetchAndSelectPOI(placeId: String, name: String, location: CLLocationCoordinate2D) async {
+        // Show loading state with basic info first
+        let basicSpot = NearbySpot(
+            placeId: placeId,
+            name: name,
+            address: "",
+            category: "Place",
+            rating: nil,
+            photoReference: nil,
+            photoUrl: nil,
+            latitude: location.latitude,
+            longitude: location.longitude,
+            distanceMeters: calculateDistanceToCoordinate(location)
+        )
+        selectedSpot = basicSpot
+        
+        // Fetch full details from Google Places API
+        do {
+            if let detailedSpot = try await placesAPIService.fetchPlaceDetails(placeId: placeId) {
+                var spot = detailedSpot
+                spot.distanceMeters = calculateDistanceToCoordinate(location)
+                selectedSpot = spot
+            }
+        } catch {
+            print("Failed to fetch POI details: \(error)")
+            // Keep showing basic info
+        }
     }
     
     // MARK: - Saved Places
@@ -365,6 +426,7 @@ class MapViewModel: ObservableObject {
             marker.title = placeWithMetadata.spot.name
             marker.snippet = placeWithMetadata.spot.address
             marker.icon = iconForListTypes(placeWithMetadata.listTypes)
+            marker.userData = placeWithMetadata.spot.placeId  // Store placeId for tap handling
             
             return marker
         }
@@ -443,73 +505,6 @@ class MapViewModel: ObservableObject {
     func refreshMarkers() {
         // This will be called when saved places are updated
         // Markers are created on-demand via createMarkers()
-    }
-    
-    // MARK: - Nearby Spots Markers
-    
-    /// Creates markers for nearby spots (for display on map)
-    func createNearbySpotMarkers() -> [GMSMarker] {
-        return nearbySpots.map { spot in
-            let marker = GMSMarker()
-            marker.position = CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude)
-            marker.title = spot.name
-            marker.snippet = spot.address
-            marker.userData = spot.placeId // Store placeId for tap handling
-            
-            // Use category-based icon or default marker
-            marker.icon = createNearbySpotIcon(for: spot)
-            
-            // Apply selection scaling if this spot is selected
-            if let selectedSpot = selectedSpot, selectedSpot.placeId == spot.placeId {
-                // Selected state - scale up marker
-                if let icon = marker.icon {
-                    marker.icon = scaleImage(icon, to: 1.3)
-                }
-            }
-            
-            return marker
-        }
-    }
-    
-    /// Creates icon for nearby spot based on category
-    private func createNearbySpotIcon(for spot: NearbySpot) -> UIImage? {
-        let tealColor = UIColor(red: 0.36, green: 0.69, blue: 0.72, alpha: 1.0)
-        
-        // Map category to SF Symbol
-        let iconName: String
-        switch spot.category {
-        case "Restaurant":
-            iconName = "fork.knife"
-        case "Cafe", "Coffee":
-            iconName = "cup.and.saucer.fill"
-        case "Bar":
-            iconName = "wineglass.fill"
-        case "Bakery":
-            iconName = "birthday.cake.fill"
-        case "Store":
-            iconName = "bag.fill"
-        case "Museum":
-            iconName = "building.columns.fill"
-        case "Park":
-            iconName = "tree.fill"
-        case "Gym":
-            iconName = "dumbbell.fill"
-        case "Hotel":
-            iconName = "bed.double.fill"
-        default:
-            iconName = "mappin.and.ellipse"
-        }
-        
-        return createCustomMarkerIcon(systemName: iconName, color: tealColor)
-    }
-    
-    /// Scales an image by a given factor
-    private func scaleImage(_ image: UIImage, to scale: CGFloat) -> UIImage {
-        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: newSize))
-        }
     }
 }
 

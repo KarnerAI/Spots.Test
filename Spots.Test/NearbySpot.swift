@@ -210,3 +210,54 @@ struct NearbyPlaceResult: Codable {
         )
     }
 }
+
+// MARK: - Place Details Response (for single place lookup)
+
+struct PlaceDetailsResponse: Codable {
+    let id: String
+    let displayName: DisplayName?
+    let formattedAddress: String?
+    let shortFormattedAddress: String?
+    let location: PlaceLocation?
+    let types: [String]?
+    let rating: Double?
+    let photos: [PlacePhoto]?
+    
+    struct DisplayName: Codable {
+        let text: String
+        let languageCode: String?
+    }
+    
+    struct PlaceLocation: Codable {
+        let latitude: Double
+        let longitude: Double
+    }
+    
+    struct PlacePhoto: Codable {
+        let name: String
+        let widthPx: Int?
+        let heightPx: Int?
+    }
+    
+    /// Converts API response to NearbySpot model
+    func toNearbySpot() -> NearbySpot? {
+        guard let location = location else { return nil }
+        
+        let name = displayName?.text ?? "Unknown"
+        let address = shortFormattedAddress ?? formattedAddress ?? ""
+        let category = NearbySpot.mapCategory(from: types ?? [])
+        let photoReference = photos?.first?.name
+        
+        return NearbySpot(
+            placeId: id,
+            name: name,
+            address: address,
+            category: category,
+            rating: rating,
+            photoReference: photoReference,
+            photoUrl: nil,
+            latitude: location.latitude,
+            longitude: location.longitude
+        )
+    }
+}
