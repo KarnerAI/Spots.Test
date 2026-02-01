@@ -6,7 +6,15 @@
 import Foundation
 
 enum DebugLogger {
-    private static let logPath = "/Users/shaon/Library/CloudStorage/GoogleDrive-hussain@karnerblu.com/Shared drives/6. Spots 2.0/3. Engineering/2. CodeBase/SpotsTest/Spots.Test/.cursor/debug.log"
+    private static let logPath: String = {
+        // Get the project root directory dynamically
+        let fileManager = FileManager.default
+        if let projectRoot = fileManager.currentDirectoryPath.components(separatedBy: "/Spots.Test").first {
+            return projectRoot + "/Spots.Test/.cursor/debug.log"
+        }
+        // Fallback to a temporary directory if project root can't be determined
+        return fileManager.temporaryDirectory.appendingPathComponent("spots-debug.log").path
+    }()
     private static let serverEndpoint = "http://127.0.0.1:7242/ingest/4011b5a8-bf93-4d06-83bf-44b26380aefc"
     
     static func log(
