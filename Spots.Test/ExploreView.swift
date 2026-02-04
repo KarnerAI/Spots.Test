@@ -145,7 +145,44 @@ struct ExploreView: View {
                 )
                 .padding(.bottom, 70) // Space for tab bar
             }
+            
+            // MARK: - List Picker Overlay
+            if spotForSaving != nil {
+                // Dimmed background - tap to dismiss
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            spotForSaving = nil
+                        }
+                    }
+                    .transition(.opacity)
+            }
+            
+            if let spot = spotForSaving {
+                ListPickerView(
+                    spotData: spot.toPlaceAutocompleteResult(),
+                    viewModel: locationSavingVM,
+                    onDismiss: {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            spotForSaving = nil
+                        }
+                    },
+                    onSaveComplete: {
+                        Task {
+                            await viewModel.loadSavedPlaces()
+                            updateMarkers()
+                        }
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            spotForSaving = nil
+                        }
+                    }
+                )
+                .padding(.bottom, 70) // Keep sheet above tab bar so Save button stays visible
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotForSaving != nil)
         .onAppear {
             // Request location permission and load saved places
             viewModel.requestLocation()
@@ -191,21 +228,6 @@ struct ExploreView: View {
                     // Handle follow/unfollow here
                 }
             )
-        }
-        .sheet(item: $spotForSaving) { spot in
-            ListPickerView(
-                spotData: spot.toPlaceAutocompleteResult(),
-                viewModel: locationSavingVM,
-                onSaveComplete: {
-                    // Reload saved places after saving
-                    Task {
-                        await viewModel.loadSavedPlaces()
-                        updateMarkers()
-                    }
-                }
-            )
-            .presentationDetents([.height(330)])
-            .presentationDragIndicator(.visible)
         }
         .confirmationDialog(
             "Open in Google Maps?",

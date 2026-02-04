@@ -224,23 +224,43 @@ struct SearchView: View {
                     }
                 }
             }
+            
+            // MARK: - List Picker Overlay
+            if selectedSpotForSaving != nil {
+                // Dimmed background - tap to dismiss
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            selectedSpotForSaving = nil
+                        }
+                    }
+                    .transition(.opacity)
+            }
+            
+            if let spot = selectedSpotForSaving {
+                ListPickerView(
+                    spotData: spot,
+                    viewModel: locationSavingVM,
+                    onDismiss: {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            selectedSpotForSaving = nil
+                        }
+                    },
+                    onSaveComplete: {
+                        dismiss()
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedSpotForSaving != nil)
         .transition(.move(edge: .trailing))
         .onAppear {
             locationManager.requestLocationPermission()
             Task {
                 await locationSavingVM.loadUserLists()
             }
-        }
-        .sheet(item: $selectedSpotForSaving) { spot in
-            ListPickerView(
-                spotData: spot,
-                viewModel: locationSavingVM,
-                onSaveComplete: {
-                    // Dismiss both the sheet and the SearchView to return to Explore
-                    dismiss()
-                }
-            )
         }
     }
     

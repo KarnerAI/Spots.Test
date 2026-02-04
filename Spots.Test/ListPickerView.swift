@@ -10,7 +10,7 @@ import SwiftUI
 struct ListPickerView: View {
     let spotData: PlaceAutocompleteResult
     @ObservedObject var viewModel: LocationSavingViewModel
-    @Environment(\.dismiss) var dismiss
+    var onDismiss: () -> Void
     var onSaveComplete: (() -> Void)? = nil
     
     @State private var selectedListIds: Set<UUID> = []
@@ -19,149 +19,172 @@ struct ListPickerView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     
+    // Layout constants
+    private let topCornerRadius: CGFloat = 20
+    private let dragHandleWidth: CGFloat = 40
+    private let dragHandleHeight: CGFloat = 4
+    private let listRowHeight: CGFloat = 68
+    private let listVerticalPadding: CGFloat = 16
+    private let fixedPartsHeight: CGFloat = 155
+    private let minSheetHeight: CGFloat = 280
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Button(action: {
-                    dismiss()
-                }) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundColor(.gray900)
-                        .frame(width: 44, height: 44)
-                }
-                
-                Spacer()
-                
-                Text("Save to Spots")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.gray900)
-                
-                Spacer()
-                
-                // Spacer for balance
-                Color.clear
-                    .frame(width: 44, height: 44)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .overlay(
-                Rectangle()
-                    .fill(Color.gray200)
-                    .frame(height: 0.5),
-                alignment: .bottom
-            )
+        GeometryReader { geometry in
+            let bottomSafeArea = geometry.safeAreaInsets.bottom
+            let screenHeight = geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
+            let listContentHeight = CGFloat(viewModel.userLists.count) * listRowHeight + listVerticalPadding
+            let contentDrivenHeight = fixedPartsHeight + listContentHeight
+            let maxSheetHeight = min(screenHeight * 0.45, 420)
+            let sheetHeight = max(minSheetHeight, min(maxSheetHeight, contentDrivenHeight))
             
-            // Lists - no ScrollView, just show the 3 lists
             VStack(spacing: 0) {
-                ForEach(viewModel.userLists) { list in
-                    listRow(list: list)
-                }
-            }
-            
-            // Error Message Display
-            if let errorMessage = errorMessage {
+                Spacer()
+                
                 VStack(spacing: 0) {
+                    // Drag handle
+                    dragHandle
+                    
+                    // Header with close button
+                    HStack {
+                        Button(action: { onDismiss() }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundColor(.gray900)
+                                .frame(width: 44, height: 44)
+                        }
+
+                        Spacer()
+
+                        Text("Save to Spots")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.gray900)
+
+                        Spacer()
+
+                        Color.clear
+                            .frame(width: 44, height: 44)
+                    }
+                    .padding(.horizontal, 12)
+                    
+                    // Divider
                     Rectangle()
                         .fill(Color.gray200)
-                        .frame(height: 0.5)
-                    
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.red)
-                            .font(.system(size: 16))
-                        
-                        Text(errorMessage)
-                            .font(.system(size: 14))
-                            .foregroundColor(.red)
-                            .multilineTextAlignment(.leading)
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            self.errorMessage = nil
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.gray400)
+                        .frame(height: 1)
+
+                    // List content
+                    VStack(spacing: 0) {
+                        ForEach(viewModel.userLists) { list in
+                            listRow(list: list)
+                        }
+                    }
+                    .padding(.vertical, 8)
+
+                    // Error message if any
+                    if let errorMessage = errorMessage {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
                                 .font(.system(size: 16))
+                            Text(errorMessage)
+                                .font(.system(size: 14))
+                                .foregroundColor(.red)
+                                .multilineTextAlignment(.leading)
+                            Spacer()
+                            Button(action: { self.errorMessage = nil }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.gray400)
+                                    .font(.system(size: 16))
+                            }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(Color.red.opacity(0.1))
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Color.red.opacity(0.1))
-                }
-            }
-            
-            // Save Button
-            VStack(spacing: 0) {
-                Rectangle()
-                    .fill(Color.gray200)
-                    .frame(height: 0.5)
-                
-                Button(action: {
-                    Task {
-                        await handleSave()
-                    }
-                }) {
-                    HStack {
-                        if isSaving {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
+
+                    // Save button area
+                    VStack(spacing: 0) {
+                        Rectangle()
+                            .fill(Color.gray200)
+                            .frame(height: 1)
+
+                        Button(action: {
+                            Task { await handleSave() }
+                        }) {
+                            Group {
+                                if isSaving {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .scaleEffect(0.8)
+                                }
+                                Text(isSaving ? "Saving..." : "Save")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundColor(.white)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
                         }
-                        Text(isSaving ? "Saving..." : "Save")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.white)
+                        .buttonStyle(SaveToListTealButtonStyle())
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .padding(.bottom, max(bottomSafeArea, 16))
+                        .disabled(isSaving || selectedListIds.isEmpty)
+                        .opacity(isSaving || selectedListIds.isEmpty ? 0.6 : 1.0)
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 56)
-                    .background(Color(red: 0.36, green: 0.69, blue: 0.72)) // #5DB0B8
-                    .cornerRadius(12)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 24)
-                .disabled(isSaving || selectedListIds.isEmpty)
-                .opacity(isSaving || selectedListIds.isEmpty ? 0.6 : 1.0)
+                .frame(height: sheetHeight)
+                .frame(maxWidth: .infinity)
+                .background(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: topCornerRadius,
+                        bottomLeadingRadius: 0,
+                        bottomTrailingRadius: 0,
+                        topTrailingRadius: topCornerRadius
+                    )
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.15), radius: 12, x: 0, y: -4)
+                )
             }
-            .background(Color.white)
+            .ignoresSafeArea(edges: .bottom)
         }
-        .background(Color.white)
         .onAppear {
-            Task {
-                await loadInitialData()
-            }
+            Task { await loadInitialData() }
         }
+    }
+    
+    // MARK: - Drag Handle
+    
+    private var dragHandle: some View {
+        VStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.gray300)
+                .frame(width: dragHandleWidth, height: dragHandleHeight)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity)
     }
     
     private func listRow(list: UserList) -> some View {
         let isSelected = selectedListIds.contains(list.id)
         let count = listCounts[list.id] ?? 0
         
-        return Button(action: {
-            toggleList(list.id)
-        }) {
+        return Button(action: { toggleList(list.id) }) {
             HStack(spacing: 12) {
-                // Icon
                 iconForList(list: list)
-                    .frame(width: 24, height: 24)
+                    .frame(width: 20, height: 20)
                 
-                // Text Content
                 VStack(alignment: .leading, spacing: 2) {
                     Text(list.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 16, weight: .regular))
                         .foregroundColor(.gray900)
                     
                     HStack(spacing: 4) {
                         Text("Private list")
                             .font(.system(size: 12))
                             .foregroundColor(.gray500)
-                        
                         Text("·")
                             .font(.system(size: 12))
                             .foregroundColor(.gray500)
-                        
                         if isLoadingCounts {
                             Text("...")
                                 .font(.system(size: 12))
@@ -176,44 +199,44 @@ struct ListPickerView: View {
                 
                 Spacer()
                 
-                // Checkbox
                 ZStack {
                     Circle()
-                        .stroke(isSelected ? Color.clear : Color.gray.opacity(0.3), lineWidth: 2)
+                        .stroke(isSelected ? Color.clear : Color.gray300, lineWidth: 2)
                         .frame(width: 24, height: 24)
                         .background(
                             Circle()
-                                .fill(isSelected ? Color(red: 0.36, green: 0.69, blue: 0.72) : Color.clear)
+                                .fill(isSelected ? Color.spotsTeal : Color.clear)
                         )
-                    
                     if isSelected {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundColor(.white)
                     }
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color.white)
+            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 44)
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(ListRowButtonStyle())
     }
     
     private func iconForList(list: UserList) -> some View {
         if let listType = list.listType {
             switch listType {
             case .starred:
-                return Image(systemName: "star")
-                    .foregroundColor(.yellow)
+                return Image(systemName: "star.fill")
+                    .foregroundColor(Color(red: 0.92, green: 0.70, blue: 0.03)) // #EAB308
                     .anyView
             case .favorites:
-                return Image(systemName: "heart")
-                    .foregroundColor(.red)
+                return Image(systemName: "heart.fill")
+                    .foregroundColor(Color(red: 0.94, green: 0.27, blue: 0.27)) // #EF4444
                     .anyView
             case .bucketList:
-                return Image(systemName: "flag")
-                    .foregroundColor(.blue)
+                return Image(systemName: "flag.fill")
+                    .foregroundColor(Color(red: 0.23, green: 0.51, blue: 0.96)) // #3B82F6
                     .anyView
             }
         } else {
@@ -356,7 +379,7 @@ struct ListPickerView: View {
             
             // Close sheet on main thread
             await MainActor.run {
-                dismiss()
+                onDismiss()
             }
         } catch {
             let errorMsg: String
@@ -422,6 +445,26 @@ struct RoundedCorner: Shape {
     }
 }
 
+// MARK: - List row style (gray-100 when pressed)
+private struct ListRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.gray100 : Color.white)
+            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Save button style (teal / darker teal when pressed)
+private struct SaveToListTealButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(configuration.isPressed ? Color.spotsTealActive : Color.spotsTeal)
+            )
+    }
+}
+
 // Helper extension for type erasure
 extension View {
     var anyView: AnyView {
@@ -429,3 +472,15 @@ extension View {
     }
 }
 
+// Preference Key to pass the size up
+struct ViewHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+/// Minimum sheet height used when content height is not yet measured (avoids .medium detent).
+enum ListPickerSheetLayout {
+    static let initialHeight: CGFloat = 400
+}

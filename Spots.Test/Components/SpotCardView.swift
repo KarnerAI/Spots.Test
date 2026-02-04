@@ -171,9 +171,10 @@ struct SpotCardView: View {
 // MARK: - Card Width Helper
 
 extension SpotCardView {
-    /// Returns the recommended card width (87% of screen width, max 340pt)
+    /// Returns the recommended card width so the next card is barely visible (peek).
+    /// Uses ~94% of screen width (max 370pt) so only a small sliver of the next card shows.
     static func cardWidth(for screenWidth: CGFloat) -> CGFloat {
-        min(screenWidth * 0.87, 340)
+        min(screenWidth * 0.94, 370)
     }
 }
 
