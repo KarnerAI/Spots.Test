@@ -118,3 +118,6 @@ Temporary Items
 # Info.plist files containing API keys
 *-Info.plist
 Info.plist
+
+# Cursor
+.cursor/
