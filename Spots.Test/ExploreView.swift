@@ -9,9 +9,9 @@ import SwiftUI
 import GoogleMaps
 
 struct ExploreView: View {
+    @ObservedObject var viewModel: MapViewModel
     @State private var showSearchView = false
     @State private var showFiltersPlaceholder = false
-    @StateObject private var viewModel = MapViewModel()
     @StateObject private var locationSavingVM = LocationSavingViewModel()
     @State private var mapView: GMSMapView?
     @State private var markers: [GMSMarker] = []
@@ -31,8 +31,10 @@ struct ExploreView: View {
                 onMapReady: { mapView in
                     self.mapView = mapView
                     viewModel.setupMap(mapView)
-                    // Track initial camera position
-                    viewModel.currentCameraPosition = mapView.camera
+                    // Track initial camera position only on first open; when restoring we keep saved currentCameraPosition so onAppear can restore last view
+                    if !viewModel.hasExploreAppearedBefore {
+                        viewModel.currentCameraPosition = mapView.camera
+                    }
                 },
                 onCameraChanged: { position in
                     // Update current camera position in ViewModel
@@ -95,11 +97,15 @@ struct ExploreView: View {
                 Spacer()
             }
             
-            // Locate Me Button - positioned above the bottom sheet
+            // Locate Me Button and location status - positioned above the bottom sheet
             VStack {
                 Spacer()
                 HStack {
                     Spacer()
+                    // Location status: show instantly whether user is located
+                    Text(viewModel.currentLocation != nil ? "Located" : "Locating...")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(viewModel.currentLocation != nil ? .secondary : .orange)
                     Button(action: {
                         viewModel.centerOnCurrentLocation()
                     }) {
@@ -112,8 +118,8 @@ struct ExploreView: View {
                             .shadow(color: Color.black.opacity(0.15), radius: 4, x: 0, y: 2)
                     }
                     .padding(.trailing, 16)
-                    .padding(.bottom, bottomSheetHeight + 70 + 16) // Position above bottom sheet + tab bar
                 }
+                .padding(.bottom, bottomSheetHeight + 70 + 16) // Position above bottom sheet + tab bar
             }
             
             // Bottom Sheet with Spots Carousel - anchored to bottom
@@ -184,17 +190,16 @@ struct ExploreView: View {
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotForSaving != nil)
         .onAppear {
-            // Request location permission and load saved places
-            viewModel.requestLocation()
+            // Restore map to last camera only when returning from another tab in the same session (not on first open or after app was backgrounded)
+            if viewModel.hasExploreAppearedBefore, let lastCamera = viewModel.currentCameraPosition {
+                viewModel.cameraPosition = lastCamera
+            }
+            viewModel.hasExploreAppearedBefore = true
+            // Load saved places and lists; nearby spots are fetched when location becomes available (MapViewModel)
             Task {
                 await viewModel.loadSavedPlaces()
                 await locationSavingVM.loadUserLists()
                 updateMarkers()
-                
-                // Fetch nearby spots once location is available
-                // Small delay to ensure location is ready
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                await viewModel.fetchNearbySpots(refresh: true)
             }
         }
         .onChange(of: viewModel.savedPlaces.count) { oldValue, newValue in
@@ -282,6 +287,6 @@ struct ExploreView: View {
 }
 
 #Preview {
-    ExploreView()
+    ExploreView(viewModel: MapViewModel())
 }
 

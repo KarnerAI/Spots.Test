@@ -8,7 +8,9 @@
 import SwiftUI
 
 struct MainTabView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = 1 // Default to Explore tab (index 1)
+    @StateObject private var mapViewModel = MapViewModel()
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -17,7 +19,7 @@ struct MainTabView: View {
                 if selectedTab == 0 {
                     NewsFeedView()
                 } else if selectedTab == 1 {
-                    ExploreView()
+                    ExploreView(viewModel: mapViewModel)
                 } else {
                     ProfileView()
                 }
@@ -30,6 +32,14 @@ struct MainTabView: View {
                 CustomBottomNav(selectedTab: $selectedTab) { tab in
                     selectedTab = tab
                 }
+            }
+        }
+        .onAppear {
+            mapViewModel.requestLocation()
+        }
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            if newPhase == .background {
+                mapViewModel.resetExploreSession()
             }
         }
     }

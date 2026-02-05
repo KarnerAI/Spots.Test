@@ -48,6 +48,12 @@ class MapViewModel: ObservableObject {
     // Map view reference for future clustering support
     private var mapView: GMSMapView?
     
+    /// True after we've triggered the first nearby fetch when location became available (avoids refetch on every location update).
+    private var hasPerformedInitialNearbyFetch = false
+    
+    /// True after Explore has been shown in this foreground session; used to restore last camera when returning from another tab. Reset when app enters background.
+    var hasExploreAppearedBefore = false
+    
     // Base radius in meters (5km)
     private let baseRadius: Double = 5000.0
     
@@ -71,6 +77,11 @@ class MapViewModel: ObservableObject {
                     // Set initial camera position to user location if not set
                     if self.cameraPosition == nil {
                         self.centerOnLocation(location)
+                        // Fetch nearby spots as soon as location is available (first-time only)
+                        if !self.hasPerformedInitialNearbyFetch {
+                            self.hasPerformedInitialNearbyFetch = true
+                            Task { await self.fetchNearbySpots(refresh: true) }
+                        }
                     }
                     // Center on location if explicitly requested (e.g., from Locate Me button)
                     else if self.shouldCenterOnLocation {
@@ -85,6 +96,11 @@ class MapViewModel: ObservableObject {
     func requestLocation() {
         locationManager.requestLocationPermission()
         locationManager.requestLocation()
+    }
+    
+    /// Call when app enters background so next time Explore appears we show user location (treat as first open).
+    func resetExploreSession() {
+        hasExploreAppearedBefore = false
     }
     
     func centerOnLocation(_ location: CLLocation) {
