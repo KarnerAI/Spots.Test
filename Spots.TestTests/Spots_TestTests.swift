@@ -15,3 +15,52 @@ struct Spots_TestTests {
     }
 
 }
+
+// MARK: - Display List Type Resolver Tests
+
+struct DisplayListTypeResolverTests {
+    
+    @Test func emptySetReturnsNil() {
+        let result = displayListType(for: [])
+        #expect(result == nil)
+    }
+    
+    @Test func starredOnlyReturnsStarred() {
+        let result = displayListType(for: [.starred])
+        #expect(result == .starred)
+    }
+    
+    @Test func favoritesOnlyReturnsFavorites() {
+        let result = displayListType(for: [.favorites])
+        #expect(result == .favorites)
+    }
+    
+    @Test func bucketListOnlyReturnsBucketList() {
+        let result = displayListType(for: [.bucketList])
+        #expect(result == .bucketList)
+    }
+    
+    @Test func starredAndFavoritesReturnsStarred() {
+        // Starred has higher priority than Favorites
+        let result = displayListType(for: [.starred, .favorites])
+        #expect(result == .starred)
+    }
+    
+    @Test func bucketListAndStarredReturnsBucketList() {
+        // BucketList has highest priority
+        let result = displayListType(for: [.bucketList, .starred])
+        #expect(result == .bucketList)
+    }
+    
+    @Test func bucketListAndFavoritesReturnsBucketList() {
+        // BucketList has highest priority
+        let result = displayListType(for: [.bucketList, .favorites])
+        #expect(result == .bucketList)
+    }
+    
+    @Test func allThreeReturnsBucketList() {
+        // BucketList has highest priority even when all are present
+        let result = displayListType(for: [.bucketList, .starred, .favorites])
+        #expect(result == .bucketList)
+    }
+}

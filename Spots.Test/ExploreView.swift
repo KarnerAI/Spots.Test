@@ -132,6 +132,8 @@ struct ExploreView: View {
                     isLoading: viewModel.isLoadingNearbySpots,
                     hasMorePages: viewModel.hasMorePages,
                     errorMessage: viewModel.nearbyErrorMessage,
+                    spotListTypeMap: viewModel.spotListTypeMap,
+                    hasLoadedSavedPlaces: viewModel.hasLoadedSavedPlacesOnce,
                     onBookmarkTap: { spot in
                         spotForSaving = spot
                     },

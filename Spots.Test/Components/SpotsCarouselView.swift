@@ -11,6 +11,8 @@ struct SpotsCarouselView: View {
     let spots: [NearbySpot]
     let isLoading: Bool
     let hasMorePages: Bool
+    let spotListTypeMap: [String: ListType]
+    let hasLoadedSavedPlaces: Bool
     let onBookmarkTap: (NearbySpot) -> Void
     let onCardTap: (NearbySpot) -> Void
     let onLoadMore: () -> Void
@@ -74,6 +76,8 @@ struct SpotsCarouselView: View {
                     ForEach(Array(spots.enumerated()), id: \.element.id) { index, spot in
                         SpotCardView(
                             spot: spot,
+                            spotListTypeMap: spotListTypeMap,
+                            hasLoadedSavedPlaces: hasLoadedSavedPlaces,
                             onBookmarkTap: { onBookmarkTap(spot) },
                             onCardTap: { onCardTap(spot) }
                         )
@@ -153,6 +157,8 @@ struct SpotsCarouselView: View {
             spots: mockSpots,
             isLoading: false,
             hasMorePages: true,
+            spotListTypeMap: ["1": .starred, "2": .favorites, "3": .bucketList],
+            hasLoadedSavedPlaces: true,
             onBookmarkTap: { spot in print("Bookmark: \(spot.name)") },
             onCardTap: { spot in print("Card: \(spot.name)") },
             onLoadMore: { print("Load more") }
@@ -166,6 +172,8 @@ struct SpotsCarouselView: View {
         spots: [],
         isLoading: true,
         hasMorePages: false,
+        spotListTypeMap: [:],
+        hasLoadedSavedPlaces: false,
         onBookmarkTap: { _ in },
         onCardTap: { _ in },
         onLoadMore: { }
@@ -178,6 +186,8 @@ struct SpotsCarouselView: View {
         spots: [],
         isLoading: false,
         hasMorePages: false,
+        spotListTypeMap: [:],
+        hasLoadedSavedPlaces: true,
         onBookmarkTap: { _ in },
         onCardTap: { _ in },
         onLoadMore: { }
@@ -190,6 +200,8 @@ struct SpotsCarouselView: View {
         spots: [],
         isLoading: false,
         hasMorePages: false,
+        spotListTypeMap: [:],
+        hasLoadedSavedPlaces: false,
         onBookmarkTap: { _ in },
         onCardTap: { _ in },
         onLoadMore: { },

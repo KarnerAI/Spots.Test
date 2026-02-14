@@ -110,18 +110,11 @@ struct ListPickerView: View {
                         Button(action: {
                             Task { await handleSave() }
                         }) {
-                            Group {
-                                if isSaving {
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                        .scaleEffect(0.8)
-                                }
-                                Text(isSaving ? "Saving..." : "Save")
-                                    .font(.system(size: 17, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
+                            Text(isSaving ? "Saving" : "Save")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 50)
                         }
                         .buttonStyle(SaveToListTealButtonStyle())
                         .padding(.horizontal, 16)

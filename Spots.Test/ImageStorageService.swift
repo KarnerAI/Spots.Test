@@ -30,6 +30,11 @@ class ImageStorageService {
             return nil
         }
         
+        // Step 1.5: Cache the image in memory so the UI never re-downloads from Google
+        if let uiImage = UIImage(data: imageData) {
+            SpotImageCache.shared.store(uiImage, for: photoReference)
+        }
+        
         // Step 2: Upload to Supabase Storage
         return await uploadToSupabase(imageData: imageData, placeId: placeId)
     }

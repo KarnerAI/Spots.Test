@@ -28,6 +28,10 @@ class MapViewModel: ObservableObject {
     @Published var nearbyErrorMessage: String? = nil
     @Published var sheetState: BottomSheetState = .expanded
     
+    // MARK: - Spot List Membership State
+    @Published var hasLoadedSavedPlacesOnce: Bool = false
+    @Published var spotListTypeMap: [String: ListType] = [:]
+    
     // Pagination state
     private var nextPageToken: String? = nil
     var hasMorePages: Bool { nextPageToken != nil }
@@ -59,6 +63,9 @@ class MapViewModel: ObservableObject {
     
     // Nearby search radius in meters (1km)
     private let nearbySearchRadius: Double = 1000.0
+    
+    // Page size for nearby spots carousel (initial load + each scroll-triggered load more)
+    private let nearbyPageSize = 5
     
     init() {
         setupLocationObserver()
@@ -263,7 +270,7 @@ class MapViewModel: ObservableObject {
                 location: location,
                 radius: nearbySearchRadius,
                 pageToken: nextPageToken,
-                maxResults: 10
+                maxResults: nearbyPageSize
             )
             
             // Append new spots (for pagination) or replace (for refresh)
@@ -280,6 +287,20 @@ class MapViewModel: ObservableObject {
             isLoadingNearbySpots = false
             
             print("📍 Fetched \(result.spots.count) nearby spots. Total: \(nearbySpots.count). Has more: \(hasMorePages)")
+            
+            // Upload images to Supabase in background, then feed URLs back so
+            // future renders use the free Supabase path instead of paid Google API.
+            let spotsToUpload = result.spots
+            Task {
+                let uploadedUrls = await placesAPIService.uploadSpotImages(spots: spotsToUpload)
+                if !uploadedUrls.isEmpty {
+                    for i in nearbySpots.indices {
+                        if let url = uploadedUrls[nearbySpots[i].placeId] {
+                            nearbySpots[i].photoUrl = url
+                        }
+                    }
+                }
+            }
             
         } catch {
             isLoadingNearbySpots = false
@@ -342,6 +363,17 @@ class MapViewModel: ObservableObject {
     
     /// Fetches POI details and selects it as the current spot
     func fetchAndSelectPOI(placeId: String, name: String, location: CLLocationCoordinate2D) async {
+        // Check in-memory data for a cached photo URL first (free, no API call)
+        let cachedPhotoUrl: String? = {
+            if let existing = nearbySpots.first(where: { $0.placeId == placeId }), let url = existing.photoUrl, !url.isEmpty {
+                return url
+            }
+            if let saved = savedPlaces.first(where: { $0.spot.placeId == placeId }), let url = saved.spot.photoUrl, !url.isEmpty {
+                return url
+            }
+            return nil
+        }()
+        
         // Show loading state with basic info first
         let basicSpot = NearbySpot(
             placeId: placeId,
@@ -350,7 +382,7 @@ class MapViewModel: ObservableObject {
             category: "Place",
             rating: nil,
             photoReference: nil,
-            photoUrl: nil,
+            photoUrl: cachedPhotoUrl,
             latitude: location.latitude,
             longitude: location.longitude,
             distanceMeters: calculateDistanceToCoordinate(location)
@@ -362,6 +394,15 @@ class MapViewModel: ObservableObject {
             if let detailedSpot = try await placesAPIService.fetchPlaceDetails(placeId: placeId) {
                 var spot = detailedSpot
                 spot.distanceMeters = calculateDistanceToCoordinate(location)
+                
+                // Prefer cached Supabase URL to avoid a paid Google Photo API call.
+                // Check in-memory first, then DB.
+                if let url = cachedPhotoUrl {
+                    spot.photoUrl = url
+                } else if let dbUrl = await placesAPIService.getCachedPhotoUrl(placeId: placeId) {
+                    spot.photoUrl = dbUrl
+                }
+                
                 selectedSpot = spot
             }
         } catch {
@@ -419,6 +460,16 @@ class MapViewModel: ObservableObject {
             }
             
             savedPlaces = Array(uniquePlaces.values)
+            
+            // Precompute display list type map for efficient O(1) lookups in cards
+            spotListTypeMap = Dictionary(uniqueKeysWithValues:
+                savedPlaces.compactMap { spot in
+                    guard let listType = displayListType(for: spot.listTypes) else { return nil }
+                    return (spot.spot.placeId, listType)
+                }
+            )
+            
+            hasLoadedSavedPlacesOnce = true
             isLoading = false
             
         } catch {

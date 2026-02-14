@@ -15,7 +15,7 @@ struct NearbySpot: Identifiable, Equatable {
     let category: String
     let rating: Double?
     let photoReference: String?
-    let photoUrl: String?
+    var photoUrl: String?
     let latitude: Double
     let longitude: Double
     

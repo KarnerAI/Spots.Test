@@ -45,6 +45,15 @@ struct GooglePlacesImageView: View {
     }
     
     private func loadImage() async {
+        // Check in-memory cache first to avoid a paid API call
+        if let cached = SpotImageCache.shared.image(for: photoReference) {
+            await MainActor.run {
+                self.image = cached
+                self.isLoading = false
+            }
+            return
+        }
+        
         // Construct URL (API key will be in header, not query param)
         let urlString = "https://places.googleapis.com/v1/\(photoReference)/media?maxWidthPx=\(maxWidth)"
         guard let url = URL(string: urlString) else {
@@ -85,6 +94,9 @@ struct GooglePlacesImageView: View {
                 isLoading = false
                 return
             }
+            
+            // Store in shared cache so future views skip the API call
+            SpotImageCache.shared.store(loadedImage, for: photoReference)
             
             await MainActor.run {
                 self.image = loadedImage

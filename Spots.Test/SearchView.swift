@@ -654,6 +654,8 @@ struct SearchView: View {
     
     private func autocompleteResultRow(result: PlaceAutocompleteResult) -> some View {
         Button(action: {
+            // Dismiss keyboard so the Save to Spots sheet is fully visible (matches bookmark flow)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             // Show save sheet when tapping on the place
             selectedSpotForSaving = result
         }) {

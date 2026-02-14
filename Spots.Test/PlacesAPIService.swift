@@ -460,11 +460,8 @@ class PlacesAPIService {
         spots = spots.map { $0.withDistance(from: location) }
         spots.sort { ($0.distanceMeters ?? .infinity) < ($1.distanceMeters ?? .infinity) }
         
-        // Upload images to Supabase Storage (asynchronously, don't block return)
-        // Images will be checked for existence and uploaded only if needed
-        Task {
-            await uploadSpotImages(spots: spots)
-        }
+        // Note: Image uploads are now handled by the caller (MapViewModel)
+        // so it can feed Supabase URLs back into the in-memory spots array.
         
         return (spots: spots, nextPageToken: nearbyResponse.nextPageToken)
     }
@@ -744,10 +741,12 @@ extension PlacesAPIService {
         return userLocation.distance(from: placeLocation)
     }
     
-    /// Uploads spot images to Supabase Storage in the background
-    /// This runs asynchronously to avoid blocking the UI
-    /// Checks if image already exists before uploading to avoid duplicates
-    private func uploadSpotImages(spots: [NearbySpot]) async {
+    /// Uploads spot images to Supabase Storage in the background.
+    /// Checks if image already exists before uploading to avoid duplicates.
+    /// - Returns: Dictionary mapping placeId -> Supabase photo URL for successfully uploaded spots.
+    func uploadSpotImages(spots: [NearbySpot]) async -> [String: String] {
+        var uploadedUrls: [String: String] = [:]
+        
         for spot in spots {
             // Only process if spot has a photo reference
             guard let photoReference = spot.photoReference else {
@@ -766,8 +765,9 @@ extension PlacesAPIService {
                 placeId: spot.placeId
             )
             
-            if photoUrl != nil {
+            if let photoUrl = photoUrl {
                 print("✅ PlacesAPIService: Uploaded image for \(spot.name)")
+                uploadedUrls[spot.placeId] = photoUrl
                 
                 // Update database with photo URL
                 await updateSpotPhotoUrl(placeId: spot.placeId, photoUrl: photoUrl, photoReference: photoReference)
@@ -775,10 +775,17 @@ extension PlacesAPIService {
                 print("⚠️ PlacesAPIService: Failed to upload image for \(spot.name)")
             }
         }
+        
+        return uploadedUrls
     }
     
     /// Checks if a photo URL already exists for a spot
     private func checkPhotoExists(placeId: String) async -> Bool {
+        return await getCachedPhotoUrl(placeId: placeId) != nil
+    }
+    
+    /// Returns the cached Supabase photo URL for a spot if it exists in the DB, nil otherwise.
+    func getCachedPhotoUrl(placeId: String) async -> String? {
         do {
             let supabase = SupabaseManager.shared.client
             
@@ -794,10 +801,12 @@ extension PlacesAPIService {
                 .execute()
                 .value
             
-            return response.first?.photo_url != nil && !(response.first?.photo_url?.isEmpty ?? true)
+            if let url = response.first?.photo_url, !url.isEmpty {
+                return url
+            }
+            return nil
         } catch {
-            // If error, assume photo doesn't exist and try to upload
-            return false
+            return nil
         }
     }
     

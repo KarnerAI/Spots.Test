@@ -9,6 +9,8 @@ import SwiftUI
 
 struct SpotCardView: View {
     let spot: NearbySpot
+    var spotListTypeMap: [String: ListType] = [:]
+    var hasLoadedSavedPlaces: Bool = false
     let onBookmarkTap: () -> Void
     let onCardTap: () -> Void
     
@@ -150,18 +152,32 @@ struct SpotCardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
     
-    // MARK: - Bookmark Button
+    // MARK: - Bookmark/List Icon Button
     
     private var bookmarkButton: some View {
         Button(action: {
             onBookmarkTap()
         }) {
-            Image(systemName: "bookmark")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.gray500)
-                .frame(width: 36, height: 36)
-                .background(Color.gray100)
-                .clipShape(Circle())
+            Group {
+                if !hasLoadedSavedPlaces {
+                    // Show bookmark until saved places are loaded
+                    Image(systemName: "bookmark")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.gray500)
+                } else if let listType = spotListTypeMap[spot.placeId] {
+                    // Show list icon if spot is in a list
+                    ListIconView(listType: listType)
+                        .font(.system(size: 16, weight: .medium))
+                } else {
+                    // Show bookmark if spot is not in any list
+                    Image(systemName: "bookmark")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.gray500)
+                }
+            }
+            .frame(width: 36, height: 36)
+            .background(Color.gray100)
+            .clipShape(Circle())
         }
         .buttonStyle(PlainButtonStyle())
         .contentShape(Circle())
@@ -194,6 +210,8 @@ extension SpotCardView {
     
     return SpotCardView(
         spot: mockSpot,
+        spotListTypeMap: ["test123": .starred],
+        hasLoadedSavedPlaces: true,
         onBookmarkTap: { print("Bookmark tapped") },
         onCardTap: { print("Card tapped") }
     )
