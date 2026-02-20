@@ -80,7 +80,9 @@ struct NearbySpot: Identifiable, Equatable {
             name: name,
             address: address,
             types: nil,
-            coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
+            photoUrl: photoUrl,
+            photoReference: photoReference
         )
     }
     

@@ -7,12 +7,15 @@
 
 import Foundation
 import UIKit
+import Supabase
 
 class ImageStorageService {
     static let shared = ImageStorageService()
     
     private let bucketName = "spot-images"
     private let supabaseClient = SupabaseManager.shared.client
+    /// Base URL for the Supabase project (matches SupabaseManager). Used to build public Storage URLs.
+    private let supabaseBaseURLString = "https://dirqixrgkcdpixmriyge.supabase.co"
     
     private init() {}
     
@@ -44,11 +47,8 @@ class ImageStorageService {
     /// - Returns: The public URL if image exists, nil otherwise
     func getExistingImageUrl(placeId: String) -> String? {
         let fileName = sanitizeFileName(placeId)
-        // Construct public URL using the Supabase URL from SupabaseManager
-        // Format: https://{project-ref}.supabase.co/storage/v1/object/public/spot-images/{fileName}
-        // Get the URL from the SupabaseManager's client configuration
-        let supabaseURLString = "https://dirqixrgkcdpixmriyge.supabase.co" // From SupabaseManager
-        return "\(supabaseURLString)/storage/v1/object/public/\(bucketName)/\(fileName)"
+        // Public URL format: https://{project-ref}.supabase.co/storage/v1/object/public/spot-images/{fileName}
+        return "\(supabaseBaseURLString)/storage/v1/object/public/\(bucketName)/\(fileName)"
     }
     
     // MARK: - Private Methods
@@ -89,55 +89,30 @@ class ImageStorageService {
         }
     }
     
-    /// Uploads image data to Supabase Storage
+    /// Uploads image data to Supabase Storage using the Supabase client (sends session JWT so RLS allows authenticated uploads).
     private func uploadToSupabase(imageData: Data, placeId: String) async -> String? {
         let fileName = sanitizeFileName(placeId)
-        let supabaseURLString = "https://dirqixrgkcdpixmriyge.supabase.co"
-        let supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpcnFpeHJna2NkcGl4bXJpeWdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDQ5OTksImV4cCI6MjA4MjEyMDk5OX0.vi1r1eS0PqYxFHzsHOUv1_lifZgUadxklVehOtN_OMw"
-        
-        // Use Supabase Storage REST API format
-        // Format: POST /storage/v1/object/{bucket}/{path}
-        let uploadURLString = "\(supabaseURLString)/storage/v1/object/\(bucketName)/\(fileName)"
-        
-        guard let uploadURL = URL(string: uploadURLString) else {
-            print("❌ ImageStorageService: Invalid upload URL")
-            return nil
-        }
-        
-        // Create multipart form data or use proper headers
-        var request = URLRequest(url: uploadURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(supabaseKey)", forHTTPHeaderField: "Authorization")
-        request.setValue(supabaseKey, forHTTPHeaderField: "apikey")
-        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        request.setValue("true", forHTTPHeaderField: "x-upsert") // Upsert header
-        request.httpBody = imageData
         
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            _ = try await supabaseClient.storage
+                .from(bucketName)
+                .upload(
+                    fileName,
+                    data: imageData,
+                    options: FileOptions(
+                        contentType: "image/jpeg",
+                        upsert: true
+                    )
+                )
             
-            guard let httpResponse = response as? HTTPURLResponse else {
-                print("❌ ImageStorageService: Invalid response")
-                return nil
-            }
-            
-            if !(200...299).contains(httpResponse.statusCode) {
-                // Log response body for debugging
-                if let responseString = String(data: data, encoding: .utf8) {
-                    print("❌ ImageStorageService: Upload failed with status \(httpResponse.statusCode): \(responseString)")
-                } else {
-                    print("❌ ImageStorageService: Upload failed with status code: \(httpResponse.statusCode)")
-                }
-                return nil
-            }
-            
-            // Construct and return public URL
             let publicUrl = getExistingImageUrl(placeId: placeId)
             print("✅ ImageStorageService: Successfully uploaded image for \(placeId)")
             return publicUrl
-            
         } catch {
             print("❌ ImageStorageService: Error uploading to Supabase: \(error.localizedDescription)")
+            if let storageError = error as? StorageError {
+                print("❌ ImageStorageService: Storage error details: \(storageError)")
+            }
             return nil
         }
     }

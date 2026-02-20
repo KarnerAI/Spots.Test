@@ -98,6 +98,12 @@ class AuthenticationViewModel: ObservableObject {
                 ]
             )
             
+            do {
+                try await LocationSavingService.shared.ensureDefaultListsForCurrentUser()
+            } catch {
+                print("Error creating default lists after signup: \(error)")
+            }
+            
             await MainActor.run {
                 isLoading = false
                 isAuthenticated = true
@@ -132,6 +138,12 @@ class AuthenticationViewModel: ObservableObject {
                 email: formData.email,
                 password: formData.password
             )
+            
+            do {
+                try await LocationSavingService.shared.ensureDefaultListsForCurrentUser()
+            } catch {
+                print("Error creating default lists after login: \(error)")
+            }
             
             await MainActor.run {
                 isLoading = false

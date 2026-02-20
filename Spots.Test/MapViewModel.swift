@@ -9,6 +9,7 @@ import Foundation
 import GoogleMaps
 import CoreLocation
 import Combine
+import UIKit
 
 @MainActor
 class MapViewModel: ObservableObject {
@@ -288,10 +289,15 @@ class MapViewModel: ObservableObject {
             
             print("📍 Fetched \(result.spots.count) nearby spots. Total: \(nearbySpots.count). Has more: \(hasMorePages)")
             
-            // Upload images to Supabase in background, then feed URLs back so
-            // future renders use the free Supabase path instead of paid Google API.
+            // Cache all spot metadata and images in Supabase in background.
+            // 1) Bulk-upsert spot rows so future lookups (e.g. POI taps) can skip Google.
+            // 2) Upload images so future renders use the free Supabase CDN path.
             let spotsToUpload = result.spots
             Task {
+                // First, ensure all spots have a row in the DB
+                await placesAPIService.bulkUpsertSpots(spotsToUpload)
+                
+                // Then upload images (checks for existing photos before downloading)
                 let uploadedUrls = await placesAPIService.uploadSpotImages(spots: spotsToUpload)
                 if !uploadedUrls.isEmpty {
                     for i in nearbySpots.indices {
@@ -361,9 +367,10 @@ class MapViewModel: ObservableObject {
         return userLoc.distance(from: spotLoc)
     }
     
-    /// Fetches POI details and selects it as the current spot
+    /// Fetches POI details and selects it as the current spot.
+    /// Checks Supabase cache first to avoid a Google API call for known spots.
     func fetchAndSelectPOI(placeId: String, name: String, location: CLLocationCoordinate2D) async {
-        // Check in-memory data for a cached photo URL first (free, no API call)
+        // 1) Check in-memory data for a cached photo URL (free, no API call)
         let cachedPhotoUrl: String? = {
             if let existing = nearbySpots.first(where: { $0.placeId == placeId }), let url = existing.photoUrl, !url.isEmpty {
                 return url
@@ -389,7 +396,31 @@ class MapViewModel: ObservableObject {
         )
         selectedSpot = basicSpot
         
-        // Fetch full details from Google Places API
+        // 2) Check Supabase DB cache for full spot data (avoids Google API call)
+        if let cachedSpot = await placesAPIService.getCachedSpot(placeId: placeId) {
+            var spot = cachedSpot
+            spot.distanceMeters = calculateDistanceToCoordinate(location)
+            // Prefer in-memory photo URL if we have one
+            if let url = cachedPhotoUrl {
+                spot.photoUrl = url
+            }
+            // Sync tap location to DB so list markers align with Google's POI (skip if already very close)
+            let cachedLocation = CLLocation(latitude: cachedSpot.latitude, longitude: cachedSpot.longitude)
+            let tapLocation = CLLocation(latitude: location.latitude, longitude: location.longitude)
+            if cachedLocation.distance(from: tapLocation) >= 2.0 {
+                do {
+                    try await locationSavingService.updateSpotLocation(placeId: placeId, latitude: location.latitude, longitude: location.longitude)
+                    await loadSavedPlaces()
+                } catch {
+                    print("⚠️ MapViewModel: Failed to sync POI tap location for \(placeId): \(error.localizedDescription)")
+                }
+            }
+            selectedSpot = spot
+            print("✅ MapViewModel: Used cached spot data for \(placeId) — no Google API call")
+            return
+        }
+        
+        // 3) Not in cache — fetch full details from Google Places API
         do {
             if let detailedSpot = try await placesAPIService.fetchPlaceDetails(placeId: placeId) {
                 var spot = detailedSpot
@@ -404,6 +435,9 @@ class MapViewModel: ObservableObject {
                 }
                 
                 selectedSpot = spot
+                
+                // 4) Save the result to Supabase so future taps use the cache
+                await placesAPIService.bulkUpsertSpots([spot])
             }
         } catch {
             print("Failed to fetch POI details: \(error)")
@@ -489,10 +523,15 @@ class MapViewModel: ObservableObject {
             }
             
             let marker = GMSMarker()
-            marker.position = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            // Place marker directly on POI to cover it
+            marker.position = CLLocationCoordinate2D(
+                latitude: latitude,
+                longitude: longitude
+            )
             marker.title = placeWithMetadata.spot.name
             marker.snippet = placeWithMetadata.spot.address
             marker.userData = placeWithMetadata.spot.placeId  // Store placeId for tap handling
+            marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)  // Center icon on coordinate so it overlays POI
             
             // Get base icon
             var icon = iconForListTypes(placeWithMetadata.listTypes)

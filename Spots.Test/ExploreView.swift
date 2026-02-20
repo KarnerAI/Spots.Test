@@ -233,7 +233,8 @@ struct ExploreView: View {
                 onUserFollow: { userId, isFollowing in
                     print("User \(userId) follow state: \(isFollowing)")
                     // Handle follow/unfollow here
-                }
+                },
+                passedLocationSavingVM: locationSavingVM
             )
         }
         .confirmationDialog(

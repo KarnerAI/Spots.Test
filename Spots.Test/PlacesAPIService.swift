@@ -769,14 +769,56 @@ extension PlacesAPIService {
                 print("✅ PlacesAPIService: Uploaded image for \(spot.name)")
                 uploadedUrls[spot.placeId] = photoUrl
                 
-                // Update database with photo URL
-                await updateSpotPhotoUrl(placeId: spot.placeId, photoUrl: photoUrl, photoReference: photoReference)
+                // Upsert spot row with photo URL (creates row if it doesn't exist)
+                await upsertSpotWithPhoto(spot: spot, photoUrl: photoUrl, photoReference: photoReference)
             } else {
                 print("⚠️ PlacesAPIService: Failed to upload image for \(spot.name)")
             }
         }
         
         return uploadedUrls
+    }
+    
+    /// Bulk-upserts all nearby spot metadata into the spots table.
+    /// This builds up a local cache so future lookups (e.g. POI taps) can
+    /// skip the Google API call entirely. Includes photo_reference so that
+    /// the Google photo ref is persisted immediately (even before Storage upload).
+    func bulkUpsertSpots(_ spots: [NearbySpot]) async {
+        guard !spots.isEmpty else { return }
+        
+        struct SpotRow: Encodable {
+            let place_id: String
+            let name: String
+            let address: String
+            let latitude: Double
+            let longitude: Double
+            let photo_reference: String?
+            let updated_at: String
+        }
+        
+        let rows = spots.map { spot in
+            SpotRow(
+                place_id: spot.placeId,
+                name: spot.name,
+                address: spot.address,
+                latitude: spot.latitude,
+                longitude: spot.longitude,
+                photo_reference: spot.photoReference,
+                updated_at: ISO8601DateFormatter().string(from: Date())
+            )
+        }
+        
+        do {
+            let supabase = SupabaseManager.shared.client
+            try await supabase
+                .from("spots")
+                .upsert(rows)
+                .execute()
+            
+            print("✅ PlacesAPIService: Bulk-upserted \(rows.count) spots into DB cache (with photo references)")
+        } catch {
+            print("❌ PlacesAPIService: Error bulk-upserting spots: \(error.localizedDescription)")
+        }
     }
     
     /// Checks if a photo URL already exists for a spot
@@ -810,21 +852,90 @@ extension PlacesAPIService {
         }
     }
     
-    /// Updates spot photo URL in database
-    private func updateSpotPhotoUrl(placeId: String, photoUrl: String?, photoReference: String) async {
-        guard let photoUrl = photoUrl else { return }
+    /// Returns full cached spot data from the DB, or nil if not found.
+    func getCachedSpot(placeId: String) async -> NearbySpot? {
+        do {
+            let supabase = SupabaseManager.shared.client
+            
+            struct CachedSpotRow: Codable {
+                let place_id: String
+                let name: String
+                let address: String?
+                let latitude: Double?
+                let longitude: Double?
+                let types: [String]?
+                let photo_url: String?
+                let photo_reference: String?
+            }
+            
+            let response: [CachedSpotRow] = try await supabase
+                .from("spots")
+                .select("place_id, name, address, latitude, longitude, types, photo_url, photo_reference")
+                .eq("place_id", value: placeId)
+                .limit(1)
+                .execute()
+                .value
+            
+            guard let row = response.first,
+                  let lat = row.latitude,
+                  let lng = row.longitude else {
+                return nil
+            }
+            
+            let category = NearbySpot.mapCategory(from: row.types ?? [])
+            
+            return NearbySpot(
+                placeId: row.place_id,
+                name: row.name,
+                address: row.address ?? "",
+                category: category,
+                rating: nil,
+                photoReference: row.photo_reference,
+                photoUrl: row.photo_url,
+                latitude: lat,
+                longitude: lng
+            )
+        } catch {
+            print("❌ PlacesAPIService: Error fetching cached spot: \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
+    /// Upserts a spot row with photo URL in database.
+    /// Creates the row if it doesn't exist; updates photo fields if it does.
+    private func upsertSpotWithPhoto(spot: NearbySpot, photoUrl: String, photoReference: String) async {
+        struct SpotPhotoRow: Encodable {
+            let place_id: String
+            let name: String
+            let address: String
+            let latitude: Double
+            let longitude: Double
+            let photo_url: String
+            let photo_reference: String
+            let updated_at: String
+        }
+        
+        let row = SpotPhotoRow(
+            place_id: spot.placeId,
+            name: spot.name,
+            address: spot.address,
+            latitude: spot.latitude,
+            longitude: spot.longitude,
+            photo_url: photoUrl,
+            photo_reference: photoReference,
+            updated_at: ISO8601DateFormatter().string(from: Date())
+        )
         
         do {
             let supabase = SupabaseManager.shared.client
             try await supabase
                 .from("spots")
-                .update(["photo_url": photoUrl, "photo_reference": photoReference])
-                .eq("place_id", value: placeId)
+                .upsert(row)
                 .execute()
             
-            print("✅ PlacesAPIService: Updated database with photo URL for \(placeId)")
+            print("✅ PlacesAPIService: Upserted spot with photo URL for \(spot.placeId)")
         } catch {
-            print("❌ PlacesAPIService: Error updating spot photo URL: \(error.localizedDescription)")
+            print("❌ PlacesAPIService: Error upserting spot with photo: \(error.localizedDescription)")
         }
     }
 }

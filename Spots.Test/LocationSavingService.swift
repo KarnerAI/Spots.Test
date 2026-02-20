@@ -21,13 +21,24 @@ class LocationSavingService {
     func getUserLists() async throws -> [UserList] {
         let userId = try await getCurrentUserId()
         
-        let response: [UserList] = try await supabase
+        var response: [UserList] = try await supabase
             .from("user_lists")
             .select()
             .eq("user_id", value: userId.uuidString)
             .order("list_type", ascending: true)
             .execute()
             .value
+        
+        if response.isEmpty {
+            try await ensureDefaultListsForCurrentUser()
+            response = try await supabase
+                .from("user_lists")
+                .select()
+                .eq("user_id", value: userId.uuidString)
+                .order("list_type", ascending: true)
+                .execute()
+                .value
+        }
         
         return response
     }
@@ -46,6 +57,13 @@ class LocationSavingService {
             .value
         
         return response.first
+    }
+    
+    /// Creates the three default lists (Starred, Favorites, Bucket List) for the current user if they don't exist.
+    /// Idempotent; safe to call after signup, login, or when lists are missing.
+    func ensureDefaultListsForCurrentUser() async throws {
+        let userId = try await getCurrentUserId()
+        try await supabase.rpc("create_default_lists_for_user", params: ["p_user_id": userId.uuidString]).execute()
     }
     
     // MARK: - Spots
@@ -416,6 +434,15 @@ class LocationSavingService {
         } catch {
             print("❌ LocationSavingService: Error updating spot with photo URL: \(error.localizedDescription)")
         }
+    }
+    
+    /// Updates a spot's latitude and longitude (e.g. to sync with Google's POI tap location).
+    func updateSpotLocation(placeId: String, latitude: Double, longitude: Double) async throws {
+        try await supabase
+            .from("spots")
+            .update(["latitude": latitude, "longitude": longitude])
+            .eq("place_id", value: placeId)
+            .execute()
     }
     
     // MARK: - Helper

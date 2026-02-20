@@ -52,6 +52,7 @@ struct SearchView: View {
     var onSearch: ((String, SearchMode) -> Void)?
     var onUserFollow: ((String, Bool) -> Void)?
     var initialSearchMode: SearchMode = .spots
+    var passedLocationSavingVM: LocationSavingViewModel? = nil
     
     @State private var searchQuery: String = ""
     @State private var searchMode: SearchMode
@@ -72,7 +73,8 @@ struct SearchView: View {
         searchResults: (spots: [SpotResult], users: [UserResult]) = ([], []),
         onSearch: ((String, SearchMode) -> Void)? = nil,
         onUserFollow: ((String, Bool) -> Void)? = nil,
-        initialSearchMode: SearchMode = .spots
+        initialSearchMode: SearchMode = .spots,
+        passedLocationSavingVM: LocationSavingViewModel? = nil
     ) {
         self.onSelectSpot = onSelectSpot
         self.onFiltersClick = onFiltersClick
@@ -82,7 +84,12 @@ struct SearchView: View {
         self.onSearch = onSearch
         self.onUserFollow = onUserFollow
         self.initialSearchMode = initialSearchMode
+        self.passedLocationSavingVM = passedLocationSavingVM
         _searchMode = State(initialValue: initialSearchMode)
+    }
+    
+    private var effectiveLocationSavingVM: LocationSavingViewModel {
+        passedLocationSavingVM ?? locationSavingVM
     }
     
     var body: some View {
@@ -241,7 +248,7 @@ struct SearchView: View {
             if let spot = selectedSpotForSaving {
                 ListPickerView(
                     spotData: spot,
-                    viewModel: locationSavingVM,
+                    viewModel: effectiveLocationSavingVM,
                     onDismiss: {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                             selectedSpotForSaving = nil
@@ -259,7 +266,7 @@ struct SearchView: View {
         .onAppear {
             locationManager.requestLocationPermission()
             Task {
-                await locationSavingVM.loadUserLists()
+                await effectiveLocationSavingVM.loadUserLists()
             }
         }
     }

@@ -13,8 +13,8 @@ struct ListPickerView: View {
     var onDismiss: () -> Void
     var onSaveComplete: (() -> Void)? = nil
     
-    @State private var selectedListIds: Set<UUID> = []
-    @State private var listCounts: [UUID: Int] = [:]
+    @State private var selectedListTypes: Set<ListType> = []
+    @State private var listTypeCounts: [ListType: Int] = [:]
     @State private var isLoadingCounts = true
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -32,7 +32,7 @@ struct ListPickerView: View {
         GeometryReader { geometry in
             let bottomSafeArea = geometry.safeAreaInsets.bottom
             let screenHeight = geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom
-            let listContentHeight = CGFloat(viewModel.userLists.count) * listRowHeight + listVerticalPadding
+            let listContentHeight = CGFloat(ListType.allCases.count) * listRowHeight + listVerticalPadding
             let contentDrivenHeight = fixedPartsHeight + listContentHeight
             let maxSheetHeight = min(screenHeight * 0.45, 420)
             let sheetHeight = max(minSheetHeight, min(maxSheetHeight, contentDrivenHeight))
@@ -71,10 +71,10 @@ struct ListPickerView: View {
                         .fill(Color.gray200)
                         .frame(height: 1)
 
-                    // List content
+                    // List content: always show all three list types
                     VStack(spacing: 0) {
-                        ForEach(viewModel.userLists) { list in
-                            listRow(list: list)
+                        ForEach(ListType.allCases, id: \.self) { listType in
+                            listTypeRow(listType: listType)
                         }
                     }
                     .padding(.vertical, 8)
@@ -120,8 +120,8 @@ struct ListPickerView: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
                         .padding(.bottom, max(bottomSafeArea, 16))
-                        .disabled(isSaving || selectedListIds.isEmpty)
-                        .opacity(isSaving || selectedListIds.isEmpty ? 0.6 : 1.0)
+                        .disabled(isSaving || selectedListTypes.isEmpty)
+                        .opacity(isSaving || selectedListTypes.isEmpty ? 0.6 : 1.0)
                     }
                 }
                 .frame(height: sheetHeight)
@@ -157,17 +157,18 @@ struct ListPickerView: View {
         .frame(maxWidth: .infinity)
     }
     
-    private func listRow(list: UserList) -> some View {
-        let isSelected = selectedListIds.contains(list.id)
-        let count = listCounts[list.id] ?? 0
+    private func listTypeRow(listType: ListType) -> some View {
+        let isSelected = selectedListTypes.contains(listType)
+        let count = listTypeCounts[listType] ?? 0
         
-        return Button(action: { toggleList(list.id) }) {
+        return Button(action: { toggleListType(listType) }) {
             HStack(spacing: 12) {
-                iconForList(list: list)
+                Image(systemName: listType.iconName)
+                    .foregroundColor(listType.iconColor)
                     .frame(width: 20, height: 20)
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(list.displayName)
+                    Text(listType.displayName)
                         .font(.system(size: 16, weight: .regular))
                         .foregroundColor(.gray900)
                     
@@ -216,34 +217,11 @@ struct ListPickerView: View {
         .buttonStyle(ListRowButtonStyle())
     }
     
-    private func iconForList(list: UserList) -> some View {
-        if let listType = list.listType {
-            switch listType {
-            case .starred:
-                return Image(systemName: "star.fill")
-                    .foregroundColor(Color(red: 0.92, green: 0.70, blue: 0.03)) // #EAB308
-                    .anyView
-            case .favorites:
-                return Image(systemName: "heart.fill")
-                    .foregroundColor(Color(red: 0.94, green: 0.27, blue: 0.27)) // #EF4444
-                    .anyView
-            case .bucketList:
-                return Image(systemName: "flag.fill")
-                    .foregroundColor(Color(red: 0.23, green: 0.51, blue: 0.96)) // #3B82F6
-                    .anyView
-            }
+    private func toggleListType(_ listType: ListType) {
+        if selectedListTypes.contains(listType) {
+            selectedListTypes.remove(listType)
         } else {
-            return Image(systemName: "list.bullet")
-                .foregroundColor(.gray500)
-                .anyView
-        }
-    }
-    
-    private func toggleList(_ listId: UUID) {
-        if selectedListIds.contains(listId) {
-            selectedListIds.remove(listId)
-        } else {
-            selectedListIds.insert(listId)
+            selectedListTypes.insert(listType)
         }
     }
     
@@ -253,34 +231,57 @@ struct ListPickerView: View {
             await viewModel.loadUserLists()
         }
         
-        // Load counts for each list
+        // Load counts for each list type
         isLoadingCounts = true
-        var counts: [UUID: Int] = [:]
+        var counts: [ListType: Int] = [:]
         
         for list in viewModel.userLists {
+            guard let listType = list.listType else { continue }
             do {
                 let count = try await viewModel.getSpotCount(listId: list.id)
-                counts[list.id] = count
+                counts[listType] = count
             } catch {
                 print("Error loading count for list \(list.id): \(error)")
-                counts[list.id] = 0
+                counts[listType] = 0
             }
         }
         
-        listCounts = counts
+        listTypeCounts = counts
         isLoadingCounts = false
         
-        // Check which lists already contain this spot
+        // Check which lists already contain this spot and map UUIDs back to ListTypes
         do {
             let existingListIds = try await viewModel.getListsContainingSpot(placeId: spotData.placeId)
-            selectedListIds = Set(existingListIds)
+            let existingIdSet = Set(existingListIds)
+            var preSelected = Set<ListType>()
+            for list in viewModel.userLists {
+                if let listType = list.listType, existingIdSet.contains(list.id) {
+                    preSelected.insert(listType)
+                }
+            }
+            selectedListTypes = preSelected
         } catch {
             print("Error checking existing lists: \(error)")
         }
     }
     
+    /// Map a selected ListType to its real UUID from viewModel.userLists
+    private func listId(for listType: ListType) -> UUID? {
+        viewModel.userLists.first(where: { $0.listType == listType })?.id
+    }
+    
     private func handleSave() async {
-        guard !selectedListIds.isEmpty else { return }
+        guard !selectedListTypes.isEmpty else { return }
+        
+        // Map selected ListTypes to real UUIDs
+        let selectedListIds: Set<UUID> = Set(selectedListTypes.compactMap { listId(for: $0) })
+        
+        guard !selectedListIds.isEmpty else {
+            await MainActor.run {
+                errorMessage = "Could not load your lists. Please try again."
+            }
+            return
+        }
         
         // #region agent log
         DebugLogger.log(
@@ -341,6 +342,8 @@ struct ListPickerView: View {
                     latitude: spotData.coordinate?.latitude,
                     longitude: spotData.coordinate?.longitude,
                     types: spotData.types,
+                    photoUrl: spotData.photoUrl,
+                    photoReference: spotData.photoReference,
                     toListId: listId
                 )
             }
@@ -351,15 +354,18 @@ struct ListPickerView: View {
                 try await viewModel.removeSpot(placeId: spotData.placeId, fromListId: listId)
             }
             
-            // Update counts for all affected lists
+            // Update counts for all affected list types
             for listId in toAdd.union(toRemove) {
-                do {
-                    let count = try await viewModel.getSpotCount(listId: listId)
-                    await MainActor.run {
-                        listCounts[listId] = count
+                if let userList = viewModel.userLists.first(where: { $0.id == listId }),
+                   let listType = userList.listType {
+                    do {
+                        let count = try await viewModel.getSpotCount(listId: listId)
+                        await MainActor.run {
+                            listTypeCounts[listType] = count
+                        }
+                    } catch {
+                        print("Error updating count for list \(listId): \(error)")
                     }
-                } catch {
-                    print("Error updating count for list \(listId): \(error)")
                 }
             }
             

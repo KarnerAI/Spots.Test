@@ -8,7 +8,7 @@
 import Foundation
 import SwiftUI
 
-enum ListType: String, Codable {
+enum ListType: String, Codable, CaseIterable {
     case starred
     case favorites
     case bucketList = "bucket_list"
