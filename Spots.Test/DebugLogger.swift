@@ -51,6 +51,7 @@ enum DebugLogger {
             try? line.write(to: url)
         }
         
+        #if DEBUG
         if let serverURL = URL(string: serverEndpoint) {
             var request = URLRequest(url: serverURL)
             request.httpMethod = "POST"
@@ -58,5 +59,6 @@ enum DebugLogger {
             request.httpBody = json
             URLSession.shared.dataTask(with: request).resume()
         }
+        #endif
     }
 }

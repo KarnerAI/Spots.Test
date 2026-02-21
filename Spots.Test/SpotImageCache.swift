@@ -14,6 +14,7 @@ final class SpotImageCache {
 
     private init() {
         cache.countLimit = 100 // keep at most 100 images in memory
+        cache.totalCostLimit = 50 * 1024 * 1024 // 50 MB byte limit
     }
 
     func image(for photoReference: String) -> UIImage? {
@@ -21,6 +22,7 @@ final class SpotImageCache {
     }
 
     func store(_ image: UIImage, for photoReference: String) {
-        cache.setObject(image, forKey: photoReference as NSString)
+        let cost = image.pngData()?.count ?? 0
+        cache.setObject(image, forKey: photoReference as NSString, cost: cost)
     }
 }

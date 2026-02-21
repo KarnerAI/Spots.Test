@@ -27,16 +27,7 @@ struct NearbySpot: Identifiable, Equatable {
     /// Formatted distance string (e.g., "0.1 mi" or "250 ft")
     var formattedDistance: String {
         guard let meters = distanceMeters else { return "" }
-        let miles = meters / 1609.34
-        
-        if miles < 0.1 {
-            // Show feet for very close spots
-            let feet = meters * 3.28084
-            return String(format: "%.0f ft", feet)
-        } else {
-            // Show miles with 1 decimal
-            return String(format: "%.1f mi", miles)
-        }
+        return DistanceCalculator.formattedDistance(meters)
     }
     
     /// Returns the best available photo URL (prefers Supabase cached URL)

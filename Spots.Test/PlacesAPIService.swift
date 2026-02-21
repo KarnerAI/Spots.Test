@@ -30,9 +30,24 @@ class PlacesAPIService {
     private let baseURL = "https://places.googleapis.com/v1/places:autocomplete"
     private let nearbySearchURL = "https://places.googleapis.com/v1/places:searchNearby"
     
+    // MARK: - Autocomplete Response Cache
+
+    /// In-memory cache for autocomplete results to avoid duplicate API calls during active typing.
+    /// Key: normalized "\(query)_\(roundedLat)_\(roundedLng)", Value: (results, timestamp)
+    private var autocompleteCache: [String: (results: [PlaceAutocompleteResult], timestamp: Date)] = [:]
+    private let autocompleteCacheTTL: TimeInterval = 180 // 3 minutes
+
+    /// Builds a cache key for the autocomplete request, rounding coordinates to 3 decimals
+    private func autocompleteCacheKey(query: String, location: CLLocation?) -> String {
+        guard let loc = location else { return query.lowercased().trimmingCharacters(in: .whitespaces) }
+        let lat = (loc.coordinate.latitude * 1000).rounded() / 1000
+        let lng = (loc.coordinate.longitude * 1000).rounded() / 1000
+        return "\(query.lowercased().trimmingCharacters(in: .whitespaces))_\(lat)_\(lng)"
+    }
+
     private init() {}
-    
-    /// Performs autocomplete search for places
+
+    /// Performs autocomplete search for places using a single 10km radius request with response caching.
     /// - Parameters:
     ///   - query: The search query text
     ///   - location: Optional user location for location bias
@@ -42,89 +57,31 @@ class PlacesAPIService {
         location: CLLocation? = nil,
         completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
     ) {
-        // First, make a request with a focused radius (5km) for closest results
-        // Using smaller radius to force more local, relevant results
-        performAutocompleteRequest(query: query, location: location, radius: 5000.0) { [weak self] firstResult in
-            switch firstResult {
-            case .success(let firstResults):
-                print("Places API: First request returned \(firstResults.count) results")
-                
-                // If we got 10 or more results, sort by distance and return
-                if firstResults.count >= 10 {
-                    self?.sortResultsByDistance(firstResults, userLocation: location) { sortedResults in
-                        completion(.success(Array(sortedResults.prefix(10))))
-                    }
-                    return
-                }
-                
-                // If we got fewer than 10 and have location, make a second request with larger radius
-                // Always make second request if we have fewer than 10, even if we got exactly 5
-                if firstResults.count < 10, let location = location {
-                    print("Places API: First request returned \(firstResults.count) results, making second request with 15km radius")
-                    self?.performAutocompleteRequest(query: query, location: location, radius: 15000.0) { secondResult in
-                        switch secondResult {
-                        case .success(let secondResults):
-                            print("Places API: Second request returned \(secondResults.count) results")
-                            
-                            // Merge results, removing duplicates
-                            var allResults = firstResults
-                            let firstPlaceIds = Set(firstResults.map { $0.placeId })
-                            
-                            for result in secondResults {
-                                if !firstPlaceIds.contains(result.placeId) {
-                                    allResults.append(result)
-                                }
-                            }
-                            
-                            print("Places API: Total unique results after merge: \(allResults.count)")
-                            
-                            // If we still have fewer than 10, try a third request with even larger radius
-                            if allResults.count < 10 {
-                                print("Places API: Still fewer than 10 results, making third request with 25km radius")
-                                self?.performAutocompleteRequest(query: query, location: location, radius: 25000.0) { thirdResult in
-                                    switch thirdResult {
-                                    case .success(let thirdResults):
-                                        let allPlaceIds = Set(allResults.map { $0.placeId })
-                                        for result in thirdResults {
-                                            if !allPlaceIds.contains(result.placeId) {
-                                                allResults.append(result)
-                                            }
-                                        }
-                                        print("Places API: Final total after third request: \(allResults.count)")
-                                        // Sort by distance and limit to 10
-                                        self?.sortResultsByDistance(allResults, userLocation: location) { sortedResults in
-                                            completion(.success(Array(sortedResults.prefix(10))))
-                                        }
-                                    case .failure:
-                                        // Sort what we have and return
-                                        self?.sortResultsByDistance(allResults, userLocation: location) { sortedResults in
-                                            completion(.success(Array(sortedResults.prefix(10))))
-                                        }
-                                    }
-                                }
-                            } else {
-                                // Sort by distance and limit to 10
-                                self?.sortResultsByDistance(allResults, userLocation: location) { sortedResults in
-                                    completion(.success(Array(sortedResults.prefix(10))))
-                                }
-                            }
-                        case .failure:
-                            // If second request fails, sort and return what we have from first request
-                            print("Places API: Second request failed, sorting first results")
-                            self?.sortResultsByDistance(firstResults, userLocation: location) { sortedResults in
-                                completion(.success(sortedResults))
-                            }
-                        }
+        // Check cache first
+        let cacheKey = autocompleteCacheKey(query: query, location: location)
+        if let cached = autocompleteCache[cacheKey],
+           Date().timeIntervalSince(cached.timestamp) < autocompleteCacheTTL {
+            print("Places API: Cache hit for '\(query)' (\(cached.results.count) results)")
+            completion(.success(cached.results))
+            return
+        }
+
+        // Single request with 10km radius
+        performAutocompleteRequest(query: query, location: location, radius: 10000.0) { [weak self] result in
+            switch result {
+            case .success(let results):
+                print("Places API: Request returned \(results.count) results")
+                if let location = location {
+                    self?.sortResultsByDistance(results, userLocation: location) { sortedResults in
+                        let limited = Array(sortedResults.prefix(10))
+                        // Store in cache
+                        self?.autocompleteCache[cacheKey] = (results: limited, timestamp: Date())
+                        completion(.success(limited))
                     }
                 } else {
-                    // No location or already have enough, sort and return first results
-                    if let location = location {
-                        self?.sortResultsByDistance(firstResults, userLocation: location) { sortedResults in
-                            completion(.success(sortedResults))
-                        }
-                    } else {
-                        completion(.success(firstResults))
-                    }
+                    let limited = Array(results.prefix(10))
+                    self?.autocompleteCache[cacheKey] = (results: limited, timestamp: Date())
+                    completion(.success(limited))
                 }
             case .failure(let error):
                 completion(.failure(error))
@@ -625,90 +582,103 @@ struct TextMatch: Codable {
 // MARK: - Place Details and Distance Sorting
 
 extension PlacesAPIService {
+    // MARK: Coordinate Cache
+
+    /// In-memory coordinate cache keyed by placeId. Coordinates don't change so no TTL needed.
+    private static var _coordinateCache: [String: CLLocationCoordinate2D] = [:]
+    private static let coordinateCacheQueue = DispatchQueue(label: "places.coordinateCache")
+
+    private var coordinateCache: [String: CLLocationCoordinate2D] {
+        get { Self.coordinateCacheQueue.sync { Self._coordinateCache } }
+    }
+
+    private func cacheCoordinate(_ coord: CLLocationCoordinate2D, for placeId: String) {
+        Self.coordinateCacheQueue.sync { Self._coordinateCache[placeId] = coord }
+    }
+
     /// Sorts results by distance from user location
-    /// Fetches place coordinates if needed, then sorts by distance
+    /// Fetches place coordinates if needed (checking cache first), then sorts by distance
     private func sortResultsByDistance(
         _ results: [PlaceAutocompleteResult],
         userLocation: CLLocation?,
         completion: @escaping ([PlaceAutocompleteResult]) -> Void
     ) {
         guard let userLocation = userLocation, !results.isEmpty else {
-            // No location or no results, return as-is
             completion(results)
             return
         }
-        
-        // Fetch coordinates for all results
+
         fetchPlaceCoordinates(for: results) { resultsWithCoordinates in
-            // Calculate distance and sort
             let sorted = resultsWithCoordinates.sorted { result1, result2 in
                 let distance1 = self.distance(from: userLocation, to: result1)
                 let distance2 = self.distance(from: userLocation, to: result2)
                 return distance1 < distance2
             }
-            
             completion(sorted)
         }
     }
-    
-    /// Fetches coordinates for multiple places using batch place details API
+
+    /// Fetches coordinates for multiple places, checking cache first to skip API calls
     private func fetchPlaceCoordinates(
         for results: [PlaceAutocompleteResult],
         completion: @escaping ([PlaceAutocompleteResult]) -> Void
     ) {
-        // Limit to first 10 to avoid too many API calls
         let resultsToFetch = Array(results.prefix(10))
-        
-        // Use a dispatch group to coordinate multiple requests
         let group = DispatchGroup()
         var resultsWithCoordinates: [PlaceAutocompleteResult] = []
         let queue = DispatchQueue(label: "places.coordinates")
-        
+
         for result in resultsToFetch {
-            group.enter()
-            fetchPlaceCoordinate(placeId: result.placeId) { coordinate in
+            // Check cache first — skip API call if we already have coordinates
+            if let cached = coordinateCache[result.placeId] {
                 queue.async {
-                    let updatedResult = result.withCoordinate(coordinate)
-                    resultsWithCoordinates.append(updatedResult)
+                    resultsWithCoordinates.append(result.withCoordinate(cached))
+                }
+                continue
+            }
+
+            group.enter()
+            fetchPlaceCoordinate(placeId: result.placeId) { [weak self] coordinate in
+                queue.async {
+                    if let coord = coordinate {
+                        self?.cacheCoordinate(coord, for: result.placeId)
+                    }
+                    resultsWithCoordinates.append(result.withCoordinate(coordinate))
                     group.leave()
                 }
             }
         }
-        
+
         group.notify(queue: .main) {
-            // Add results without coordinates at the end
             let resultsWithoutCoordinates = results.filter { result in
                 !resultsToFetch.contains { $0.placeId == result.placeId }
             }
             completion(resultsWithCoordinates + resultsWithoutCoordinates)
         }
     }
-    
+
     /// Fetches coordinate for a single place using Places API (New) place details
     private func fetchPlaceCoordinate(
         placeId: String,
         completion: @escaping (CLLocationCoordinate2D?) -> Void
     ) {
-        // Google Places API (New) uses placeId directly, not "places/" prefix
         let urlString = "https://places.googleapis.com/v1/places/\(placeId)"
         guard let url = URL(string: urlString) else {
             completion(nil)
             return
         }
-        
+
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
-        
-        // Add bundle identifier header for iOS app restrictions
-        // This is required when API key has iOS app restrictions enabled
+
         let bundleId = bundleIdentifier
         if !bundleId.isEmpty {
             request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
         }
-        
+
         request.setValue("location", forHTTPHeaderField: "X-Goog-FieldMask")
-        
+
         URLSession.shared.dataTask(with: request) { data, response, error in
             guard let data = data,
                   let httpResponse = response as? HTTPURLResponse,
@@ -716,15 +686,13 @@ extension PlacesAPIService {
                 completion(nil)
                 return
             }
-            
-            // Try to parse response
+
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let location = json["location"] as? [String: Any],
                let latitude = location["latitude"] as? Double,
                let longitude = location["longitude"] as? Double {
                 completion(CLLocationCoordinate2D(latitude: latitude, longitude: longitude))
             } else {
-                // If parsing fails, return nil (we'll sort without coordinates)
                 completion(nil)
             }
         }.resume()
@@ -736,46 +704,61 @@ extension PlacesAPIService {
             // If no coordinate, put at end (very large distance)
             return Double.greatestFiniteMagnitude
         }
-        
-        let placeLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        return userLocation.distance(from: placeLocation)
+
+        return DistanceCalculator.distance(from: userLocation, to: coordinate)
     }
     
     /// Uploads spot images to Supabase Storage in the background.
     /// Checks if image already exists before uploading to avoid duplicates.
     /// - Returns: Dictionary mapping placeId -> Supabase photo URL for successfully uploaded spots.
+    /// Maximum number of concurrent image uploads to limit memory usage
+    private static let maxConcurrentUploads = 3
+
     func uploadSpotImages(spots: [NearbySpot]) async -> [String: String] {
-        var uploadedUrls: [String: String] = [:]
-        
+        // Filter to spots that need uploading
+        var spotsToUpload: [(spot: NearbySpot, photoReference: String)] = []
         for spot in spots {
-            // Only process if spot has a photo reference
-            guard let photoReference = spot.photoReference else {
-                continue
-            }
-            
-            // Check if photo already exists in database
+            guard let photoReference = spot.photoReference else { continue }
             if await checkPhotoExists(placeId: spot.placeId) {
                 print("✅ PlacesAPIService: Photo already cached for \(spot.name)")
                 continue
             }
-            
-            // Upload to Supabase Storage
-            let photoUrl = await ImageStorageService.shared.uploadSpotImage(
-                photoReference: photoReference,
-                placeId: spot.placeId
-            )
-            
-            if let photoUrl = photoUrl {
-                print("✅ PlacesAPIService: Uploaded image for \(spot.name)")
-                uploadedUrls[spot.placeId] = photoUrl
-                
-                // Upsert spot row with photo URL (creates row if it doesn't exist)
-                await upsertSpotWithPhoto(spot: spot, photoUrl: photoUrl, photoReference: photoReference)
-            } else {
-                print("⚠️ PlacesAPIService: Failed to upload image for \(spot.name)")
+            spotsToUpload.append((spot, photoReference))
+        }
+
+        guard !spotsToUpload.isEmpty else { return [:] }
+
+        // Process in batches of maxConcurrentUploads to limit memory pressure
+        var uploadedUrls: [String: String] = [:]
+        for batchStart in stride(from: 0, to: spotsToUpload.count, by: Self.maxConcurrentUploads) {
+            let batchEnd = min(batchStart + Self.maxConcurrentUploads, spotsToUpload.count)
+            let batch = spotsToUpload[batchStart..<batchEnd]
+
+            await withTaskGroup(of: (String, String?).self) { group in
+                for (spot, photoReference) in batch {
+                    group.addTask {
+                        let photoUrl = await ImageStorageService.shared.uploadSpotImage(
+                            photoReference: photoReference,
+                            placeId: spot.placeId
+                        )
+                        if let photoUrl = photoUrl {
+                            print("✅ PlacesAPIService: Uploaded image for \(spot.name)")
+                            await self.upsertSpotWithPhoto(spot: spot, photoUrl: photoUrl, photoReference: photoReference)
+                        } else {
+                            print("⚠️ PlacesAPIService: Failed to upload image for \(spot.name)")
+                        }
+                        return (spot.placeId, photoUrl)
+                    }
+                }
+
+                for await (placeId, photoUrl) in group {
+                    if let url = photoUrl {
+                        uploadedUrls[placeId] = url
+                    }
+                }
             }
         }
-        
+
         return uploadedUrls
     }
     

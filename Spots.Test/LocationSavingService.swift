@@ -210,15 +210,54 @@ class LocationSavingService {
             return []
         }
         
-        // Second query: get all spots for the place_ids we found
+        // Second query: batch-fetch all spots in a single request
         let placeIds = listItems.map { $0.spot_id }
-        
-        // Query spots one by one (simpler than bulk query which causes type inference issues)
+
+        struct SpotResponse: Codable {
+            let place_id: String
+            let name: String
+            let address: String?
+            let latitude: Double?
+            let longitude: Double?
+            let types: [String]?
+            let photo_url: String?
+            let photo_reference: String?
+            let created_at: String?
+            let updated_at: String?
+        }
+
+        let batchResponse: [SpotResponse] = try await supabase
+            .from("spots")
+            .select("place_id, name, address, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .in("place_id", values: placeIds)
+            .execute()
+            .value
+
+        let spotDateFormatter = ISO8601DateFormatter()
+        spotDateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let spotFallbackFormatter = ISO8601DateFormatter()
+        spotFallbackFormatter.formatOptions = [.withInternetDateTime]
+
         var spotsMap: [String: Spot] = [:]
-        for placeId in placeIds {
-            if let spot = try? await getSpotByPlaceId(placeId) {
-                spotsMap[placeId] = spot
+        for spotData in batchResponse {
+            let createdAt = spotData.created_at.flatMap {
+                spotDateFormatter.date(from: $0) ?? spotFallbackFormatter.date(from: $0)
             }
+            let updatedAt = spotData.updated_at.flatMap {
+                spotDateFormatter.date(from: $0) ?? spotFallbackFormatter.date(from: $0)
+            }
+            spotsMap[spotData.place_id] = Spot(
+                placeId: spotData.place_id,
+                name: spotData.name,
+                address: spotData.address,
+                latitude: spotData.latitude,
+                longitude: spotData.longitude,
+                types: spotData.types,
+                photoUrl: spotData.photo_url,
+                photoReference: spotData.photo_reference,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
         }
         
         // Transform to SpotWithMetadata
@@ -317,7 +356,31 @@ class LocationSavingService {
         
         return count
     }
-    
+
+    /// Returns spot IDs (place_id) in the given list. Used for computing unique count across lists.
+    func getSpotIdsInList(listId: UUID) async throws -> [String] {
+        struct SpotIdRow: Codable {
+            let spot_id: String
+        }
+        let rows: [SpotIdRow] = try await supabase
+            .from("spot_list_items")
+            .select("spot_id")
+            .eq("list_id", value: listId.uuidString)
+            .execute()
+            .value
+        return rows.map(\.spot_id)
+    }
+
+    /// Unique count of spots in the current user's Starred and Favorites lists (spot in both counts once).
+    func getUniqueSpotCountInStarredAndFavorites() async throws -> Int {
+        try await ensureDefaultListsForCurrentUser()
+        let starredList = try await getListByType(.starred)
+        let favoritesList = try await getListByType(.favorites)
+        let starred: [String] = if let list = starredList { try await getSpotIdsInList(listId: list.id) } else { [] }
+        let favorites: [String] = if let list = favoritesList { try await getSpotIdsInList(listId: list.id) } else { [] }
+        return Set(starred + favorites).count
+    }
+
     // MARK: - Saving/Removing Spots
     
     /// Save a spot to a list
