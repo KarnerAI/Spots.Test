@@ -32,8 +32,19 @@ class LocationManager: NSObject, ObservableObject {
             requestLocationPermission()
             return
         }
-        
-        locationManager.requestLocation()
+
+        // Immediately publish the OS-cached location (if recent) so the map can
+        // center without waiting for a fresh GPS fix.
+        if let cached = locationManager.location,
+           cached.horizontalAccuracy > 0,
+           cached.timestamp.timeIntervalSinceNow > -60 {
+            self.location = cached
+        }
+
+        // startUpdatingLocation uses cached + network + GPS progressively,
+        // giving a much faster first fix than the one-shot requestLocation().
+        // The delegate stops updates once an accurate-enough fix arrives.
+        locationManager.startUpdatingLocation()
     }
     
     func getCurrentLocation() -> CLLocation? {
@@ -43,9 +54,15 @@ class LocationManager: NSObject, ObservableObject {
 
 extension LocationManager: CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.first else { return }
+        // Take the most recent fix. Reject invalid or highly inaccurate readings
+        // (negative accuracy = invalid; > 100m = too coarse to be useful).
+        guard let location = locations.last,
+              location.horizontalAccuracy > 0,
+              location.horizontalAccuracy < 100 else { return }
         self.location = location
         self.locationError = nil
+        // Stop continuous updates — we only needed one good fix.
+        locationManager.stopUpdatingLocation()
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -58,7 +75,7 @@ extension LocationManager: CLLocationManagerDelegate {
         
         switch authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
-            locationManager.requestLocation()
+            requestLocation()
         case .denied, .restricted:
             location = nil
         case .notDetermined:
