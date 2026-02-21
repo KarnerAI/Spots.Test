@@ -21,7 +21,9 @@ struct MainTabView: View {
                 } else if selectedTab == 1 {
                     ExploreView(viewModel: mapViewModel)
                 } else {
-                    ProfileView()
+                    NavigationStack {
+                        ProfileView()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

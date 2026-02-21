@@ -52,6 +52,12 @@ class MapViewModel: ObservableObject {
     
     // Map view reference for future clustering support
     private var mapView: GMSMapView?
+
+    /// Task handle for the background image upload so we can cancel on new fetch
+    private var imageUploadTask: Task<Void, Never>?
+
+    /// Cache for rendered marker icons keyed by list type (e.g. "starred", "favorites", "bucketList")
+    private var cachedMarkerIcons: [String: UIImage] = [:]
     
     /// True after we've triggered the first nearby fetch when location became available (avoids refetch on every location update).
     private var hasPerformedInitialNearbyFetch = false
@@ -293,16 +299,25 @@ class MapViewModel: ObservableObject {
             // 1) Bulk-upsert spot rows so future lookups (e.g. POI taps) can skip Google.
             // 2) Upload images so future renders use the free Supabase CDN path.
             let spotsToUpload = result.spots
-            Task {
+
+            // Cancel any in-flight upload task from a previous fetch to avoid stale writes
+            imageUploadTask?.cancel()
+            imageUploadTask = Task {
                 // First, ensure all spots have a row in the DB
                 await placesAPIService.bulkUpsertSpots(spotsToUpload)
-                
+
+                guard !Task.isCancelled else { return }
+
                 // Then upload images (checks for existing photos before downloading)
                 let uploadedUrls = await placesAPIService.uploadSpotImages(spots: spotsToUpload)
+
+                guard !Task.isCancelled else { return }
+
                 if !uploadedUrls.isEmpty {
-                    for i in nearbySpots.indices {
-                        if let url = uploadedUrls[nearbySpots[i].placeId] {
-                            nearbySpots[i].photoUrl = url
+                    // Use placeId lookup instead of index to avoid race condition
+                    for (placeId, url) in uploadedUrls {
+                        if let index = nearbySpots.firstIndex(where: { $0.placeId == placeId }) {
+                            nearbySpots[index].photoUrl = url
                         }
                     }
                 }
@@ -356,15 +371,13 @@ class MapViewModel: ObservableObject {
         guard let userLoc = currentLocation,
               let lat = spot.latitude,
               let lng = spot.longitude else { return nil }
-        let spotLoc = CLLocation(latitude: lat, longitude: lng)
-        return userLoc.distance(from: spotLoc)
+        return DistanceCalculator.distance(from: userLoc, to: CLLocationCoordinate2D(latitude: lat, longitude: lng))
     }
-    
+
     /// Calculates distance from user location to a coordinate
     private func calculateDistanceToCoordinate(_ coord: CLLocationCoordinate2D) -> Double? {
         guard let userLoc = currentLocation else { return nil }
-        let spotLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-        return userLoc.distance(from: spotLoc)
+        return DistanceCalculator.distance(from: userLoc, to: coord)
     }
     
     /// Fetches POI details and selects it as the current spot.
@@ -552,20 +565,40 @@ class MapViewModel: ObservableObject {
         }
     }
     
-    /// Returns the appropriate icon based on list membership with priority: starred > favorites > bucket list
+    /// Returns the appropriate icon based on list membership with priority: starred > favorites > bucket list.
+    /// Icons are cached after first render to avoid repeated UIGraphicsImageRenderer work on map redraws.
     private func iconForListTypes(_ listTypes: Set<ListType>) -> UIImage? {
         // Priority order: starred (yellow) > favorites (red) > bucket list (blue)
+        let cacheKey: String
+        let systemName: String
+        let color: UIColor
+
         if listTypes.contains(.starred) {
-            return createCustomMarkerIcon(systemName: "star.fill", color: .listStarred)
+            cacheKey = "starred"
+            systemName = "star.fill"
+            color = .listStarred
         } else if listTypes.contains(.favorites) {
-            return createCustomMarkerIcon(systemName: "heart.fill", color: .listFavorites)
+            cacheKey = "favorites"
+            systemName = "heart.fill"
+            color = .listFavorites
         } else if listTypes.contains(.bucketList) {
-            return createCustomMarkerIcon(systemName: "flag.fill", color: .listBucketList)
+            cacheKey = "bucketList"
+            systemName = "flag.fill"
+            color = .listBucketList
+        } else {
+            // Fallback - should not happen if spot is in at least one list
+            let tealColor = UIColor(red: 0.36, green: 0.69, blue: 0.72, alpha: 1.0)
+            return GMSMarker.markerImage(with: tealColor)
         }
-        
-        // Fallback - should not happen if spot is in at least one list
-        let tealColor = UIColor(red: 0.36, green: 0.69, blue: 0.72, alpha: 1.0)
-        return GMSMarker.markerImage(with: tealColor)
+
+        if let cached = cachedMarkerIcons[cacheKey] {
+            return cached
+        }
+        let icon = createCustomMarkerIcon(systemName: systemName, color: color)
+        if let icon = icon {
+            cachedMarkerIcons[cacheKey] = icon
+        }
+        return icon
     }
     
     private func createCustomMarkerIcon(systemName: String, color: UIColor) -> UIImage? {
