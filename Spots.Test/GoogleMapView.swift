@@ -21,12 +21,25 @@ struct GoogleMapView: UIViewRepresentable {
     var onMapTapped: (() -> Void)?
     
     func makeUIView(context: Context) -> GMSMapView {
-        // Default camera position (will be updated by parent)
-        let defaultCamera = GMSCameraPosition.camera(
-            withLatitude: 40.7128,
-            longitude: -74.0060,
-            zoom: 17.0  // Building-level detail
-        )
+        // Use the OS-cached location if available so the map opens near the user.
+        // Falls back to a neutral world-level view if no cached fix exists yet.
+        let cachedCoord = CLLocationManager().location?.coordinate
+        let initialCamera: GMSCameraPosition
+        if let coord = cachedCoord {
+            initialCamera = GMSCameraPosition.camera(
+                withLatitude: coord.latitude,
+                longitude: coord.longitude,
+                zoom: 17.0
+            )
+        } else {
+            // Fallback: zoom out to world level so no single city is implied
+            initialCamera = GMSCameraPosition.camera(
+                withLatitude: 0,
+                longitude: 0,
+                zoom: 2.0
+            )
+        }
+        let defaultCamera = initialCamera
         
         // Use the modern initializer
         let mapView = GMSMapView()
