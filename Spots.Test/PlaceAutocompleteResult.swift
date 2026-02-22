@@ -13,16 +13,18 @@ struct PlaceAutocompleteResult: Identifiable {
     let placeId: String
     let name: String
     let address: String
+    let city: String?
     let types: [String]?
     var coordinate: CLLocationCoordinate2D? // Optional coordinate for distance calculation
     var photoUrl: String?        // Supabase cached photo URL (if available)
     var photoReference: String?  // Google Places photo reference (for fallback)
-    
-    init(placeId: String, name: String, address: String, types: [String]? = nil, coordinate: CLLocationCoordinate2D? = nil, photoUrl: String? = nil, photoReference: String? = nil) {
+
+    init(placeId: String, name: String, address: String, city: String? = nil, types: [String]? = nil, coordinate: CLLocationCoordinate2D? = nil, photoUrl: String? = nil, photoReference: String? = nil) {
         self.id = placeId
         self.placeId = placeId
         self.name = name
         self.address = address
+        self.city = city
         self.types = types
         self.coordinate = coordinate
         self.photoUrl = photoUrl

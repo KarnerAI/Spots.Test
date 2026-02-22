@@ -56,6 +56,29 @@ struct Config {
         fatalError("Google Places API key is not configured. Please add it to Info.plist as 'GooglePlacesAPIKey' or set the GOOGLE_PLACES_API_KEY environment variable.")
     }()
     
+    // MARK: - Unsplash API Configuration
+    //
+    // To set up your Unsplash Access Key:
+    // 1. Go to https://unsplash.com/developers and create a free account
+    // 2. Create a new application to get your Access Key
+    // 3. Add the key to Info.plist as "UnsplashAccessKey" (String type)
+    //
+    // Free tier: 50 requests/hour — sufficient for profile cover photo loading.
+    static let unsplashAccessKey: String = {
+        if let key = Bundle.main.object(forInfoDictionaryKey: "UnsplashAccessKey") as? String,
+           !key.isEmpty {
+            print("✅ Unsplash Access Key loaded from Info.plist")
+            return key
+        }
+        if let key = ProcessInfo.processInfo.environment["UNSPLASH_ACCESS_KEY"],
+           !key.isEmpty {
+            print("✅ Unsplash Access Key loaded from environment variable")
+            return key
+        }
+        print("⚠️ Unsplash Access Key not configured — cover photos will use gradient placeholder")
+        return ""
+    }()
+
     // MARK: - App Group Configuration
     // App Group identifier for sharing data between main app and share extension
     // This must match the App Group identifier configured in Xcode project settings

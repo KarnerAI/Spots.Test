@@ -73,6 +73,7 @@ class LocationSavingService {
         placeId: String,
         name: String,
         address: String?,
+        city: String? = nil,
         latitude: Double?,
         longitude: Double?,
         types: [String]?,
@@ -86,12 +87,13 @@ class LocationSavingService {
             let p_place_id: String
             let p_name: String
             let p_address: String?
+            let p_city: String?
             let p_latitude: Double?
             let p_longitude: Double?
             let p_types: [String]?
             let p_photo_url: String?
             let p_photo_reference: String?
-            
+
             // Custom encoding to always include all parameters, even when nil
             func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
@@ -102,6 +104,11 @@ class LocationSavingService {
                     try container.encode(address, forKey: .p_address)
                 } else {
                     try container.encodeNil(forKey: .p_address)
+                }
+                if let city = p_city {
+                    try container.encode(city, forKey: .p_city)
+                } else {
+                    try container.encodeNil(forKey: .p_city)
                 }
                 if let latitude = p_latitude {
                     try container.encode(latitude, forKey: .p_latitude)
@@ -129,11 +136,12 @@ class LocationSavingService {
                     try container.encodeNil(forKey: .p_photo_reference)
                 }
             }
-            
+
             enum CodingKeys: String, CodingKey {
                 case p_place_id
                 case p_name
                 case p_address
+                case p_city
                 case p_latitude
                 case p_longitude
                 case p_types
@@ -141,11 +149,12 @@ class LocationSavingService {
                 case p_photo_reference
             }
         }
-        
+
         let params = UpsertParams(
             p_place_id: placeId,
             p_name: name,
             p_address: address,
+            p_city: city,
             p_latitude: latitude,
             p_longitude: longitude,
             p_types: types,
@@ -217,6 +226,7 @@ class LocationSavingService {
             let place_id: String
             let name: String
             let address: String?
+            let city: String?
             let latitude: Double?
             let longitude: Double?
             let types: [String]?
@@ -228,7 +238,7 @@ class LocationSavingService {
 
         let batchResponse: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
             .in("place_id", values: placeIds)
             .execute()
             .value
@@ -250,6 +260,7 @@ class LocationSavingService {
                 placeId: spotData.place_id,
                 name: spotData.name,
                 address: spotData.address,
+                city: spotData.city,
                 latitude: spotData.latitude,
                 longitude: spotData.longitude,
                 types: spotData.types,
@@ -298,6 +309,7 @@ class LocationSavingService {
             let place_id: String
             let name: String
             let address: String?
+            let city: String?
             let latitude: Double?
             let longitude: Double?
             let types: [String]?
@@ -306,36 +318,37 @@ class LocationSavingService {
             let created_at: String?
             let updated_at: String?
         }
-        
+
         let response: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
             .eq("place_id", value: placeId)
             .limit(1)
             .execute()
             .value
-        
+
         guard let spotData = response.first else {
             return nil
         }
-        
+
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        
+
         let fallbackFormatter = ISO8601DateFormatter()
         fallbackFormatter.formatOptions = [.withInternetDateTime]
-        
+
         let createdAt = spotData.created_at.flatMap {
             dateFormatter.date(from: $0) ?? fallbackFormatter.date(from: $0)
         }
         let updatedAt = spotData.updated_at.flatMap {
             dateFormatter.date(from: $0) ?? fallbackFormatter.date(from: $0)
         }
-        
+
         return Spot(
             placeId: spotData.place_id,
             name: spotData.name,
             address: spotData.address,
+            city: spotData.city,
             latitude: spotData.latitude,
             longitude: spotData.longitude,
             types: spotData.types,
@@ -353,8 +366,43 @@ class LocationSavingService {
             .rpc("get_list_spot_count", params: ["list_id": listId.uuidString])
             .execute()
             .value
-        
+
         return count
+    }
+
+    /// Fetches the most recently saved spot in a list, or nil if the list is empty.
+    func getMostRecentSpotInList(listId: UUID) async throws -> Spot? {
+        struct SpotIdRow: Codable {
+            let spot_id: String
+        }
+        let rows: [SpotIdRow] = try await supabase
+            .from("spot_list_items")
+            .select("spot_id")
+            .eq("list_id", value: listId.uuidString)
+            .order("saved_at", ascending: false)
+            .limit(1)
+            .execute()
+            .value
+        guard let spotId = rows.first?.spot_id else { return nil }
+        return try await getSpotByPlaceId(spotId)
+    }
+
+    /// Fetches the most recently saved spot across a set of lists, or nil if all lists are empty.
+    func getMostRecentSpotAcrossLists(listIds: [UUID]) async throws -> Spot? {
+        guard !listIds.isEmpty else { return nil }
+        struct SpotIdRow: Codable {
+            let spot_id: String
+        }
+        let rows: [SpotIdRow] = try await supabase
+            .from("spot_list_items")
+            .select("spot_id")
+            .in("list_id", values: listIds.map { $0.uuidString })
+            .order("saved_at", ascending: false)
+            .limit(1)
+            .execute()
+            .value
+        guard let spotId = rows.first?.spot_id else { return nil }
+        return try await getSpotByPlaceId(spotId)
     }
 
     /// Returns spot IDs (place_id) in the given list. Used for computing unique count across lists.
@@ -369,6 +417,85 @@ class LocationSavingService {
             .execute()
             .value
         return rows.map(\.spot_id)
+    }
+
+    /// Returns the city name the current user has saved the most spots in, or nil if no city data exists yet.
+    /// Falls back to parsing city from the address field for spots saved before city extraction was added.
+    func getMostExploredCity() async throws -> String? {
+        try await ensureDefaultListsForCurrentUser()
+        let lists = try await getUserLists()
+
+        // Gather all unique spot IDs across all lists
+        var allSpotIds = Set<String>()
+        for list in lists {
+            let ids = try await getSpotIdsInList(listId: list.id)
+            allSpotIds.formUnion(ids)
+        }
+        guard !allSpotIds.isEmpty else { return nil }
+
+        // Batch-fetch city + address for each spot (address is the fallback for older spots)
+        struct CityRow: Codable {
+            let place_id: String
+            let city: String?
+            let address: String?
+        }
+        let rows: [CityRow] = try await supabase
+            .from("spots")
+            .select("place_id, city, address")
+            .in("place_id", values: Array(allSpotIds))
+            .execute()
+            .value
+
+        // Count occurrences per city.
+        // Prefer the stored city column; fall back to parsing the address for older spots.
+        var cityCounts: [String: Int] = [:]
+        for row in rows {
+            let resolvedCity: String?
+            if let city = row.city, !city.isEmpty {
+                resolvedCity = city
+            } else {
+                resolvedCity = Self.extractCityFromAddress(row.address)
+            }
+            if let city = resolvedCity {
+                cityCounts[city, default: 0] += 1
+            }
+        }
+        return cityCounts.max(by: { $0.value < $1.value })?.key
+    }
+
+    /// Parses a city name from a Google Places formatted address string.
+    /// Google Places addresses are typically: "Street, City, State ZIP, Country"
+    /// e.g. "27 Prince St, New York, NY 10012, USA" → "New York"
+    private static func extractCityFromAddress(_ address: String?) -> String? {
+        guard let address = address, !address.isEmpty else { return nil }
+        let parts = address.components(separatedBy: ", ")
+        guard parts.count >= 2 else { return nil }
+
+        let knownCountries: Set<String> = [
+            "USA", "United States", "UK", "United Kingdom",
+            "Canada", "Australia", "France", "Germany",
+            "Italy", "Spain", "Japan", "China", "India",
+            "Mexico", "Brazil", "Netherlands", "Sweden",
+            "Norway", "Denmark", "Portugal", "Switzerland"
+        ]
+
+        // Walk parts after the street, find the first that looks like a city name
+        for part in parts.dropFirst() {
+            let trimmed = part.trimmingCharacters(in: .whitespaces)
+            guard trimmed.count >= 2 else { continue }
+            // Skip parts starting with a digit (e.g. zip codes, suite numbers)
+            guard !(trimmed.first?.isNumber ?? true) else { continue }
+            // Skip "State ZIP" patterns like "NY 10012" or "CA 94103"
+            let isStateZip = trimmed.range(of: #"^[A-Z]{2}\s+\d+"#, options: .regularExpression) != nil
+            guard !isStateZip else { continue }
+            // Skip known country names
+            guard !knownCountries.contains(trimmed) else { continue }
+            // Skip bare 2-letter codes (country/state abbreviations on their own)
+            if trimmed.count == 2, trimmed == trimmed.uppercased() { continue }
+
+            return trimmed
+        }
+        return nil
     }
 
     /// Unique count of spots in the current user's Starred and Favorites lists (spot in both counts once).

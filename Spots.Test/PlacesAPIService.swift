@@ -871,6 +871,7 @@ extension PlacesAPIService {
                 placeId: row.place_id,
                 name: row.name,
                 address: row.address ?? "",
+                city: nil, // Not available from cached spot row
                 category: category,
                 rating: nil,
                 photoReference: row.photo_reference,
@@ -891,17 +892,19 @@ extension PlacesAPIService {
             let place_id: String
             let name: String
             let address: String
+            let city: String?
             let latitude: Double
             let longitude: Double
             let photo_url: String
             let photo_reference: String
             let updated_at: String
         }
-        
+
         let row = SpotPhotoRow(
             place_id: spot.placeId,
             name: spot.name,
             address: spot.address,
+            city: spot.city,
             latitude: spot.latitude,
             longitude: spot.longitude,
             photo_url: photoUrl,
