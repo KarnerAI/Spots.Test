@@ -16,6 +16,8 @@ private struct ListTileData {
     let fallbackColor: Color
     let coverImageUrl: String?
     let coverPhotoReference: String?
+    let userList: UserList?
+    let isAllSpots: Bool
 }
 
 private struct CityRowData {
@@ -32,6 +34,7 @@ struct ProfileView: View {
     @State private var mostExploredCity: String?
     @State private var coverImage: UIImage?
     @State private var listTiles: [ListTileData] = []
+    @State private var showCoverPicker = false
 
     private let coverHeight: CGFloat = 260
     private let cardOverlap: CGFloat = 30
@@ -66,6 +69,17 @@ struct ProfileView: View {
         .ignoresSafeArea(edges: .top)
         .background(Color.gray100)
         .onAppear { loadProfileData() }
+        .sheet(isPresented: $showCoverPicker) {
+            if let city = mostExploredCity, let userId = viewModel.currentUserId {
+                CoverPhotoPickerView(city: city, userId: userId) { selectedURL in
+                    Task {
+                        let image = await UnsplashService.shared.fetchCoverImageFromURL(selectedURL)
+                        await MainActor.run { coverImage = image }
+                    }
+                }
+                .environmentObject(viewModel)
+            }
+        }
     }
 
     private func loadProfileData() {
@@ -73,20 +87,15 @@ struct ProfileView: View {
         Task { await loadListTiles() }
 
         Task {
-            // Spots count
-            do {
-                let count = try await LocationSavingService.shared.getUniqueSpotCountInStarredAndFavorites()
-                await MainActor.run { spotsCount = count }
-            } catch {
-                await MainActor.run { spotsCount = 0 }
-            }
-
             // Most explored city + cover photo
             do {
                 let city = try await LocationSavingService.shared.getMostExploredCity()
                 await MainActor.run { mostExploredCity = city }
 
-                if let city {
+                if let persistedURL = viewModel.currentUserCoverPhotoUrl {
+                    let image = await UnsplashService.shared.fetchCoverImageFromURL(persistedURL)
+                    await MainActor.run { coverImage = image }
+                } else if let city {
                     let image = await UnsplashService.shared.fetchCoverImage(for: city)
                     await MainActor.run { coverImage = image }
                 }
@@ -117,7 +126,8 @@ struct ProfileView: View {
                     systemTiles.append(ListTileData(
                         title: config.title, count: 0,
                         fallbackColor: config.color,
-                        coverImageUrl: nil, coverPhotoReference: nil
+                        coverImageUrl: nil, coverPhotoReference: nil,
+                        userList: nil, isAllSpots: false
                     ))
                     continue
                 }
@@ -135,7 +145,9 @@ struct ProfileView: View {
                     count: resolvedCount,
                     fallbackColor: config.color,
                     coverImageUrl: resolvedSpot?.photoUrl,
-                    coverPhotoReference: resolvedSpot?.photoReference
+                    coverPhotoReference: resolvedSpot?.photoReference,
+                    userList: list,
+                    isAllSpots: false
                 ))
             }
 
@@ -146,11 +158,16 @@ struct ProfileView: View {
                 count: totalCount,
                 fallbackColor: Color.gray400,
                 coverImageUrl: allSpotsSpot?.photoUrl,
-                coverPhotoReference: allSpotsSpot?.photoReference
+                coverPhotoReference: allSpotsSpot?.photoReference,
+                userList: nil,
+                isAllSpots: true
             )
 
             let tiles = [allSpotsTile] + systemTiles
-            await MainActor.run { listTiles = tiles }
+            await MainActor.run {
+                listTiles = tiles
+                spotsCount = totalCount
+            }
         } catch {
             print("⚠️ ProfileView: Could not load list tiles: \(error.localizedDescription)")
         }
@@ -159,6 +176,15 @@ struct ProfileView: View {
     // MARK: - Cover Section
 
     private var coverSection: some View {
+        coverContent
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard mostExploredCity != nil else { return }
+                showCoverPicker = true
+            }
+    }
+
+    private var coverContent: some View {
         ZStack(alignment: .topTrailing) {
             // Cover image: Unsplash city photo or gradient placeholder
             if let image = coverImage {
@@ -254,10 +280,14 @@ struct ProfileView: View {
             profileInfoSection
 
             statsSection
-                .padding(.top, 20)
+                .padding(.top, 12)
+
+            Divider()
+                .background(Color.gray200)
+                .padding(.horizontal, 20)
 
             myListsSection
-                .padding(.top, 24)
+                .padding(.top, 20)
 
             travelMapSection
                 .padding(.top, 28)
@@ -342,12 +372,24 @@ struct ProfileView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    ForEach(listTiles, id: \.title) { list in
-                        listCard(list)
+                    ForEach(listTiles, id: \.title) { tile in
+                        NavigationLink(destination: destinationView(for: tile)) {
+                            listCard(tile)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func destinationView(for tile: ListTileData) -> some View {
+        if tile.isAllSpots {
+            ListDetailView(title: tile.title, mode: .allSpots)
+        } else if let list = tile.userList {
+            ListDetailView(title: tile.title, mode: .singleList(list))
         }
     }
 

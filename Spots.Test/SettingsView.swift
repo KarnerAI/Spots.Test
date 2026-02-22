@@ -30,10 +30,19 @@ private struct SettingsRowConfig {
     let titleColor: Color
 }
 
+// MARK: - Backfill State
+
+private enum BackfillState: Equatable {
+    case idle
+    case running
+    case done(succeeded: Int, failed: Int, skipped: Int)
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
     @EnvironmentObject var viewModel: AuthenticationViewModel
+    @State private var backfillState: BackfillState = .idle
 
     private let rowHeight: CGFloat = 72.67
     private let horizontalPadding: CGFloat = 24
@@ -87,6 +96,10 @@ struct SettingsView: View {
                 settingsSection(rows: supportRows) { config in
                     rowTapped(config)
                 }
+
+                sectionHeader("MAINTENANCE")
+                    .padding(.top, sectionHeaderTopPadding)
+                maintenanceSection
 
                 sectionHeader("ACCOUNT ACTIONS")
                     .padding(.top, sectionHeaderTopPadding)
@@ -152,6 +165,68 @@ struct SettingsView: View {
             }
         }
         .background(Color.white)
+    }
+
+    private var maintenanceSection: some View {
+        Button {
+            guard backfillState != .running else { return }
+            backfillState = .running
+            Task {
+                let result = await LocationSavingService.shared.backfillMissingImages()
+                await MainActor.run {
+                    backfillState = .done(succeeded: result.succeeded, failed: result.failed, skipped: result.skipped)
+                }
+            }
+        } label: {
+            HStack(alignment: .center, spacing: iconTextGap) {
+                ZStack {
+                    Circle()
+                        .fill(SettingsColors.iconBgTeal)
+                        .frame(width: iconSize, height: iconSize)
+                    Image(systemName: "photo.badge.arrow.down")
+                        .font(.system(size: symbolSize))
+                        .foregroundColor(.spotsTeal)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Repair Missing Images")
+                        .font(.system(size: 14))
+                        .foregroundColor(SettingsColors.primaryText)
+                    Text(backfillSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundColor(SettingsColors.secondaryText)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if backfillState == .running {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .scaleEffect(0.85)
+                }
+            }
+            .padding(.horizontal, horizontalPadding)
+            .frame(minHeight: rowHeight)
+        }
+        .buttonStyle(.plain)
+        .disabled(backfillState == .running)
+        .background(Color.white)
+    }
+
+    private var backfillSubtitle: String {
+        switch backfillState {
+        case .idle:
+            return "Re-fetch photos for spots missing images"
+        case .running:
+            return "Working…"
+        case .done(let succeeded, _, let skipped):
+            if succeeded > 0 {
+                return "Repaired \(succeeded) image\(succeeded == 1 ? "" : "s")\(skipped > 0 ? " · \(skipped) have no photo" : "")"
+            } else if skipped > 0 {
+                return "\(skipped) spot\(skipped == 1 ? "" : "s") have no photo available"
+            } else {
+                return "All images are up to date"
+            }
+        }
     }
 
     private var accountActionsSection: some View {
