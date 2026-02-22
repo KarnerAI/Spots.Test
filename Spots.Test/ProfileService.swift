@@ -18,6 +18,7 @@ struct UserProfile: Codable {
     var lastName: String?
     var email: String?
     var avatarUrl: String?
+    var coverPhotoUrl: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -26,6 +27,7 @@ struct UserProfile: Codable {
         case lastName = "last_name"
         case email
         case avatarUrl = "avatar_url"
+        case coverPhotoUrl = "cover_photo_url"
     }
 }
 
@@ -172,6 +174,24 @@ class ProfileService {
             .execute()
     }
 
+    // MARK: - Cover photo
+
+    /// Persist the user's chosen Unsplash cover photo URL to the `profiles` table.
+    func updateCoverPhoto(userId: UUID, url: String) async throws {
+        struct UpdateRow: Encodable {
+            let cover_photo_url: String
+            let updated_at: String
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let row = UpdateRow(cover_photo_url: url, updated_at: formatter.string(from: Date()))
+        try await supabase
+            .from("profiles")
+            .update(row)
+            .eq("id", value: userId.uuidString)
+            .execute()
+    }
+
     // MARK: - Avatar upload
 
     /// Compress and upload a UIImage to the `avatars` bucket at `{userId}/avatar.jpg`.
@@ -208,7 +228,8 @@ class ProfileService {
         firstName: String,
         lastName: String,
         username: String,
-        avatarUrl: String?
+        avatarUrl: String?,
+        coverPhotoUrl: String? = nil
     ) async {
         do {
             var data: [String: AnyJSON] = [
@@ -218,6 +239,9 @@ class ProfileService {
             ]
             if let url = avatarUrl {
                 data["avatar_url"] = .string(url)
+            }
+            if let url = coverPhotoUrl {
+                data["cover_photo_url"] = .string(url)
             }
             _ = try await supabase.auth.update(user: UserAttributes(data: data))
         } catch {

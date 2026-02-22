@@ -32,6 +32,8 @@ class AuthenticationViewModel: ObservableObject {
     @Published var currentUserUsername: String = "username"
     /// Public URL of the user's profile avatar (from auth metadata or profiles table). nil = no photo set.
     @Published var currentUserAvatarUrl: String? = nil
+    /// Persisted Unsplash URL for the profile cover photo. nil = auto-select from most explored city.
+    @Published var currentUserCoverPhotoUrl: String? = nil
     /// The authenticated user's UUID, set after session is established.
     @Published var currentUserId: UUID? = nil
 
@@ -260,6 +262,7 @@ class AuthenticationViewModel: ObservableObject {
         currentUserLastName = stringFromAnyJSON(meta["last_name"]) ?? "Last Name"
         currentUserUsername = stringFromAnyJSON(meta["username"]) ?? "username"
         currentUserAvatarUrl = stringFromAnyJSON(meta["avatar_url"])
+        currentUserCoverPhotoUrl = stringFromAnyJSON(meta["cover_photo_url"])
     }
 
     /// Refresh profile fields from the current session (call after saving Edit Profile).
@@ -280,6 +283,7 @@ class AuthenticationViewModel: ObservableObject {
         currentUserLastName = "Last Name"
         currentUserUsername = "username"
         currentUserAvatarUrl = nil
+        currentUserCoverPhotoUrl = nil
     }
     
     func signOut() {

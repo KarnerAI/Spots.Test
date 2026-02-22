@@ -289,20 +289,136 @@ class LocationSavingService {
                 return nil
             }
             
-            // Trigger lazy image fetch if needed (in background)
-            // Temporarily disabled to fix compilation - will re-enable after build succeeds
-            // if spot.photoUrl == nil, let photoRef = spot.photoReference {
-            //     Task {
-            //         await fetchAndUpdateSpotImage(placeId: spot.placeId, photoReference: photoRef)
-            //     }
-            // }
-            
+            // Lazy-load image in background for spots that have a photo_reference but no cached photo_url
+            if spot.photoUrl == nil, let photoRef = spot.photoReference {
+                Task {
+                    await fetchAndUpdateSpotImage(placeId: spot.placeId, photoReference: photoRef)
+                }
+            }
+
             return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: [listType])
         }
         
         return spots
     }
     
+    /// Get all spots across every list for the current user, deduplicated by place_id.
+    /// Each SpotWithMetadata.listTypes reflects all lists the spot belongs to.
+    func getAllSpots() async throws -> [SpotWithMetadata] {
+        let userLists = try await getUserLists()
+        guard !userLists.isEmpty else { return [] }
+
+        let listIdStrings = userLists.map { $0.id.uuidString }
+
+        struct SpotListItemRow: Codable {
+            let spot_id: String
+            let list_id: String
+            let saved_at: String
+        }
+
+        let allItems: [SpotListItemRow] = try await supabase
+            .from("spot_list_items")
+            .select("spot_id, list_id, saved_at")
+            .in("list_id", values: listIdStrings)
+            .order("saved_at", ascending: false)
+            .execute()
+            .value
+
+        guard !allItems.isEmpty else { return [] }
+
+        // Build a map from list_id UUID → ListType for resolving listTypes later
+        let listTypeByListId: [String: ListType] = Dictionary(
+            uniqueKeysWithValues: userLists.compactMap { list -> (String, ListType)? in
+                guard let listType = list.listType else { return nil }
+                return (list.id.uuidString, listType)
+            }
+        )
+
+        // Collect all unique place IDs
+        let uniquePlaceIds = Array(Set(allItems.map { $0.spot_id }))
+
+        struct SpotResponse: Codable {
+            let place_id: String
+            let name: String
+            let address: String?
+            let city: String?
+            let latitude: Double?
+            let longitude: Double?
+            let types: [String]?
+            let photo_url: String?
+            let photo_reference: String?
+            let created_at: String?
+            let updated_at: String?
+        }
+
+        let batchResponse: [SpotResponse] = try await supabase
+            .from("spots")
+            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .in("place_id", values: uniquePlaceIds)
+            .execute()
+            .value
+
+        let spotDateFormatter = ISO8601DateFormatter()
+        spotDateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let spotFallbackFormatter = ISO8601DateFormatter()
+        spotFallbackFormatter.formatOptions = [.withInternetDateTime]
+
+        var spotsMap: [String: Spot] = [:]
+        for spotData in batchResponse {
+            let createdAt = spotData.created_at.flatMap {
+                spotDateFormatter.date(from: $0) ?? spotFallbackFormatter.date(from: $0)
+            }
+            let updatedAt = spotData.updated_at.flatMap {
+                spotDateFormatter.date(from: $0) ?? spotFallbackFormatter.date(from: $0)
+            }
+            spotsMap[spotData.place_id] = Spot(
+                placeId: spotData.place_id,
+                name: spotData.name,
+                address: spotData.address,
+                city: spotData.city,
+                latitude: spotData.latitude,
+                longitude: spotData.longitude,
+                types: spotData.types,
+                photoUrl: spotData.photo_url,
+                photoReference: spotData.photo_reference,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+        }
+
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fallbackFormatter = ISO8601DateFormatter()
+        fallbackFormatter.formatOptions = [.withInternetDateTime]
+
+        // Deduplicate: for each place_id, keep the most recent saved_at and union all listTypes
+        var bestSavedAt: [String: Date] = [:]
+        var listTypesPerSpot: [String: Set<ListType>] = [:]
+
+        for item in allItems {
+            let savedAt = dateFormatter.date(from: item.saved_at) ?? fallbackFormatter.date(from: item.saved_at)
+            guard let savedAt else { continue }
+
+            if bestSavedAt[item.spot_id] == nil {
+                bestSavedAt[item.spot_id] = savedAt
+            }
+            if let listType = listTypeByListId[item.list_id] {
+                listTypesPerSpot[item.spot_id, default: []].insert(listType)
+            }
+        }
+
+        // Build result ordered by most recent saved_at
+        let result: [SpotWithMetadata] = uniquePlaceIds
+            .compactMap { placeId -> SpotWithMetadata? in
+                guard let spot = spotsMap[placeId], let savedAt = bestSavedAt[placeId] else { return nil }
+                let listTypes = listTypesPerSpot[placeId] ?? []
+                return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: listTypes)
+            }
+            .sorted { $0.savedAt > $1.savedAt }
+
+        return result
+    }
+
     /// Helper: Get a single spot by place_id
     private func getSpotByPlaceId(_ placeId: String) async throws -> Spot? {
         struct SpotResponse: Codable {
@@ -600,30 +716,100 @@ class LocationSavingService {
     
     // MARK: - Lazy Image Fetching
     
-    /// Fetches and uploads image for a spot that doesn't have a cached photo URL
-    /// This runs in the background and updates the database with the new photo URL
-    private func fetchAndUpdateSpotImage(placeId: String, photoReference: String) async {
-        // Upload image to Supabase Storage
+    /// Fetches and uploads image for a spot that doesn't have a cached photo URL.
+    /// Updates the database with the new photo URL and returns whether it succeeded.
+    /// Used by both the lazy-load path and the manual backfill.
+    @discardableResult
+    private func fetchAndUpdateSpotImage(placeId: String, photoReference: String) async -> Bool {
         guard let photoUrl = await ImageStorageService.shared.uploadSpotImage(
             photoReference: photoReference,
             placeId: placeId
         ) else {
-            print("⚠️ LocationSavingService: Failed to lazy load image for \(placeId)")
-            return
+            print("⚠️ LocationSavingService: Failed to fetch image for \(placeId)")
+            return false
         }
-        
-        // Update the spot in database with the new photo URL
+
         do {
             try await supabase
                 .from("spots")
                 .update(["photo_url": photoUrl])
                 .eq("place_id", value: placeId)
                 .execute()
-            
-            print("✅ LocationSavingService: Successfully lazy loaded image for \(placeId)")
+            print("✅ LocationSavingService: Successfully updated image for \(placeId)")
+            return true
         } catch {
             print("❌ LocationSavingService: Error updating spot with photo URL: \(error.localizedDescription)")
+            return false
         }
+    }
+
+    /// Backfills photo_url for all of the current user's saved spots that are missing an image.
+    /// For spots with a stored photo_reference, uses it directly.
+    /// For spots with no photo_reference (saved before photo logic existed), fetches fresh
+    /// place details from Google Places API to obtain a photo_reference first.
+    /// Processes in batches of 3 to limit memory pressure.
+    /// - Returns: (succeeded, failed, noPhotoAvailable) counts.
+    func backfillMissingImages() async -> (succeeded: Int, failed: Int, skipped: Int) {
+        let allSpots: [SpotWithMetadata]
+        do {
+            allSpots = try await getAllSpots()
+        } catch {
+            print("❌ LocationSavingService: backfillMissingImages failed to fetch spots: \(error)")
+            return (0, 0, 0)
+        }
+
+        let needsBackfill = allSpots.map(\.spot).filter { $0.photoUrl == nil }
+
+        guard !needsBackfill.isEmpty else {
+            print("✅ LocationSavingService: No spots need image backfill")
+            return (0, 0, 0)
+        }
+
+        print("🔄 LocationSavingService: Backfilling images for \(needsBackfill.count) spots")
+
+        var succeeded = 0
+        var failed = 0
+        var noPhotoAvailable = 0
+        let batchSize = 3
+
+        for batchStart in stride(from: 0, to: needsBackfill.count, by: batchSize) {
+            let batchEnd = min(batchStart + batchSize, needsBackfill.count)
+            let batch = Array(needsBackfill[batchStart..<batchEnd])
+
+            // Each task returns: true = success, false = failed, nil = no photo available
+            let results: [Bool?] = await withTaskGroup(of: Bool?.self) { group in
+                for spot in batch {
+                    group.addTask {
+                        // Resolve photo reference: use stored one, or fetch fresh from Google
+                        let photoRef: String?
+                        if let stored = spot.photoReference {
+                            photoRef = stored
+                        } else {
+                            let freshSpot = try? await PlacesAPIService.shared.fetchPlaceDetails(placeId: spot.placeId)
+                            photoRef = freshSpot?.photoReference
+                        }
+
+                        guard let ref = photoRef else {
+                            print("⚠️ LocationSavingService: No photo available for \(spot.name) (\(spot.placeId))")
+                            return nil
+                        }
+
+                        let ok = await self.fetchAndUpdateSpotImage(placeId: spot.placeId, photoReference: ref)
+                        return ok
+                    }
+                }
+                var collected: [Bool?] = []
+                for await result in group { collected.append(result) }
+                return collected
+            }
+
+            succeeded += results.compactMap { $0 }.filter { $0 }.count
+            failed += results.compactMap { $0 }.filter { !$0 }.count
+            noPhotoAvailable += results.filter { $0 == nil }.count
+        }
+
+        print("✅ LocationSavingService: Backfill complete — succeeded: \(succeeded), failed: \(failed), no photo: \(noPhotoAvailable)")
+        return (succeeded, failed, noPhotoAvailable)
     }
     
     /// Updates a spot's latitude and longitude (e.g. to sync with Google's POI tap location).
