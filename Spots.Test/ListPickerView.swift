@@ -339,6 +339,7 @@ struct ListPickerView: View {
                     placeId: spotData.placeId,
                     name: spotData.name,
                     address: spotData.address,
+                    city: spotData.city,
                     latitude: spotData.coordinate?.latitude,
                     longitude: spotData.coordinate?.longitude,
                     types: spotData.types,

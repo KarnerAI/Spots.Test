@@ -11,6 +11,7 @@ struct Spot: Codable, Identifiable {
     let placeId: String
     let name: String
     let address: String?
+    let city: String?
     let latitude: Double?
     let longitude: Double?
     let types: [String]?
@@ -18,13 +19,14 @@ struct Spot: Codable, Identifiable {
     let photoReference: String?
     let createdAt: Date?
     let updatedAt: Date?
-    
+
     var id: String { placeId }
-    
+
     enum CodingKeys: String, CodingKey {
         case placeId = "place_id"
         case name
         case address
+        case city
         case latitude
         case longitude
         case types

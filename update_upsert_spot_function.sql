@@ -1,4 +1,4 @@
--- Update upsert_spot to accept photo params expected by the client
+-- Update upsert_spot to accept photo params and city expected by the client
 CREATE OR REPLACE FUNCTION public.upsert_spot(
   p_place_id TEXT,
   p_name TEXT,
@@ -7,7 +7,8 @@ CREATE OR REPLACE FUNCTION public.upsert_spot(
   p_longitude DOUBLE PRECISION,
   p_types TEXT[],
   p_photo_url TEXT DEFAULT NULL,
-  p_photo_reference TEXT DEFAULT NULL
+  p_photo_reference TEXT DEFAULT NULL,
+  p_city TEXT DEFAULT NULL
 )
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -18,6 +19,7 @@ BEGIN
     place_id,
     name,
     address,
+    city,
     latitude,
     longitude,
     types,
@@ -30,6 +32,7 @@ BEGIN
     p_place_id,
     p_name,
     p_address,
+    p_city,
     p_latitude,
     p_longitude,
     p_types,
@@ -42,13 +45,14 @@ BEGIN
   SET
     name = EXCLUDED.name,
     address = EXCLUDED.address,
+    city = COALESCE(EXCLUDED.city, public.spots.city),
     latitude = EXCLUDED.latitude,
     longitude = EXCLUDED.longitude,
     types = EXCLUDED.types,
     photo_url = COALESCE(EXCLUDED.photo_url, public.spots.photo_url),
     photo_reference = COALESCE(EXCLUDED.photo_reference, public.spots.photo_reference),
     updated_at = NOW();
-  
+
   RETURN p_place_id;
 END;
 $$;

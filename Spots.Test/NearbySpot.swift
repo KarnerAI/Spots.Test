@@ -12,6 +12,7 @@ struct NearbySpot: Identifiable, Equatable {
     let placeId: String
     let name: String
     let address: String
+    let city: String?
     let category: String
     let rating: Double?
     let photoReference: String?
@@ -70,6 +71,7 @@ struct NearbySpot: Identifiable, Equatable {
             placeId: placeId,
             name: name,
             address: address,
+            city: city,
             types: nil,
             coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
             photoUrl: photoUrl,
@@ -178,22 +180,26 @@ struct NearbyPlaceResult: Codable {
         }()
         
         let category = NearbySpot.mapCategory(from: types ?? [])
-        
+
+        // Extract city (locality) from addressComponents
+        let city = addressComponents?.first { $0.types?.contains("locality") ?? false }?.longText
+
         // Extract photo reference from the first photo
         // The photo name format is: "places/{placeId}/photos/{photoReference}"
         // Store the full path for the new Places API, or just the photo ID for fallback
         let photoReference = photos?.first?.name // Store full path: "places/{placeId}/photos/{photoId}"
-        
+
         if photoReference == nil {
             print("⚠️ NearbySpot: No photos found for \(name) (placeId: \(id))")
         } else {
             print("✅ NearbySpot: Found photo for \(name): \(photoReference!)")
         }
-        
+
         return NearbySpot(
             placeId: id,
             name: name,
             address: address,
+            city: city,
             category: category,
             rating: rating,
             photoReference: photoReference,
@@ -245,6 +251,7 @@ struct PlaceDetailsResponse: Codable {
             placeId: id,
             name: name,
             address: address,
+            city: nil, // PlaceDetailsResponse has no addressComponents
             category: category,
             rating: rating,
             photoReference: photoReference,

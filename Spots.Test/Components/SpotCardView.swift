@@ -199,6 +199,7 @@ extension SpotCardView {
         placeId: "test123",
         name: "Prince Street Pizza",
         address: "27 Prince St",
+        city: nil,
         category: "Pizza",
         rating: 4.8,
         photoReference: nil,
@@ -207,8 +208,8 @@ extension SpotCardView {
         longitude: -73.9945,
         distanceMeters: 160
     )
-    
-    return SpotCardView(
+
+    SpotCardView(
         spot: mockSpot,
         spotListTypeMap: ["test123": .starred],
         hasLoadedSavedPlaces: true,
