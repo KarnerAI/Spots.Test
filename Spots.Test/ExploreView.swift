@@ -86,7 +86,7 @@ struct ExploreView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(Color.white)
-                .cornerRadius(24)
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.searchBar, style: .continuous))
                 .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 2)
                 .onTapGesture {
                     showSearchView = true
@@ -147,7 +147,7 @@ struct ExploreView: View {
                     },
                     onRetry: {
                         Task {
-                            await viewModel.fetchNearbySpots(refresh: true)
+                            await viewModel.fetchNearbySpots(refresh: true, reason: .retry)
                         }
                     }
                 )

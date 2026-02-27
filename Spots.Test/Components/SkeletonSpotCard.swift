@@ -22,10 +22,11 @@ struct SkeletonSpotCard: View {
                 .frame(width: imageSize, height: imageSize)
                 .clipShape(
                     UnevenRoundedRectangle(
-                        topLeadingRadius: 16,
-                        bottomLeadingRadius: 16,
+                        topLeadingRadius: CornerRadius.card,
+                        bottomLeadingRadius: CornerRadius.card,
                         bottomTrailingRadius: 0,
-                        topTrailingRadius: 0
+                        topTrailingRadius: 0,
+                        style: .continuous
                     )
                 )
             
@@ -36,7 +37,7 @@ struct SkeletonSpotCard: View {
                     .fill(shimmerGradient)
                     .frame(height: 18)
                     .frame(maxWidth: .infinity)
-                    .cornerRadius(4)
+                    .cornerRadius(CornerRadius.xSmall)
                 
                 Spacer()
                     .frame(height: 8)
@@ -45,7 +46,7 @@ struct SkeletonSpotCard: View {
                 Rectangle()
                     .fill(shimmerGradient)
                     .frame(width: 140, height: 12)
-                    .cornerRadius(4)
+                    .cornerRadius(CornerRadius.xSmall)
                 
                 Spacer()
                 
@@ -55,7 +56,7 @@ struct SkeletonSpotCard: View {
                     Rectangle()
                         .fill(shimmerGradient)
                         .frame(width: 80, height: 24)
-                        .cornerRadius(4)
+                        .cornerRadius(CornerRadius.xSmall)
                     
                     Spacer()
                     
@@ -70,9 +71,9 @@ struct SkeletonSpotCard: View {
         }
         .frame(height: cardHeight)
         .background(Color.white)
-        .cornerRadius(16)
+        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
                 .stroke(Color.gray200, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)

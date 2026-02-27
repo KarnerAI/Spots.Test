@@ -18,6 +18,43 @@ private struct ListTileData {
     let coverPhotoReference: String?
     let userList: UserList?
     let isAllSpots: Bool
+
+    /// Deterministic fallback color based on tile title.
+    static func color(forTitle title: String) -> Color {
+        switch title {
+        case "Starred":     return Color(red: 0.60, green: 0.50, blue: 0.30)
+        case "Favorites":   return Color(red: 0.55, green: 0.30, blue: 0.30)
+        case "Bucket List": return Color(red: 0.28, green: 0.45, blue: 0.60)
+        default:            return Color.gray400
+        }
+    }
+
+    init(cached: CachedListTile) {
+        title = cached.title
+        count = cached.count
+        fallbackColor = Self.color(forTitle: cached.title)
+        coverImageUrl = cached.coverImageUrl
+        coverPhotoReference = cached.coverPhotoReference
+        userList = cached.userList
+        isAllSpots = cached.isAllSpots
+    }
+
+    init(title: String, count: Int, fallbackColor: Color, coverImageUrl: String?,
+         coverPhotoReference: String?, userList: UserList?, isAllSpots: Bool) {
+        self.title = title
+        self.count = count
+        self.fallbackColor = fallbackColor
+        self.coverImageUrl = coverImageUrl
+        self.coverPhotoReference = coverPhotoReference
+        self.userList = userList
+        self.isAllSpots = isAllSpots
+    }
+
+    func toCached() -> CachedListTile {
+        CachedListTile(title: title, count: count, coverImageUrl: coverImageUrl,
+                       coverPhotoReference: coverPhotoReference, userList: userList,
+                       isAllSpots: isAllSpots)
+    }
 }
 
 private struct CityRowData {
@@ -39,6 +76,8 @@ struct ProfileView: View {
     private let coverHeight: CGFloat = 260
     private let cardOverlap: CGFloat = 30
     private let photoSize: CGFloat = 96
+    /// Top corner radius of the white content sheet; must match Explore bottom sheet and List Picker (CornerRadius.sheet).
+    private let sheetTopCornerRadius: CGFloat = CornerRadius.sheet
 
     private var photoOffset: CGFloat {
         coverHeight - cardOverlap - photoSize / 2
@@ -68,13 +107,17 @@ struct ProfileView: View {
         }
         .ignoresSafeArea(edges: .top)
         .background(Color.gray100)
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear { loadProfileData() }
         .sheet(isPresented: $showCoverPicker) {
             if let city = mostExploredCity, let userId = viewModel.currentUserId {
                 CoverPhotoPickerView(city: city, userId: userId) { selectedURL in
                     Task {
                         let image = await UnsplashService.shared.fetchCoverImageFromURL(selectedURL)
-                        await MainActor.run { coverImage = image }
+                        await MainActor.run {
+                            withTransaction(Transaction(animation: nil)) { coverImage = image }
+                        }
+                        saveSnapshotToCache()
                     }
                 }
                 .environmentObject(viewModel)
@@ -83,38 +126,79 @@ struct ProfileView: View {
     }
 
     private func loadProfileData() {
-        // Load list tiles concurrently with other profile data
-        Task { await loadListTiles() }
+        guard let userId = viewModel.currentUserId else { return }
 
+        let cache = ProfileSnapshotCache.shared
+
+        // Apply cached snapshot instantly (synchronous, before any async work)
+        if let snapshot = cache.snapshot(for: userId) {
+            spotsCount = snapshot.spotsCount
+            mostExploredCity = snapshot.mostExploredCity
+            listTiles = snapshot.listTiles.map { ListTileData(cached: $0) }
+            loadCoverImage()
+
+            if !cache.isStale { return }
+        }
+
+        // Full network refresh (first visit or stale cache)
+        Task { await refreshListTilesFromNetwork() }
+        Task { await refreshCityAndCover() }
+    }
+
+    // MARK: - Cover Image
+
+    private func loadCoverImage() {
         Task {
-            // Most explored city + cover photo
-            do {
-                let city = try await LocationSavingService.shared.getMostExploredCity()
-                await MainActor.run { mostExploredCity = city }
-
-                if let persistedURL = viewModel.currentUserCoverPhotoUrl {
-                    let image = await UnsplashService.shared.fetchCoverImageFromURL(persistedURL)
-                    await MainActor.run { coverImage = image }
-                } else if let city {
-                    let image = await UnsplashService.shared.fetchCoverImage(for: city)
-                    await MainActor.run { coverImage = image }
+            if let persistedURL = viewModel.currentUserCoverPhotoUrl {
+                let image = await UnsplashService.shared.fetchCoverImageFromURL(persistedURL)
+                await MainActor.run {
+                    withTransaction(Transaction(animation: nil)) { coverImage = image }
                 }
-            } catch {
-                // Non-fatal: city label stays as placeholder, cover stays as gradient
-                print("⚠️ ProfileView: Could not load most explored city: \(error.localizedDescription)")
+            } else if let city = mostExploredCity {
+                let image = await UnsplashService.shared.fetchCoverImage(for: city)
+                await MainActor.run {
+                    withTransaction(Transaction(animation: nil)) { coverImage = image }
+                }
             }
         }
     }
 
-    private func loadListTiles() async {
+    // MARK: - Network Refresh
+
+    private func refreshCityAndCover() async {
+        do {
+            let city = try await LocationSavingService.shared.getMostExploredCity()
+            await MainActor.run {
+                withTransaction(Transaction(animation: nil)) { mostExploredCity = city }
+            }
+
+            if let persistedURL = viewModel.currentUserCoverPhotoUrl {
+                let image = await UnsplashService.shared.fetchCoverImageFromURL(persistedURL)
+                await MainActor.run {
+                    withTransaction(Transaction(animation: nil)) { coverImage = image }
+                }
+            } else if let city {
+                let image = await UnsplashService.shared.fetchCoverImage(for: city)
+                await MainActor.run {
+                    withTransaction(Transaction(animation: nil)) { coverImage = image }
+                }
+            }
+
+            saveSnapshotToCache()
+        } catch {
+            print("⚠️ ProfileView: Could not load most explored city: \(error.localizedDescription)")
+        }
+    }
+
+    private func refreshListTilesFromNetwork() async {
         do {
             try await LocationSavingService.shared.ensureDefaultListsForCurrentUser()
             let userLists = try await LocationSavingService.shared.getUserLists()
 
             let listConfigs: [(type: ListType, title: String, color: Color)] = [
-                (.starred,    "Starred",     Color(red: 0.60, green: 0.50, blue: 0.30)),
-                (.favorites,  "Favorites",   Color(red: 0.55, green: 0.30, blue: 0.30)),
-                (.bucketList, "Bucket List", Color(red: 0.28, green: 0.45, blue: 0.60)),
+                (.starred,    "Starred",     ListTileData.color(forTitle: "Starred")),
+                (.favorites,  "Favorites",   ListTileData.color(forTitle: "Favorites")),
+                (.bucketList, "Bucket List", ListTileData.color(forTitle: "Bucket List")),
             ]
 
             var systemTiles: [ListTileData] = []
@@ -134,7 +218,6 @@ struct ProfileView: View {
 
                 allListIds.append(list.id)
 
-                // Fetch count and cover spot for this list concurrently
                 async let count = LocationSavingService.shared.getSpotCount(listId: list.id)
                 async let recentSpot = LocationSavingService.shared.getMostRecentSpotInList(listId: list.id)
                 let (resolvedCount, resolvedSpot) = try await (count, recentSpot)
@@ -151,12 +234,11 @@ struct ProfileView: View {
                 ))
             }
 
-            // All Spots: cover from most recently saved spot across all lists
             let allSpotsSpot = try await LocationSavingService.shared.getMostRecentSpotAcrossLists(listIds: allListIds)
             let allSpotsTile = ListTileData(
                 title: "All Spots",
                 count: totalCount,
-                fallbackColor: Color.gray400,
+                fallbackColor: ListTileData.color(forTitle: "All Spots"),
                 coverImageUrl: allSpotsSpot?.photoUrl,
                 coverPhotoReference: allSpotsSpot?.photoReference,
                 userList: nil,
@@ -165,12 +247,30 @@ struct ProfileView: View {
 
             let tiles = [allSpotsTile] + systemTiles
             await MainActor.run {
-                listTiles = tiles
-                spotsCount = totalCount
+                withTransaction(Transaction(animation: nil)) {
+                    listTiles = tiles
+                    spotsCount = totalCount
+                }
             }
+
+            saveSnapshotToCache()
         } catch {
             print("⚠️ ProfileView: Could not load list tiles: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Snapshot Persistence
+
+    private func saveSnapshotToCache() {
+        guard let userId = viewModel.currentUserId else { return }
+        let snapshot = ProfileSnapshot(
+            userId: userId.uuidString,
+            spotsCount: spotsCount,
+            mostExploredCity: mostExploredCity,
+            listTiles: listTiles.map { $0.toCached() },
+            savedAt: Date()
+        )
+        ProfileSnapshotCache.shared.save(snapshot)
     }
 
     // MARK: - Cover Section
@@ -186,20 +286,24 @@ struct ProfileView: View {
 
     private var coverContent: some View {
         ZStack(alignment: .topTrailing) {
-            // Cover image: Unsplash city photo or gradient placeholder
+            // Gradient is always present — acts as placeholder and loading state.
+            // Keeping it in the tree permanently means SwiftUI never inserts/removes
+            // its primary sizing child, so the ZStack's layout stays stable.
+            LinearGradient(
+                colors: [Color.gray400, Color.gray600],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .frame(height: coverHeight)
+
+            // Image overlays gradient when loaded — no if/else branch switch,
+            // no view-type change, no layout recomputation in the parent ZStack.
             if let image = coverImage {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
                     .frame(height: coverHeight)
                     .clipped()
-            } else {
-                LinearGradient(
-                    colors: [Color.gray400, Color.gray600],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .frame(height: coverHeight)
             }
 
             // Dark gradient overlay to ensure text/UI legibility
@@ -226,6 +330,12 @@ struct ProfileView: View {
             .padding(.top, 56)
             .padding(.trailing, 16)
         }
+        // Pin the ZStack to exactly coverHeight so its reported size never
+        // changes when children are added/removed. Clip prevents any
+        // .scaledToFill() overflow from leaking into the overlap zone.
+        .frame(height: coverHeight)
+        .clipped()
+        .transaction { $0.animation = nil }
     }
 
     // MARK: - Profile Photo
@@ -297,8 +407,8 @@ struct ProfileView: View {
                 .frame(height: 100)
         }
         .frame(maxWidth: .infinity)
-        .background(Color.white)
-        .clipShape(RoundedCornerShape(radius: 30, corners: [.topLeft, .topRight]))
+        .background(RoundedTopCornersBackground(radius: sheetTopCornerRadius))
+        .transaction { $0.animation = nil }
     }
 
     // MARK: - Profile Info
@@ -405,13 +515,13 @@ struct ProfileView: View {
                     }
                 }
                 .frame(width: 140, height: 150)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
             } else if let ref = list.coverPhotoReference {
                 GooglePlacesImageView(photoReference: ref, maxWidth: 280)
                     .frame(width: 140, height: 150)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
             } else {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
                     .fill(list.fallbackColor)
                     .frame(width: 140, height: 150)
             }
@@ -421,7 +531,7 @@ struct ProfileView: View {
                 startPoint: .center,
                 endPoint: .bottom
             )
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
             .frame(width: 140, height: 150)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -456,7 +566,7 @@ struct ProfileView: View {
             .padding(.horizontal, 20)
 
             // World map placeholder
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
                 .fill(Color.gray100)
                 .frame(height: 230)
                 .overlay(
@@ -474,10 +584,10 @@ struct ProfileView: View {
             }
             .background(Color.white)
             .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
                     .stroke(Color.gray200, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
             .padding(.horizontal, 20)
         }
     }
@@ -517,19 +627,27 @@ struct ProfileView: View {
     }
 }
 
-// MARK: - Custom Corner Shape
+// MARK: - UIKit-Backed Rounded Background
 
-private struct RoundedCornerShape: Shape {
-    var radius: CGFloat
-    var corners: UIRectCorner
+/// Uses `CALayer.cornerRadius` instead of SwiftUI shapes to avoid animation
+/// artifacts from NavigationStack insertion transitions.
+private struct RoundedTopCornersBackground: UIViewRepresentable {
+    let radius: CGFloat
 
-    func path(in rect: CGRect) -> Path {
-        let path = UIBezierPath(
-            roundedRect: rect,
-            byRoundingCorners: corners,
-            cornerRadii: CGSize(width: radius, height: radius)
-        )
-        return Path(path.cgPath)
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .white
+        view.layer.cornerRadius = radius
+        view.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        view.layer.cornerCurve = .continuous
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        uiView.layer.cornerRadius = radius
+        CATransaction.commit()
     }
 }
 

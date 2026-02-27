@@ -362,7 +362,9 @@ class PlacesAPIService {
             request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
         }
         
-        // Request specific fields to optimize response
+        // Request only Basic/Standard fields to stay on the cheaper billing SKU.
+        // Photo references are resolved from the Supabase cache or via on-demand
+        // fetchPlaceDetails calls instead of including places.photos here.
         let fieldMask = [
             "places.id",
             "places.displayName",
@@ -371,8 +373,7 @@ class PlacesAPIService {
             "places.addressComponents",
             "places.location",
             "places.types",
-            "places.rating",
-            "places.photos"
+            "places.rating"
         ].joined(separator: ",")
         request.setValue(fieldMask, forHTTPHeaderField: "X-Goog-FieldMask")
         
@@ -811,27 +812,69 @@ extension PlacesAPIService {
     
     /// Returns the cached Supabase photo URL for a spot if it exists in the DB, nil otherwise.
     func getCachedPhotoUrl(placeId: String) async -> String? {
+        let result = await getCachedPhotoUrls(placeIds: [placeId])
+        return result[placeId]
+    }
+    
+    /// Batch-fetches cached Supabase photo URLs and photo references for multiple spots in a single DB query.
+    func getCachedPhotoUrls(placeIds: [String]) async -> [String: String] {
+        guard !placeIds.isEmpty else { return [:] }
         do {
             let supabase = SupabaseManager.shared.client
             
-            struct SpotPhotoCheck: Codable {
+            struct SpotPhotoRow: Codable {
+                let place_id: String
                 let photo_url: String?
             }
             
-            let response: [SpotPhotoCheck] = try await supabase
+            let response: [SpotPhotoRow] = try await supabase
                 .from("spots")
-                .select("photo_url")
-                .eq("place_id", value: placeId)
-                .limit(1)
+                .select("place_id, photo_url")
+                .in("place_id", values: placeIds)
                 .execute()
                 .value
             
-            if let url = response.first?.photo_url, !url.isEmpty {
-                return url
+            var result: [String: String] = [:]
+            for row in response {
+                if let url = row.photo_url, !url.isEmpty {
+                    result[row.place_id] = url
+                }
             }
-            return nil
+            return result
         } catch {
-            return nil
+            print("❌ PlacesAPIService: Error batch-fetching cached photo URLs: \(error.localizedDescription)")
+            return [:]
+        }
+    }
+    
+    /// Batch-fetches cached photo references for spots that have no Supabase photo URL yet.
+    func getCachedPhotoReferences(placeIds: [String]) async -> [String: String] {
+        guard !placeIds.isEmpty else { return [:] }
+        do {
+            let supabase = SupabaseManager.shared.client
+            
+            struct SpotRefRow: Codable {
+                let place_id: String
+                let photo_reference: String?
+            }
+            
+            let response: [SpotRefRow] = try await supabase
+                .from("spots")
+                .select("place_id, photo_reference")
+                .in("place_id", values: placeIds)
+                .execute()
+                .value
+            
+            var result: [String: String] = [:]
+            for row in response {
+                if let ref = row.photo_reference, !ref.isEmpty {
+                    result[row.place_id] = ref
+                }
+            }
+            return result
+        } catch {
+            print("❌ PlacesAPIService: Error batch-fetching cached photo refs: \(error.localizedDescription)")
+            return [:]
         }
     }
     

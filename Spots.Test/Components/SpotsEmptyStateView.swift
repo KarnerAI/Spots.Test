@@ -64,7 +64,7 @@ struct SpotsErrorStateView: View {
                     .padding(.horizontal, 24)
                     .padding(.vertical, 10)
                     .background(Color.spotsTeal)
-                    .cornerRadius(20)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.button, style: .continuous))
             }
             .padding(.top, 8)
         }
@@ -105,7 +105,7 @@ struct LocationPermissionStateView: View {
                     .padding(.horizontal, 24)
                     .padding(.vertical, 10)
                     .background(Color.spotsTeal)
-                    .cornerRadius(20)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.button, style: .continuous))
             }
             .padding(.top, 8)
         }
