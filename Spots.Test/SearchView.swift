@@ -125,7 +125,7 @@ struct SearchView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(Color(red: 0.95, green: 0.95, blue: 0.95))
-                    .cornerRadius(8)
+                    .cornerRadius(CornerRadius.small)
                     .onChange(of: searchQuery) { oldValue, newValue in
                         handleSearchQueryChange(newValue)
                     }
@@ -566,7 +566,7 @@ struct SearchView: View {
                             ? Color(red: 0.95, green: 0.95, blue: 0.95)
                             : Color.spotsTeal
                     )
-                    .cornerRadius(16)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
             }
             .frame(minWidth: 80, minHeight: 44)
         }

@@ -21,24 +21,31 @@ class ImageStorageService {
     
     // MARK: - Public Methods
     
-    /// Downloads image from Google Places Photo API and uploads to Supabase Storage
+    /// Downloads image from Google Places Photo API and uploads to Supabase Storage.
+    /// Checks SpotImageCache first to avoid a duplicate Google API call when
+    /// GooglePlacesImageView has already fetched the same photo.
     /// - Parameters:
     ///   - photoReference: The Google Places photo reference (from photos[].name)
     ///   - placeId: The Google Place ID (used as filename)
     /// - Returns: The public URL of the uploaded image in Supabase Storage, or nil if failed
     func uploadSpotImage(photoReference: String, placeId: String) async -> String? {
-        // Step 1: Download image from Google Places Photo API
-        guard let imageData = await downloadImageFromGoogle(photoReference: photoReference) else {
-            print("❌ ImageStorageService: Failed to download image from Google")
-            return nil
+        let imageData: Data
+        
+        if let cached = SpotImageCache.shared.image(for: photoReference),
+           let jpegData = cached.jpegData(compressionQuality: 0.85) {
+            imageData = jpegData
+            print("✅ ImageStorageService: Reusing cached image for \(placeId) — skipped Google download")
+        } else {
+            guard let downloaded = await downloadImageFromGoogle(photoReference: photoReference) else {
+                print("❌ ImageStorageService: Failed to download image from Google")
+                return nil
+            }
+            imageData = downloaded
+            if let uiImage = UIImage(data: imageData) {
+                SpotImageCache.shared.store(uiImage, for: photoReference)
+            }
         }
         
-        // Step 1.5: Cache the image in memory so the UI never re-downloads from Google
-        if let uiImage = UIImage(data: imageData) {
-            SpotImageCache.shared.store(uiImage, for: photoReference)
-        }
-        
-        // Step 2: Upload to Supabase Storage
         return await uploadToSupabase(imageData: imageData, placeId: placeId)
     }
     

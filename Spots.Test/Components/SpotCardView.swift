@@ -29,9 +29,9 @@ struct SpotCardView: View {
             }
             .frame(height: cardHeight)
             .background(Color.white)
-            .cornerRadius(16)
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
                     .stroke(Color.gray200, lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
@@ -75,10 +75,11 @@ struct SpotCardView: View {
         .clipped()
         .clipShape(
             UnevenRoundedRectangle(
-                topLeadingRadius: 16,
-                bottomLeadingRadius: 16,
+                topLeadingRadius: CornerRadius.card,
+                bottomLeadingRadius: CornerRadius.card,
                 bottomTrailingRadius: 0,
-                topTrailingRadius: 0
+                topTrailingRadius: 0,
+                style: .continuous
             )
         )
     }
@@ -132,7 +133,7 @@ struct SpotCardView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.gray100)
-                    .cornerRadius(4)
+                    .cornerRadius(CornerRadius.xSmall)
                     .lineLimit(1)
                 
                 // Rating (if exists)

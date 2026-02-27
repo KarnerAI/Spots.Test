@@ -284,6 +284,7 @@ class AuthenticationViewModel: ObservableObject {
         currentUserUsername = "username"
         currentUserAvatarUrl = nil
         currentUserCoverPhotoUrl = nil
+        ProfileSnapshotCache.shared.clear()
     }
     
     func signOut() {

@@ -168,6 +168,7 @@ class EditProfileViewModel: ObservableObject {
 
         // Refresh the shared view model so Profile tab reflects changes instantly
         authViewModel.refreshProfile()
+        ProfileSnapshotCache.shared.markStale()
         avatarUrl = finalAvatarUrl
         originalUsername = uname
         selectedImage = nil
@@ -345,7 +346,7 @@ struct EditProfileView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .background(EditProfileColors.fieldBg)
-                .cornerRadius(10)
+                .cornerRadius(CornerRadius.field)
                 .autocorrectionDisabled()
 
             if let err = error {
@@ -379,7 +380,7 @@ struct EditProfileView: View {
                     .onChange(of: vm.username) { _, _ in vm.usernameError = nil }
             }
             .background(EditProfileColors.fieldBg)
-            .cornerRadius(10)
+            .cornerRadius(CornerRadius.field)
 
             if let err = vm.usernameError {
                 Text(err)
@@ -403,7 +404,7 @@ struct EditProfileView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(EditProfileColors.infoBg)
-        .cornerRadius(12)
+        .cornerRadius(CornerRadius.card)
         .padding(.horizontal, 20)
     }
 }

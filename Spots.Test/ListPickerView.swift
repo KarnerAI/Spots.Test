@@ -20,7 +20,7 @@ struct ListPickerView: View {
     @State private var errorMessage: String?
     
     // Layout constants
-    private let topCornerRadius: CGFloat = 20
+    private let topCornerRadius: CGFloat = CornerRadius.sheet
     private let dragHandleWidth: CGFloat = 40
     private let dragHandleHeight: CGFloat = 4
     private let listRowHeight: CGFloat = 68
@@ -131,7 +131,8 @@ struct ListPickerView: View {
                         topLeadingRadius: topCornerRadius,
                         bottomLeadingRadius: 0,
                         bottomTrailingRadius: 0,
-                        topTrailingRadius: topCornerRadius
+                        topTrailingRadius: topCornerRadius,
+                        style: .continuous
                     )
                     .fill(Color.white)
                     .shadow(color: Color.black.opacity(0.15), radius: 12, x: 0, y: -4)

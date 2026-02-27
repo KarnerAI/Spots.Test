@@ -37,6 +37,14 @@ class MapViewModel: ObservableObject {
     private var nextPageToken: String? = nil
     var hasMorePages: Bool { nextPageToken != nil }
     
+    // MARK: - Nearby Refresh Throttling
+    private var lastNearbyFetchAt: Date?
+    private var lastNearbyFetchLocation: CLLocation?
+    private let nearbyRefreshCooldown: TimeInterval = 30
+    private let nearbyRefreshCooldownFastMoving: TimeInterval = 60
+    private let nearbyRefreshMinDistance: CLLocationDistance = 200
+    private let fastMovingSpeedThreshold: CLLocationSpeed = 10 // ~22 mph
+    
     /// Returns displayed spots (selected single spot or all nearby spots)
     var displayedSpots: [NearbySpot] {
         if let selected = selectedSpot {
@@ -74,6 +82,51 @@ class MapViewModel: ObservableObject {
     // Page size for nearby spots carousel (initial load + each scroll-triggered load more)
     private let nearbyPageSize = 5
     
+    enum NearbyRefreshReason {
+        case initial
+        case locateMe
+        case retry
+        case pagination
+    }
+    
+    /// Decides whether a nearby refresh should proceed based on time, distance, and movement speed.
+    private func shouldAllowNearbyRefresh(reason: NearbyRefreshReason) -> Bool {
+        switch reason {
+        case .initial, .retry, .pagination:
+            return true
+        case .locateMe:
+            break
+        }
+        
+        guard let lastFetchTime = lastNearbyFetchAt else { return true }
+        
+        let elapsed = Date().timeIntervalSince(lastFetchTime)
+        let distanceMoved: CLLocationDistance
+        if let lastLoc = lastNearbyFetchLocation, let currentLoc = currentLocation {
+            distanceMoved = currentLoc.distance(from: lastLoc)
+        } else {
+            distanceMoved = .greatestFiniteMagnitude
+        }
+        
+        // Infer speed to detect fast movement (driving)
+        let inferredSpeed = elapsed > 0 ? distanceMoved / elapsed : 0
+        let cooldown = inferredSpeed > fastMovingSpeedThreshold
+            ? nearbyRefreshCooldownFastMoving
+            : nearbyRefreshCooldown
+        
+        let allowed = elapsed >= cooldown || distanceMoved >= nearbyRefreshMinDistance
+        if !allowed {
+            print("🚦 Nearby refresh blocked: elapsed=\(String(format: "%.0f", elapsed))s, moved=\(String(format: "%.0f", distanceMoved))m, speed=\(String(format: "%.1f", inferredSpeed))m/s, cooldown=\(String(format: "%.0f", cooldown))s")
+        }
+        return allowed
+    }
+    
+    /// Records that a nearby refresh just completed so the throttle gate can track intervals.
+    private func recordNearbyFetch() {
+        lastNearbyFetchAt = Date()
+        lastNearbyFetchLocation = currentLocation
+    }
+    
     init() {
         setupLocationObserver()
     }
@@ -94,7 +147,7 @@ class MapViewModel: ObservableObject {
                         // Fetch nearby spots as soon as location is available (first-time only)
                         if !self.hasPerformedInitialNearbyFetch {
                             self.hasPerformedInitialNearbyFetch = true
-                            Task { await self.fetchNearbySpots(refresh: true) }
+                            Task { await self.fetchNearbySpots(refresh: true, reason: .initial) }
                         }
                     }
                     // Center on location if explicitly requested (e.g., from Locate Me button)
@@ -181,12 +234,10 @@ class MapViewModel: ObservableObject {
     func centerOnCurrentLocation() {
         print("📍 Locate Me button clicked")
         
-        // Reset selected spot when Locate Me is pressed
         selectedSpot = nil
         
         guard let location = currentLocation else {
             print("⚠️ No current location available, requesting...")
-            // Request location and set flag to center when it becomes available
             shouldCenterOnLocation = true
             requestLocation()
             return
@@ -194,78 +245,67 @@ class MapViewModel: ObservableObject {
         
         print("📍 Current location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
         
-        // Get current camera - use mapView?.camera as primary source since it's always up-to-date
         let currentCamera = mapView?.camera ?? currentCameraPosition
         guard let currentCamera = currentCamera else {
             print("⚠️ No camera position available, centering on location")
-            // Fallback: just center on location and fetch spots
             centerOnLocation(location)
-            Task { await fetchNearbySpots(refresh: true) }
+            Task { await fetchNearbySpots(refresh: true, reason: .locateMe) }
             return
         }
         
         print("📷 Current camera: \(currentCamera.target.latitude), \(currentCamera.target.longitude), zoom: \(currentCamera.zoom)")
         
-        // Check if location is CENTERED (not just visible)
         let isCentered = isLocationCentered(location, in: currentCamera)
         let isAtDefaultZoom = abs(currentCamera.zoom - 17.0) <= 1.0
         
         print("🎯 Location centered: \(isCentered), at default zoom: \(isAtDefaultZoom)")
         
-        // If location is centered AND at default zoom → Just refresh spots
-        if isCentered && isAtDefaultZoom {
-            print("✅ Location already centered at default zoom, refreshing spots")
-            Task { await fetchNearbySpots(refresh: true) }
-            return
-        }
-        
-        // Get viewport for visibility check (optional, for logging)
-        if let viewport = getCurrentViewportBounds() {
-            let isVisible = isLocationVisible(location, in: viewport)
-            print("👁️ Location visible in viewport: \(isVisible)")
-            
-            // If location is visible but NOT centered → Always center on it
-            if isVisible && !isCentered {
-                print("📍 Location visible but not centered, centering...")
+        // Adjust camera as needed (but only refresh spots once at the end)
+        if !(isCentered && isAtDefaultZoom) {
+            if let viewport = getCurrentViewportBounds() {
+                let isVisible = isLocationVisible(location, in: viewport)
+                print("👁️ Location visible in viewport: \(isVisible)")
+                
+                if isVisible && isCentered && !isAtDefaultZoom {
+                    print("🔍 Location centered but not at default zoom, zooming...")
+                    zoomToDefault(at: location.coordinate)
+                } else if !isCentered {
+                    print("📍 Centering on location...")
+                    centerOnLocation(location)
+                }
+            } else {
+                print("📍 Centering on location (no viewport available)")
                 centerOnLocation(location)
-                Task { await fetchNearbySpots(refresh: true) }
-                return
-            }
-            
-            // If location is visible, centered, but not at default zoom → Zoom to default
-            if isVisible && isCentered && !isAtDefaultZoom {
-                print("🔍 Location centered but not at default zoom, zooming...")
-                zoomToDefault(at: location.coordinate)
-                Task { await fetchNearbySpots(refresh: true) }
-                return
             }
         }
         
-        // If location is NOT visible or any check failed → Center on it
-        print("📍 Centering on location (not visible or checks failed)")
-        centerOnLocation(location)
-        Task { await fetchNearbySpots(refresh: true) }
+        Task { await fetchNearbySpots(refresh: true, reason: .locateMe) }
     }
     
     // MARK: - Nearby Spots
     
     /// Fetches nearby spots from Google Places API
-    /// - Parameter refresh: If true, clears existing spots and resets pagination
-    func fetchNearbySpots(refresh: Bool = false) async {
+    /// - Parameters:
+    ///   - refresh: If true, resets pagination and replaces existing spots on success
+    ///   - reason: Why the refresh was requested (used by throttle gate)
+    func fetchNearbySpots(refresh: Bool = false, reason: NearbyRefreshReason = .pagination) async {
         guard let location = currentLocation else {
             print("⚠️ Cannot fetch nearby spots: no current location")
             nearbyErrorMessage = "Location not available"
             return
         }
         
-        // If refreshing, reset state
+        // Apply throttle gate for non-pagination refreshes
+        if refresh && !shouldAllowNearbyRefresh(reason: reason) {
+            return
+        }
+        
+        // If refreshing, reset pagination but keep existing cards visible
         if refresh {
-            nearbySpots = []
             nextPageToken = nil
             selectedSpot = nil
         }
         
-        // Don't fetch if already loading or no more pages
         guard !isLoadingNearbySpots else { return }
         if !refresh && nextPageToken == nil && !nearbySpots.isEmpty { return }
         
@@ -280,41 +320,105 @@ class MapViewModel: ObservableObject {
                 maxResults: nearbyPageSize
             )
             
-            // Append new spots (for pagination) or replace (for refresh)
+            // Build lookup maps from in-memory spots for carry-forward
+            let existingPhotoUrls = Dictionary(
+                uniqueKeysWithValues: nearbySpots.compactMap { spot -> (String, String)? in
+                    guard let url = spot.photoUrl, !url.isEmpty else { return nil }
+                    return (spot.placeId, url)
+                }
+            )
+            let existingPhotoRefs = Dictionary(
+                uniqueKeysWithValues: nearbySpots.compactMap { spot -> (String, String)? in
+                    guard let ref = spot.photoReference, !ref.isEmpty else { return nil }
+                    return (spot.placeId, ref)
+                }
+            )
+            
+            // Batch-fetch cached data from Supabase for spots not already hydrated
+            let allNewPlaceIds = result.spots.map { $0.placeId }
+            let dbPhotoUrls = await placesAPIService.getCachedPhotoUrls(placeIds: allNewPlaceIds)
+            
+            // Also fetch cached photo references since the Nearby Search field mask
+            // no longer includes places.photos to stay on the cheaper billing SKU
+            let idsNeedingRef = result.spots
+                .filter { $0.photoReference == nil && existingPhotoRefs[$0.placeId] == nil }
+                .map { $0.placeId }
+            let dbPhotoRefs = await placesAPIService.getCachedPhotoReferences(placeIds: idsNeedingRef)
+            
+            var hydratedSpots = result.spots
+            for i in hydratedSpots.indices {
+                let pid = hydratedSpots[i].placeId
+                
+                // Hydrate photoUrl
+                if hydratedSpots[i].photoUrl == nil {
+                    if let cachedUrl = existingPhotoUrls[pid] {
+                        hydratedSpots[i].photoUrl = cachedUrl
+                    } else if let dbUrl = dbPhotoUrls[pid] {
+                        hydratedSpots[i].photoUrl = dbUrl
+                    }
+                }
+                
+                // Hydrate photoReference from in-memory or DB cache
+                if hydratedSpots[i].photoReference == nil {
+                    if let cachedRef = existingPhotoRefs[pid] {
+                        hydratedSpots[i].photoReference = cachedRef
+                    } else if let dbRef = dbPhotoRefs[pid] {
+                        hydratedSpots[i].photoReference = dbRef
+                    }
+                }
+            }
+            
             if refresh {
-                nearbySpots = result.spots
+                nearbySpots = hydratedSpots
             } else {
-                // Filter out duplicates based on placeId
                 let existingIds = Set(nearbySpots.map { $0.placeId })
-                let newSpots = result.spots.filter { !existingIds.contains($0.placeId) }
+                let newSpots = hydratedSpots.filter { !existingIds.contains($0.placeId) }
                 nearbySpots.append(contentsOf: newSpots)
             }
             
             nextPageToken = result.nextPageToken
             isLoadingNearbySpots = false
+            recordNearbyFetch()
             
-            print("📍 Fetched \(result.spots.count) nearby spots. Total: \(nearbySpots.count). Has more: \(hasMorePages)")
+            let spotsWithPhoto = nearbySpots.filter { $0.photoUrl != nil || $0.photoReference != nil }.count
+            print("📍 Fetched \(result.spots.count) nearby spots. Total: \(nearbySpots.count). With photo data: \(spotsWithPhoto). Has more: \(hasMorePages)")
+            SpotImageCache.shared.logCacheStats()
+            await ImageDownloadCoordinator.shared.logStats()
             
-            // Cache all spot metadata and images in Supabase in background.
-            // 1) Bulk-upsert spot rows so future lookups (e.g. POI taps) can skip Google.
-            // 2) Upload images so future renders use the free Supabase CDN path.
-            let spotsToUpload = result.spots
+            let spotsToUpload = hydratedSpots
 
-            // Cancel any in-flight upload task from a previous fetch to avoid stale writes
             imageUploadTask?.cancel()
             imageUploadTask = Task {
-                // First, ensure all spots have a row in the DB
                 await placesAPIService.bulkUpsertSpots(spotsToUpload)
 
                 guard !Task.isCancelled else { return }
 
-                // Then upload images (checks for existing photos before downloading)
-                let uploadedUrls = await placesAPIService.uploadSpotImages(spots: spotsToUpload)
+                // Lazily resolve photo references for spots that still don't have one.
+                // This replaces getting photos from the Nearby Search field mask.
+                var resolvedSpots = spotsToUpload
+                let unresolvedIds = resolvedSpots.enumerated()
+                    .filter { $0.element.photoReference == nil }
+                    .map { $0.offset }
+                
+                for idx in unresolvedIds {
+                    guard !Task.isCancelled else { return }
+                    if let details = try? await placesAPIService.fetchPlaceDetails(placeId: resolvedSpots[idx].placeId),
+                       let ref = details.photoReference {
+                        resolvedSpots[idx].photoReference = ref
+                        // Also update the in-memory array so the card can render
+                        if let liveIdx = nearbySpots.firstIndex(where: { $0.placeId == resolvedSpots[idx].placeId }) {
+                            nearbySpots[liveIdx].photoReference = ref
+                        }
+                    }
+                }
+
+                guard !Task.isCancelled else { return }
+
+                let uploadedUrls = await placesAPIService.uploadSpotImages(spots: resolvedSpots)
 
                 guard !Task.isCancelled else { return }
 
                 if !uploadedUrls.isEmpty {
-                    // Use placeId lookup instead of index to avoid race condition
                     for (placeId, url) in uploadedUrls {
                         if let index = nearbySpots.firstIndex(where: { $0.placeId == placeId }) {
                             nearbySpots[index].photoUrl = url

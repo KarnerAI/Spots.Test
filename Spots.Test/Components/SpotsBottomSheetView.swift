@@ -43,7 +43,7 @@ struct SpotsBottomSheetView: View {
     // Layout constants
     private let dragHandleWidth: CGFloat = 40
     private let dragHandleHeight: CGFloat = 4
-    private let cornerRadius: CGFloat = 24
+    private let cornerRadius: CGFloat = CornerRadius.sheet
     private let horizontalPadding: CGFloat = 20
     
     // Animation
@@ -83,7 +83,8 @@ struct SpotsBottomSheetView: View {
                 topLeadingRadius: cornerRadius,
                 bottomLeadingRadius: 0,
                 bottomTrailingRadius: 0,
-                topTrailingRadius: cornerRadius
+                topTrailingRadius: cornerRadius,
+                style: .continuous
             )
             .fill(Color.white)
             .shadow(color: Color.black.opacity(0.15), radius: 12, x: 0, y: -4)

@@ -95,9 +95,9 @@ struct CoverPhotoPickerView: View {
         .frame(maxWidth: .infinity)
         .frame(height: 230)
         .clipped()
-        .cornerRadius(10)
+        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.field, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: CornerRadius.field, style: .continuous)
                 .stroke(Color.black.opacity(0.06), lineWidth: 1)
         )
         .opacity(isSaving ? 0.5 : 1)

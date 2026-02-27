@@ -640,6 +640,7 @@ class LocationSavingService {
                 .from("spot_list_items")
                 .insert(params)
                 .execute()
+            ProfileSnapshotCache.shared.markStale()
         } catch {
             // If it's a duplicate error, that's okay (constraint prevents duplicates)
             if let error = error as NSError?,
@@ -678,6 +679,7 @@ class LocationSavingService {
             .eq("spot_id", value: placeId)
             .eq("list_id", value: listId.uuidString)
             .execute()
+        ProfileSnapshotCache.shared.markStale()
     }
     
     /// Check which lists contain a spot

@@ -54,7 +54,7 @@ struct WelcomeView: View {
                             .frame(maxWidth: .infinity)
                             .frame(height: 56)
                             .background(Color(red: 0.36, green: 0.69, blue: 0.72))
-                            .cornerRadius(28)
+                            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.pill, style: .continuous))
                     }
                     .buttonStyle(ScaleButtonStyle())
                     
