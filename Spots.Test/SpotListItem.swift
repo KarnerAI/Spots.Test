@@ -30,3 +30,23 @@ struct SpotWithMetadata: Identifiable {
     var id: String { spot.id }
 }
 
+// MARK: - Conversion to NearbySpot
+
+extension SpotWithMetadata {
+    /// Converts to NearbySpot for use with SpotCardView (floating card on map).
+    func toNearbySpot() -> NearbySpot {
+        NearbySpot(
+            placeId: spot.placeId,
+            name: spot.name,
+            address: spot.address ?? "",
+            city: spot.city,
+            category: NearbySpot.mapCategory(from: spot.types ?? []),
+            rating: nil,
+            photoReference: spot.photoReference,
+            photoUrl: spot.photoUrl,
+            latitude: spot.latitude ?? 0,
+            longitude: spot.longitude ?? 0
+        )
+    }
+}
+

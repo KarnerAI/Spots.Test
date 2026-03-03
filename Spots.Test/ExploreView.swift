@@ -15,10 +15,27 @@ struct ExploreView: View {
     @StateObject private var locationSavingVM = LocationSavingViewModel()
     @State private var mapView: GMSMapView?
     @State private var markers: [GMSMarker] = []
-    
+
     // Bottom sheet state
     @State private var spotForSaving: NearbySpot? = nil
     @State private var spotToOpenInMaps: NearbySpot? = nil
+
+    // MARK: - Marker Update Trigger
+
+    /// Captures all inputs that affect markers so we fire a single `updateMarkers()` per change.
+    private struct MarkerTrigger: Equatable {
+        let savedCount: Int
+        let nearbyIds: [String]
+        let selectedId: String?
+    }
+
+    private var markerTrigger: MarkerTrigger {
+        MarkerTrigger(
+            savedCount: viewModel.savedPlaces.count,
+            nearbyIds: viewModel.nearbySpots.map(\.placeId),
+            selectedId: viewModel.selectedSpot?.placeId
+        )
+    }
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -59,41 +76,41 @@ struct ExploreView: View {
             )
             .ignoresSafeArea()
             
-            // Floating search bar overlay
+            // Floating search bar overlay (slim: 38pt height, 10/8 padding, 36pt filter)
             VStack(spacing: 0) {
-                // Search Bar with integrated filter
-                HStack(spacing: 12) {
-                    // Magnifying glass icon
+                HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 16))
                         .foregroundColor(.gray400)
-                    
-                    // Search text
                     Text("Search spots, friends...")
-                        .font(.system(size: 16))
+                        .font(.system(size: 15))
                         .foregroundColor(.gray400)
-                    
                     Spacer()
-                    
-                    // Filter icon (integrated)
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundColor(.gray900)
-                        .onTapGesture {
-                            showFiltersPlaceholder = true
-                        }
+                    Button(action: {
+                        showFiltersPlaceholder = true
+                    }) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(.gray900)
+                    }
+                    .frame(minWidth: 36, minHeight: 36)
+                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(height: 38)
                 .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.searchBar, style: .continuous))
-                .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 2)
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.field, style: .continuous))
+                .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
+                .contentShape(Rectangle())
                 .onTapGesture {
                     showSearchView = true
                 }
-                .padding(.horizontal, 20) // ADJUSTABLE: Controls search bar width
+                .padding(.vertical, 3)
+                .padding(.horizontal, 16)
                 .padding(.top, 8)
-                
+
                 Spacer()
             }
             
@@ -119,39 +136,61 @@ struct ExploreView: View {
                     }
                     .padding(.trailing, 16)
                 }
-                .padding(.bottom, bottomSheetHeight + 70 + 16) // Position above bottom sheet + tab bar
+                .padding(.bottom, viewModel.selectedSpot != nil ? 222 : bottomSheetHeight + 70 + 16) // Above floating card or bottom sheet + tab bar
             }
             
-            // Bottom Sheet with Spots Carousel - anchored to bottom
-            VStack {
-                Spacer()
-                
-                SpotsBottomSheetView(
-                    sheetState: $viewModel.sheetState,
-                    spots: viewModel.displayedSpots,
-                    isLoading: viewModel.isLoadingNearbySpots,
-                    hasMorePages: viewModel.hasMorePages,
-                    errorMessage: viewModel.nearbyErrorMessage,
-                    spotListTypeMap: viewModel.spotListTypeMap,
-                    hasLoadedSavedPlaces: viewModel.hasLoadedSavedPlacesOnce,
-                    onBookmarkTap: { spot in
-                        spotForSaving = spot
-                    },
-                    onCardTap: { spot in
-                        spotToOpenInMaps = spot
-                    },
-                    onLoadMore: {
-                        Task {
-                            await viewModel.loadMoreNearbySpots()
+            // Bottom sheet only when no spot selected
+            if viewModel.selectedSpot == nil {
+                VStack {
+                    Spacer()
+                    SpotsBottomSheetView(
+                        sheetState: $viewModel.sheetState,
+                        spots: viewModel.displayedSpots,
+                        isLoading: viewModel.isLoadingNearbySpots,
+                        hasMorePages: viewModel.hasMorePages,
+                        errorMessage: viewModel.nearbyErrorMessage,
+                        spotListTypeMap: viewModel.spotListTypeMap,
+                        hasLoadedSavedPlaces: viewModel.hasLoadedSavedPlacesOnce,
+                        onBookmarkTap: { spot in
+                            spotForSaving = spot
+                        },
+                        onCardTap: { spot in
+                            spotToOpenInMaps = spot
+                        },
+                        onLoadMore: {
+                            Task {
+                                await viewModel.loadMoreNearbySpots()
+                            }
+                        },
+                        onRetry: {
+                            Task {
+                                await viewModel.fetchNearbySpots(refresh: true, reason: .retry)
+                            }
+                        },
+                        onCardVisible: { spot in
+                            viewModel.resolvePhotoReferenceIfNeeded(for: spot.placeId)
                         }
-                    },
-                    onRetry: {
-                        Task {
-                            await viewModel.fetchNearbySpots(refresh: true, reason: .retry)
-                        }
-                    }
-                )
-                .padding(.bottom, 70) // Space for tab bar
+                    )
+                    .padding(.bottom, 78) // Space for tab bar
+                }
+            }
+
+            // Floating card when a pin is selected (matches List Detail map card)
+            if let selected = viewModel.selectedSpot {
+                VStack {
+                    Spacer()
+                    SpotCardView(
+                        spot: selected,
+                        spotListTypeMap: viewModel.spotListTypeMap,
+                        hasLoadedSavedPlaces: viewModel.hasLoadedSavedPlacesOnce,
+                        onBookmarkTap: { spotForSaving = selected },
+                        onCardTap: { spotToOpenInMaps = selected }
+                    )
+                    .frame(width: SpotCardView.cardWidth(for: UIScreen.main.bounds.width))
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 78 + 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             
             // MARK: - List Picker Overlay
@@ -191,6 +230,7 @@ struct ExploreView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotForSaving != nil)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: viewModel.selectedSpot?.placeId)
         .onAppear {
             // Restore map to last camera only when returning from another tab in the same session (not on first open or after app was backgrounded)
             if viewModel.hasExploreAppearedBefore, let lastCamera = viewModel.currentCameraPosition {
@@ -204,13 +244,7 @@ struct ExploreView: View {
                 updateMarkers()
             }
         }
-        .onChange(of: viewModel.savedPlaces.count) { oldValue, newValue in
-            updateMarkers()
-        }
-        .onChange(of: viewModel.nearbySpots) { oldValue, newValue in
-            updateMarkers()
-        }
-        .onChange(of: viewModel.selectedSpot) { oldValue, newValue in
+        .onChange(of: markerTrigger) { _, _ in
             updateMarkers()
         }
         .fullScreenCover(isPresented: $showSearchView) {

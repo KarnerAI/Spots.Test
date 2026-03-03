@@ -326,10 +326,12 @@ class LocationSavingService {
 
         guard !allItems.isEmpty else { return [] }
 
-        // Build a map from list_id UUID → ListType for resolving listTypes later
+        // Build a map from list_id UUID → ListType for resolving listTypes later.
+        // Use canonical ListType from list when present; otherwise infer from list name
+        // so default lists (Starred, Favorites, Bucket List) always contribute to marker icons.
         let listTypeByListId: [String: ListType] = Dictionary(
             uniqueKeysWithValues: userLists.compactMap { list -> (String, ListType)? in
-                guard let listType = list.listType else { return nil }
+                guard let listType = Self.resolveListType(for: list) else { return nil }
                 return (list.id.uuidString, listType)
             }
         )
@@ -417,6 +419,19 @@ class LocationSavingService {
             .sorted { $0.savedAt > $1.savedAt }
 
         return result
+    }
+
+    /// Resolves a canonical ListType for a user list. Uses list_type when present;
+    /// otherwise infers from list name so default lists (Starred, Favorites, Bucket List)
+    /// always map to a type for marker icon resolution in All Spots map.
+    private static func resolveListType(for list: UserList) -> ListType? {
+        if let listType = list.listType { return listType }
+        guard let name = list.name?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return nil }
+        let lower = name.lowercased()
+        if lower == "starred" { return .starred }
+        if lower == "favorites" { return .favorites }
+        if lower == "bucket list" { return .bucketList }
+        return nil
     }
 
     /// Helper: Get a single spot by place_id
