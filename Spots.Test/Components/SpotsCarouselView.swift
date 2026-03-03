@@ -16,10 +16,12 @@ struct SpotsCarouselView: View {
     let onBookmarkTap: (NearbySpot) -> Void
     let onCardTap: (NearbySpot) -> Void
     let onLoadMore: () -> Void
-    
-    // Optional error state
+
+    // Optional callbacks
     var errorMessage: String?
     var onRetry: (() -> Void)?
+    /// Called when a card becomes visible and needs its photo resolved
+    var onCardVisible: ((NearbySpot) -> Void)?
     
     // Layout constants
     private let cardSpacing: CGFloat = 12
@@ -87,6 +89,10 @@ struct SpotsCarouselView: View {
                             // Trigger load more when approaching end
                             if index >= spots.count - 2 && hasMorePages && !isLoading {
                                 onLoadMore()
+                            }
+                            // Trigger lazy photo resolution for cards without photo data
+                            if spot.photoReference == nil && spot.photoUrl == nil {
+                                onCardVisible?(spot)
                             }
                         }
                     }

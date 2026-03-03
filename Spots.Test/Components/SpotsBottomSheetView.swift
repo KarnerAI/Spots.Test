@@ -24,7 +24,7 @@ enum BottomSheetState {
 struct SpotsBottomSheetView: View {
     // State
     @Binding var sheetState: BottomSheetState
-    @GestureState private var dragOffset: CGFloat = 0
+    @State private var dragOffset: CGFloat = 0
     
     // Data
     let spots: [NearbySpot]
@@ -39,6 +39,8 @@ struct SpotsBottomSheetView: View {
     let onCardTap: (NearbySpot) -> Void
     let onLoadMore: () -> Void
     let onRetry: () -> Void
+    /// Called when a carousel card becomes visible and needs its photo resolved
+    var onCardVisible: ((NearbySpot) -> Void)?
     
     // Layout constants
     private let dragHandleWidth: CGFloat = 40
@@ -46,38 +48,30 @@ struct SpotsBottomSheetView: View {
     private let cornerRadius: CGFloat = CornerRadius.sheet
     private let horizontalPadding: CGFloat = 20
     
-    // Animation
-    private let springAnimation = Animation.spring(response: 0.3, dampingFraction: 0.8)
-    
-    // Computed height including drag offset
-    private var currentHeight: CGFloat {
-        let baseHeight = sheetState.height
-        // When dragging up (negative offset), increase height
-        // When dragging down (positive offset), decrease height
-        let adjustedHeight = baseHeight - dragOffset
-        // Clamp to reasonable bounds
-        return max(80, min(350, adjustedHeight))
-    }
-    
+    // Animation — shared constant used across sheet and overlays
+    private let springAnimation = Animation.spring(response: 0.35, dampingFraction: 0.85)
+
     var body: some View {
         VStack(spacing: 0) {
             // Drag Handle Area
             dragHandle
                 .contentShape(Rectangle())
-            
+
             // Title
             titleSection
-            
-            // Carousel (only in expanded state)
-            if sheetState == .expanded || dragOffset < -50 {
-                carouselSection
-                    .transition(.opacity)
-            }
-            
+
+            // Carousel — always in the view tree to avoid insertion/removal overhead.
+            // Visibility controlled by opacity; hidden when collapsed.
+            carouselSection
+                .opacity(sheetState == .expanded ? 1.0 : 0.0)
+                .allowsHitTesting(sheetState == .expanded)
+                .animation(.easeInOut(duration: 0.2), value: sheetState)
+
             Spacer(minLength: 0)
         }
-        .frame(height: currentHeight, alignment: .top)
+        .frame(height: sheetState.height, alignment: .top)
         .frame(maxWidth: .infinity)
+        .clipped()
         .background(
             UnevenRoundedRectangle(
                 topLeadingRadius: cornerRadius,
@@ -90,6 +84,7 @@ struct SpotsBottomSheetView: View {
             .shadow(color: Color.black.opacity(0.15), radius: 12, x: 0, y: -4)
         )
         .gesture(dragGesture)
+        .offset(y: dragOffset)
         .animation(springAnimation, value: sheetState)
     }
     
@@ -130,7 +125,8 @@ struct SpotsBottomSheetView: View {
             onCardTap: onCardTap,
             onLoadMore: onLoadMore,
             errorMessage: errorMessage,
-            onRetry: onRetry
+            onRetry: onRetry,
+            onCardVisible: onCardVisible
         )
     }
     
@@ -138,24 +134,28 @@ struct SpotsBottomSheetView: View {
     
     private var dragGesture: some Gesture {
         DragGesture()
-            .updating($dragOffset) { value, state, _ in
-                state = value.translation.height
+            .onChanged { value in
+                let t = value.translation.height
+                // Clamp: expanded sheet can only be dragged down; collapsed only up
+                dragOffset = sheetState == .expanded ? max(t, 0) : min(t, 0)
             }
             .onEnded { value in
                 let velocity = value.predictedEndLocation.y - value.location.y
                 let offset = value.translation.height
-                
+
                 // Determine intent based on velocity and offset
                 let isDraggingUp = velocity < -500 || offset < -100
                 let isDraggingDown = velocity > 500 || offset > 100
-                
+
+                // Animate dragOffset reset in the same spring as the state change
+                // so content and background move as one unit to the final position
                 withAnimation(springAnimation) {
                     if isDraggingUp {
                         sheetState = .expanded
                     } else if isDraggingDown {
                         sheetState = .collapsed
                     }
-                    // Otherwise, snap back to current state
+                    dragOffset = 0
                 }
             }
     }

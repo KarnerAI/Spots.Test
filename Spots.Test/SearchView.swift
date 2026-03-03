@@ -110,21 +110,21 @@ struct SearchView: View {
                             .frame(width: 44, height: 44)
                     }
                     
-                    // Search Input
+                    // Search Input (unified spec: 15pt, gray100)
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 16))
                             .foregroundColor(.gray400)
                         
                         TextField("Search here", text: $searchQuery)
-                            .font(.system(size: 14))
+                            .font(.system(size: 15))
                             .foregroundColor(.gray900)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color(red: 0.95, green: 0.95, blue: 0.95))
+                    .background(Color.gray100)
                     .cornerRadius(CornerRadius.small)
                     .onChange(of: searchQuery) { oldValue, newValue in
                         handleSearchQueryChange(newValue)

@@ -6,6 +6,7 @@
 //
 
 import Testing
+import UIKit
 @testable import Spots_Test
 
 struct Spots_TestTests {
@@ -62,5 +63,60 @@ struct DisplayListTypeResolverTests {
         // BucketList has highest priority even when all are present
         let result = displayListType(for: [.bucketList, .starred, .favorites])
         #expect(result == .bucketList)
+    }
+}
+
+// MARK: - Marker Icon Helper Tests (All Spots map custom markers)
+
+struct MarkerIconHelperTests {
+
+    /// Empty list types → default teal pin (non-nil).
+    @Test func emptyListTypesReturnsDefaultIcon() {
+        var cache: [String: UIImage] = [:]
+        let icon = MarkerIconHelper.iconForListTypes([], cache: &cache)
+        #expect(icon != nil)
+        #expect(cache.isEmpty)
+    }
+
+    /// Single list type returns custom icon and caches it.
+    @Test func singleListTypeReturnsCustomIcon() {
+        var cache: [String: UIImage] = [:]
+        let icon = MarkerIconHelper.iconForListTypes([.starred], cache: &cache)
+        #expect(icon != nil)
+        #expect(cache["starred"] != nil)
+    }
+
+    /// Precedence: starred > favorites > bucketList (multi-list uses starred).
+    @Test func precedenceStarredOverFavorites() {
+        var cache: [String: UIImage] = [:]
+        let icon = MarkerIconHelper.iconForListTypes([.starred, .favorites], cache: &cache)
+        #expect(icon != nil)
+        #expect(cache["starred"] != nil)
+    }
+
+    @Test func precedenceFavoritesOverBucketList() {
+        var cache: [String: UIImage] = [:]
+        let icon = MarkerIconHelper.iconForListTypes([.favorites, .bucketList], cache: &cache)
+        #expect(icon != nil)
+        #expect(cache["favorites"] != nil)
+    }
+
+    @Test func allThreeListTypesUsesStarredPrecedence() {
+        var cache: [String: UIImage] = [:]
+        let icon = MarkerIconHelper.iconForListTypes([.bucketList, .starred, .favorites], cache: &cache)
+        #expect(icon != nil)
+        #expect(cache["starred"] != nil)
+    }
+
+    @Test func favoritesOnlyCachesFavorites() {
+        var cache: [String: UIImage] = [:]
+        _ = MarkerIconHelper.iconForListTypes([.favorites], cache: &cache)
+        #expect(cache["favorites"] != nil)
+    }
+
+    @Test func bucketListOnlyCachesBucketList() {
+        var cache: [String: UIImage] = [:]
+        _ = MarkerIconHelper.iconForListTypes([.bucketList], cache: &cache)
+        #expect(cache["bucketList"] != nil)
     }
 }

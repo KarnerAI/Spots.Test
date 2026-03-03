@@ -7,6 +7,7 @@
 
 import SwiftUI
 import GoogleMaps
+import CoreLocation
 
 // MARK: - Supporting Types
 
@@ -43,10 +44,27 @@ struct ListDetailView: View {
     // Map state
     @State private var cameraPosition: GMSCameraPosition? = nil
     @State private var markers: [GMSMarker] = []
-    @State private var showUserLocation = false
+    @State private var showUserLocation = true
     @State private var forceCameraUpdate = false
+    @State private var mapView: GMSMapView? = nil
+    @State private var selectedSpot: SpotWithMetadata? = nil
+    @State private var markerIconCache: [String: UIImage] = [:]
+    @StateObject private var locationSavingVM = LocationSavingViewModel()
+    @State private var spotForSaving: NearbySpot? = nil
+    @StateObject private var locationManager = LocationManager()
+    @State private var spotToOpenInMaps: NearbySpot? = nil
+    @State private var shouldCenterWhenLocationArrives = false
 
     // MARK: - Computed
+
+    /// Map placeId → list type for bookmark icon on floating card (uses first list type per spot).
+    private var spotListTypeMap: [String: ListType] {
+        Dictionary(
+            uniqueKeysWithValues: spots.compactMap { s in
+                s.listTypes.first.map { (s.spot.placeId, $0) }
+            }
+        )
+    }
 
     private var filteredAndSortedSpots: [SpotWithMetadata] {
         let filtered = searchText.isEmpty
@@ -114,7 +132,47 @@ struct ListDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .onChange(of: locationManager.location) { _, newLocation in
+            guard shouldCenterWhenLocationArrives, let location = newLocation else { return }
+            shouldCenterWhenLocationArrives = false
+            centerMapOnLocation(location)
+        }
         .task { await loadSpots() }
+        .overlay {
+            ZStack(alignment: .bottom) {
+                if spotForSaving != nil {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                spotForSaving = nil
+                            }
+                        }
+                        .transition(.opacity)
+                }
+                if let spot = spotForSaving {
+                    ListPickerView(
+                        spotData: spot.toPlaceAutocompleteResult(),
+                        viewModel: locationSavingVM,
+                        onDismiss: {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                spotForSaving = nil
+                            }
+                        },
+                        onSaveComplete: {
+                            Task { await loadSpots() }
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                spotForSaving = nil
+                            }
+                        }
+                    )
+                    .padding(.bottom, 70)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotForSaving != nil)
+            .allowsHitTesting(spotForSaving != nil)
+        }
     }
 
     // MARK: - Search Bar
@@ -122,8 +180,8 @@ struct ListDetailView: View {
     private var searchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundColor(.gray500)
-                .font(.system(size: 15))
+                .font(.system(size: 16))
+                .foregroundColor(.gray400)
 
             TextField("Search spots...", text: $searchText)
                 .font(.system(size: 15))
@@ -213,14 +271,144 @@ struct ListDetailView: View {
     // MARK: - Map Content
 
     private var mapContent: some View {
-        GoogleMapView(
-            cameraPosition: $cameraPosition,
-            markers: $markers,
-            showUserLocation: $showUserLocation,
-            forceCameraUpdate: $forceCameraUpdate,
-            onMarkerTapped: { _ in }
-        )
-        .ignoresSafeArea(edges: .bottom)
+        ZStack(alignment: .bottom) {
+                GoogleMapView(
+                    cameraPosition: $cameraPosition,
+                    markers: $markers,
+                    showUserLocation: $showUserLocation,
+                    forceCameraUpdate: $forceCameraUpdate,
+                    onMapReady: { mv in
+                        self.mapView = mv
+                        fitCameraToMapView(mv)
+                        locationManager.requestLocation()
+                    },
+                    onMarkerTapped: { marker in
+                        if let spotWithMetadata = marker.userData as? SpotWithMetadata {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                selectedSpot = spotWithMetadata
+                            }
+                        }
+                    },
+                    onMapTapped: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedSpot = nil
+                        }
+                    }
+                )
+                .ignoresSafeArea(edges: .bottom)
+
+                // Locate-me button (top-right of card when card visible, else bottom-right)
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button {
+                            locateMe()
+                        } label: {
+                            Image(systemName: "scope")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundColor(.gray900)
+                                .frame(width: 44, height: 44)
+                                .background(Color.white)
+                                .clipShape(Circle())
+                                .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
+                        }
+                        .padding(.trailing, 16)
+                        .padding(.bottom, selectedSpot != nil
+                            ? 70 + 36 + 120 + 8
+                            : 70 + 44)
+                        .animation(.easeInOut(duration: 0.25), value: selectedSpot != nil)
+                    }
+                }
+
+                // Spot detail card (slides up when a marker is tapped) — matches Explore SpotCardView
+                if let spot = selectedSpot {
+                    SpotCardView(
+                        spot: spot.toNearbySpot(),
+                        spotListTypeMap: spotListTypeMap,
+                        hasLoadedSavedPlaces: true,
+                        onBookmarkTap: { spotForSaving = spot.toNearbySpot() },
+                        onCardTap: { spotToOpenInMaps = spot.toNearbySpot() }
+                    )
+                    .frame(width: SpotCardView.cardWidth(for: UIScreen.main.bounds.width))
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 70 + 36)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+            googleMapsPromptOverlay
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotToOpenInMaps != nil)
+    }
+
+    // MARK: - Open in Google Maps Overlay
+
+    @ViewBuilder
+    private var googleMapsPromptOverlay: some View {
+        if let spot = spotToOpenInMaps {
+            ZStack {
+                // Blurred backdrop matching native action sheet scrim
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .onTapGesture { spotToOpenInMaps = nil }
+                    .transition(.opacity)
+
+                VStack(spacing: 8) {
+                    Spacer()
+
+                    // Main action card (header + Open button)
+                    VStack(spacing: 0) {
+                        // Header: title + message
+                        VStack(spacing: 2) {
+                            Text("Open in Google Maps?")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            Text(spot.name)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+
+                        Divider()
+
+                        // Open button
+                        Button {
+                            openInGoogleMaps(spot: spot)
+                            spotToOpenInMaps = nil
+                        } label: {
+                            Text("Open")
+                                .font(.system(size: 20))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 57)
+                        }
+                    }
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    // Cancel card (visually separate like native)
+                    Button {
+                        spotToOpenInMaps = nil
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 57)
+                    }
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 70 + 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
     }
 
     // MARK: - Empty State
@@ -278,7 +466,30 @@ struct ListDetailView: View {
                     listType: list.listType ?? .starred
                 )
             case .allSpots:
-                spots = try await LocationSavingService.shared.getAllSpots()
+                let service = LocationSavingService.shared
+                let starredList = try await service.getListByType(.starred)
+                let favoritesList = try await service.getListByType(.favorites)
+                let bucketList = try await service.getListByType(.bucketList)
+
+                var allPlaces: [SpotWithMetadata] = []
+                if let id = starredList?.id { allPlaces += try await service.getSpotsInList(listId: id, listType: .starred) }
+                if let id = favoritesList?.id { allPlaces += try await service.getSpotsInList(listId: id, listType: .favorites) }
+                if let id = bucketList?.id { allPlaces += try await service.getSpotsInList(listId: id, listType: .bucketList) }
+
+                // Deduplicate by placeId, union listTypes, keep most recent savedAt
+                var unique: [String: SpotWithMetadata] = [:]
+                for place in allPlaces {
+                    if let existing = unique[place.spot.placeId] {
+                        unique[place.spot.placeId] = SpotWithMetadata(
+                            spot: existing.spot,
+                            savedAt: max(existing.savedAt, place.savedAt),
+                            listTypes: existing.listTypes.union(place.listTypes)
+                        )
+                    } else {
+                        unique[place.spot.placeId] = place
+                    }
+                }
+                spots = Array(unique.values).sorted { $0.savedAt > $1.savedAt }
             }
             buildMarkers()
         } catch {
@@ -302,22 +513,32 @@ struct ListDetailView: View {
                 )
             )
             marker.title = spot.name
+            marker.snippet = spot.address
+            marker.userData = spotWithMetadata
+            marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
+            marker.icon = MarkerIconHelper.iconForListTypes(
+                spotWithMetadata.listTypes,
+                cache: &markerIconCache
+            )
             return marker
         }
         markers = newMarkers
-        fitCameraToMarkers()
+
+        // If the map is already visible, fit immediately; otherwise onMapReady will handle it.
+        if let mv = mapView {
+            fitCameraToMapView(mv)
+        }
     }
 
-    private func fitCameraToMarkers() {
-        guard markers.count > 1 else {
-            if let first = markers.first {
-                cameraPosition = GMSCameraPosition.camera(
-                    withLatitude: first.position.latitude,
-                    longitude: first.position.longitude,
-                    zoom: 14
-                )
-                forceCameraUpdate = true
-            }
+    private func fitCameraToMapView(_ mv: GMSMapView) {
+        guard !markers.isEmpty else { return }
+
+        if markers.count == 1, let first = markers.first {
+            mv.animate(to: GMSCameraPosition.camera(
+                withLatitude: first.position.latitude,
+                longitude: first.position.longitude,
+                zoom: 14
+            ))
             return
         }
 
@@ -325,11 +546,37 @@ struct ListDetailView: View {
         for marker in markers {
             bounds = bounds.includingCoordinate(marker.position)
         }
-        let update = GMSCameraUpdate.fit(bounds, withPadding: 60)
-        // Store as a sentinel so GoogleMapView's updateUIView applies the fit
-        cameraPosition = GMSCameraPosition.camera(withLatitude: 0, longitude: 0, zoom: 2)
-        _ = update // GoogleMapView handles forceCameraUpdate via mapView.animate(with:)
+        mv.animate(with: GMSCameraUpdate.fit(bounds, withPadding: 60))
+    }
+
+    private func centerMapOnLocation(_ location: CLLocation) {
+        cameraPosition = GMSCameraPosition.camera(
+            withLatitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            zoom: 15
+        )
         forceCameraUpdate = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            forceCameraUpdate = false
+        }
+    }
+
+    private func locateMe() {
+        let bestLocation: CLLocation? = mapView?.myLocation ?? locationManager.location
+        if let location = bestLocation {
+            centerMapOnLocation(location)
+        } else {
+            shouldCenterWhenLocationArrives = true
+            locationManager.requestLocationPermission()
+            locationManager.requestLocation()
+        }
+    }
+
+    private func openInGoogleMaps(spot: NearbySpot) {
+        let urlString = "https://www.google.com/maps/search/?api=1&query=\(spot.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&query_place_id=\(spot.placeId)"
+        if let url = URL(string: urlString) {
+            UIApplication.shared.open(url)
+        }
     }
 }
 

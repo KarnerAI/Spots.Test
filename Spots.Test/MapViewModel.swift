@@ -64,6 +64,9 @@ class MapViewModel: ObservableObject {
     /// Task handle for the background image upload so we can cancel on new fetch
     private var imageUploadTask: Task<Void, Never>?
 
+    /// Tracks place IDs with in-flight photo resolution to avoid duplicate requests
+    private var photoResolutionInFlight: Set<String> = []
+
     /// Cache for rendered marker icons keyed by list type (e.g. "starred", "favorites", "bucketList")
     private var cachedMarkerIcons: [String: UIImage] = [:]
     
@@ -171,37 +174,20 @@ class MapViewModel: ObservableObject {
     }
     
     func centerOnLocation(_ location: CLLocation) {
-        // #region agent log
-        print("🔴 DEBUG: centerOnLocation called for lat=\(location.coordinate.latitude), lng=\(location.coordinate.longitude)")
-        // #endregion
-        
         let position = GMSCameraPosition.camera(
             withLatitude: location.coordinate.latitude,
             longitude: location.coordinate.longitude,
             zoom: 17.0  // Building-level detail
         )
-        
-        // #region agent log
-        print("🔴 DEBUG: About to set cameraPosition to lat=\(position.target.latitude), lng=\(position.target.longitude), zoom=\(position.zoom)")
-        // #endregion
-        
+
         // Force camera update to bypass threshold check
         forceCameraUpdate = true
         cameraPosition = position
-        
+
         // Reset force flag after a brief delay to allow updateUIView to process it
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.forceCameraUpdate = false
         }
-        
-        // #region agent log
-        print("🔴 DEBUG: cameraPosition SET to lat=\(position.target.latitude), lng=\(position.target.longitude), zoom=\(position.zoom), forceCameraUpdate=true")
-        if let camPos = cameraPosition {
-            print("🔴 DEBUG: cameraPosition VERIFIED = lat=\(camPos.target.latitude), lng=\(camPos.target.longitude), zoom=\(camPos.zoom)")
-        } else {
-            print("🔴 DEBUG: cameraPosition is NIL after setting!")
-        }
-        // #endregion
     }
     
     // MARK: - Viewport and Visibility Helpers
@@ -393,37 +379,54 @@ class MapViewModel: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
-                // Lazily resolve photo references for spots that still don't have one.
-                // This replaces getting photos from the Nearby Search field mask.
+                // Resolve photo references only for the first few visible spots upfront.
+                // Remaining spots are resolved on-demand via resolvePhotoReferenceIfNeeded()
+                // when the user scrolls to them in the carousel.
+                let prefetchCount = 3
                 var resolvedSpots = spotsToUpload
-                let unresolvedIds = resolvedSpots.enumerated()
+                let unresolvedIds = Array(resolvedSpots.enumerated()
                     .filter { $0.element.photoReference == nil }
-                    .map { $0.offset }
-                
+                    .prefix(prefetchCount)
+                    .map { $0.offset })
+
+                // Accumulate resolved refs locally (no @Published mutations yet)
+                var resolvedRefs: [String: String] = [:]
                 for idx in unresolvedIds {
                     guard !Task.isCancelled else { return }
                     if let details = try? await placesAPIService.fetchPlaceDetails(placeId: resolvedSpots[idx].placeId),
                        let ref = details.photoReference {
                         resolvedSpots[idx].photoReference = ref
-                        // Also update the in-memory array so the card can render
-                        if let liveIdx = nearbySpots.firstIndex(where: { $0.placeId == resolvedSpots[idx].placeId }) {
-                            nearbySpots[liveIdx].photoReference = ref
-                        }
+                        resolvedRefs[resolvedSpots[idx].placeId] = ref
                     }
                 }
 
                 guard !Task.isCancelled else { return }
 
-                let uploadedUrls = await placesAPIService.uploadSpotImages(spots: resolvedSpots)
+                // Persist resolved photo references to Supabase
+                let spotsWithNewRefs = resolvedSpots.filter { resolvedRefs[$0.placeId] != nil }
+                if !spotsWithNewRefs.isEmpty {
+                    await placesAPIService.bulkUpsertSpots(spotsWithNewRefs)
+                }
+
+                // Only upload images for spots that have a photo reference (prefetched ones)
+                let spotsForImageUpload = resolvedSpots.filter { $0.photoReference != nil || $0.photoUrl != nil }
+                let uploadedUrls = await placesAPIService.uploadSpotImages(spots: spotsForImageUpload)
 
                 guard !Task.isCancelled else { return }
 
-                if !uploadedUrls.isEmpty {
-                    for (placeId, url) in uploadedUrls {
-                        if let index = nearbySpots.firstIndex(where: { $0.placeId == placeId }) {
-                            nearbySpots[index].photoUrl = url
+                // Single batch update to nearbySpots (one @Published notification)
+                if !resolvedRefs.isEmpty || !uploadedUrls.isEmpty {
+                    var updatedSpots = nearbySpots
+                    for i in updatedSpots.indices {
+                        let pid = updatedSpots[i].placeId
+                        if let ref = resolvedRefs[pid] {
+                            updatedSpots[i].photoReference = ref
+                        }
+                        if let url = uploadedUrls[pid] {
+                            updatedSpots[i].photoUrl = url
                         }
                     }
+                    nearbySpots = updatedSpots
                 }
             }
             
@@ -440,6 +443,43 @@ class MapViewModel: ObservableObject {
         await fetchNearbySpots(refresh: false)
     }
     
+    /// Resolves photo reference for a single spot on-demand (called when a carousel card scrolls into view).
+    /// Skips if the spot already has photo data or if a resolution is already in-flight.
+    func resolvePhotoReferenceIfNeeded(for placeId: String) {
+        guard let idx = nearbySpots.firstIndex(where: { $0.placeId == placeId }),
+              nearbySpots[idx].photoReference == nil,
+              nearbySpots[idx].photoUrl == nil,
+              !photoResolutionInFlight.contains(placeId) else { return }
+
+        photoResolutionInFlight.insert(placeId)
+
+        Task {
+            defer { photoResolutionInFlight.remove(placeId) }
+
+            guard let details = try? await placesAPIService.fetchPlaceDetails(placeId: placeId),
+                  let ref = details.photoReference else { return }
+
+            // Update the spot with the resolved reference
+            if let liveIdx = nearbySpots.firstIndex(where: { $0.placeId == placeId }) {
+                nearbySpots[liveIdx].photoReference = ref
+            }
+
+            // Persist to Supabase so future sessions don't re-fetch
+            if let spot = nearbySpots.first(where: { $0.placeId == placeId }) {
+                await placesAPIService.bulkUpsertSpots([spot])
+            }
+
+            // Upload the image and update the photo URL
+            if let spot = nearbySpots.first(where: { $0.placeId == placeId }) {
+                let urls = await placesAPIService.uploadSpotImages(spots: [spot])
+                if let url = urls[placeId],
+                   let finalIdx = nearbySpots.firstIndex(where: { $0.placeId == placeId }) {
+                    nearbySpots[finalIdx].photoUrl = url
+                }
+            }
+        }
+    }
+
     /// Selects a spot (e.g., when user taps a marker)
     func selectSpot(_ spot: NearbySpot) {
         selectedSpot = spot
@@ -671,82 +711,18 @@ class MapViewModel: ObservableObject {
         }
     }
     
-    /// Returns the appropriate icon based on list membership with priority: starred > favorites > bucket list.
-    /// Icons are cached after first render to avoid repeated UIGraphicsImageRenderer work on map redraws.
+    /// Returns the appropriate icon based on list membership. Delegates to MarkerIconHelper.
     private func iconForListTypes(_ listTypes: Set<ListType>) -> UIImage? {
-        // Priority order: starred (yellow) > favorites (red) > bucket list (blue)
-        let cacheKey: String
-        let systemName: String
-        let color: UIColor
-
-        if listTypes.contains(.starred) {
-            cacheKey = "starred"
-            systemName = "star.fill"
-            color = .listStarred
-        } else if listTypes.contains(.favorites) {
-            cacheKey = "favorites"
-            systemName = "heart.fill"
-            color = .listFavorites
-        } else if listTypes.contains(.bucketList) {
-            cacheKey = "bucketList"
-            systemName = "flag.fill"
-            color = .listBucketList
-        } else {
-            // Fallback - should not happen if spot is in at least one list
-            let tealColor = UIColor(red: 0.36, green: 0.69, blue: 0.72, alpha: 1.0)
-            return GMSMarker.markerImage(with: tealColor)
-        }
-
-        if let cached = cachedMarkerIcons[cacheKey] {
-            return cached
-        }
-        let icon = createCustomMarkerIcon(systemName: systemName, color: color)
-        if let icon = icon {
-            cachedMarkerIcons[cacheKey] = icon
-        }
-        return icon
+        MarkerIconHelper.iconForListTypes(listTypes, cache: &cachedMarkerIcons)
     }
-    
+
     private func createCustomMarkerIcon(systemName: String, color: UIColor) -> UIImage? {
-        // Create a circular background - sized to match Google Maps default markers
-        let size = CGSize(width: 28, height: 28)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        
-        return renderer.image { context in
-            // Draw circular background
-            let rect = CGRect(origin: .zero, size: size)
-            context.cgContext.setFillColor(color.cgColor)
-            context.cgContext.fillEllipse(in: rect)
-            
-            // Draw white border
-            context.cgContext.setStrokeColor(UIColor.white.cgColor)
-            context.cgContext.setLineWidth(1.5)
-            context.cgContext.strokeEllipse(in: rect.insetBy(dx: 0.75, dy: 0.75))
-            
-            // Draw white icon in center
-            if let icon = UIImage(systemName: systemName) {
-                let config = UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-                let configuredIcon = icon.withConfiguration(config)
-                    .withTintColor(.white, renderingMode: .alwaysOriginal)
-                let iconSize: CGFloat = 13
-                let iconRect = CGRect(
-                    x: (size.width - iconSize) / 2,
-                    y: (size.height - iconSize) / 2,
-                    width: iconSize,
-                    height: iconSize
-                )
-                configuredIcon.draw(in: iconRect)
-            }
-        }
+        MarkerIconHelper.createCustomMarkerIcon(systemName: systemName, color: color)
     }
-    
+
     /// Scales an image by the given scale factor
     private func scaleImage(_ image: UIImage, to scale: CGFloat) -> UIImage {
-        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: newSize))
-        }
+        MarkerIconHelper.scaleImage(image, to: scale)
     }
     
     // MARK: - Dynamic Radius

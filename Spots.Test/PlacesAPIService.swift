@@ -36,6 +36,7 @@ class PlacesAPIService {
     /// Key: normalized "\(query)_\(roundedLat)_\(roundedLng)", Value: (results, timestamp)
     private var autocompleteCache: [String: (results: [PlaceAutocompleteResult], timestamp: Date)] = [:]
     private let autocompleteCacheTTL: TimeInterval = 180 // 3 minutes
+    private let persistentAutocompleteTTL: TimeInterval = 7 * 24 * 3600 // 1 week
 
     /// Builds a cache key for the autocomplete request, rounding coordinates to 3 decimals
     private func autocompleteCacheKey(query: String, location: CLLocation?) -> String {
@@ -43,6 +44,59 @@ class PlacesAPIService {
         let lat = (loc.coordinate.latitude * 1000).rounded() / 1000
         let lng = (loc.coordinate.longitude * 1000).rounded() / 1000
         return "\(query.lowercased().trimmingCharacters(in: .whitespaces))_\(lat)_\(lng)"
+    }
+
+    // MARK: - Persistent Autocomplete Cache
+
+    /// Row format for the autocomplete_cache Supabase table
+    private struct AutocompleteCacheRow: Codable {
+        let cache_key: String
+        let results_json: String
+        let expires_at: String
+    }
+
+    /// Fetches cached autocomplete results from Supabase if they exist and haven't expired.
+    private func getPersistentAutocompleteResults(cacheKey: String) async -> [PlaceAutocompleteResult]? {
+        do {
+            let supabase = SupabaseManager.shared.client
+            let now = ISO8601DateFormatter().string(from: Date())
+
+            let response: [AutocompleteCacheRow] = try await supabase
+                .from("autocomplete_cache")
+                .select()
+                .eq("cache_key", value: cacheKey)
+                .greaterThan("expires_at", value: now)
+                .limit(1)
+                .execute()
+                .value
+
+            guard let row = response.first,
+                  let jsonData = row.results_json.data(using: .utf8) else { return nil }
+
+            return try JSONDecoder().decode([PlaceAutocompleteResult].self, from: jsonData)
+        } catch {
+            print("Autocomplete persistent cache fetch error: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Persists autocomplete results to Supabase with a 1-week TTL.
+    private func persistAutocompleteResults(cacheKey: String, results: [PlaceAutocompleteResult]) async {
+        do {
+            let jsonData = try JSONEncoder().encode(results)
+            guard let jsonString = String(data: jsonData, encoding: .utf8) else { return }
+
+            let expiresAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(persistentAutocompleteTTL))
+            let row = AutocompleteCacheRow(cache_key: cacheKey, results_json: jsonString, expires_at: expiresAt)
+
+            let supabase = SupabaseManager.shared.client
+            try await supabase
+                .from("autocomplete_cache")
+                .upsert(row)
+                .execute()
+        } catch {
+            print("Autocomplete persistent cache persist error: \(error.localizedDescription)")
+        }
     }
 
     private init() {}
@@ -57,34 +111,46 @@ class PlacesAPIService {
         location: CLLocation? = nil,
         completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
     ) {
-        // Check cache first
+        // 1. Check in-memory cache first
         let cacheKey = autocompleteCacheKey(query: query, location: location)
         if let cached = autocompleteCache[cacheKey],
            Date().timeIntervalSince(cached.timestamp) < autocompleteCacheTTL {
-            print("Places API: Cache hit for '\(query)' (\(cached.results.count) results)")
+            print("Places API: In-memory cache hit for '\(query)' (\(cached.results.count) results)")
             completion(.success(cached.results))
             return
         }
 
-        // Single request with 10km radius
-        performAutocompleteRequest(query: query, location: location, radius: 10000.0) { [weak self] result in
-            switch result {
-            case .success(let results):
-                print("Places API: Request returned \(results.count) results")
-                if let location = location {
-                    self?.sortResultsByDistance(results, userLocation: location) { sortedResults in
-                        let limited = Array(sortedResults.prefix(10))
-                        // Store in cache
+        // 2. Check persistent (Supabase) cache, then fall through to API
+        Task { [weak self] in
+            if let persistedResults = await self?.getPersistentAutocompleteResults(cacheKey: cacheKey) {
+                print("Places API: Persistent cache hit for '\(query)' (\(persistedResults.count) results)")
+                self?.autocompleteCache[cacheKey] = (results: persistedResults, timestamp: Date())
+                await MainActor.run { completion(.success(persistedResults)) }
+                return
+            }
+
+            // 3. No cache hit — make the API call
+            self?.performAutocompleteRequest(query: query, location: location, radius: 10000.0) { [weak self] result in
+                switch result {
+                case .success(let results):
+                    print("Places API: Request returned \(results.count) results")
+                    if let location = location {
+                        self?.sortResultsByDistance(results, userLocation: location) { sortedResults in
+                            let limited = Array(sortedResults.prefix(10))
+                            self?.autocompleteCache[cacheKey] = (results: limited, timestamp: Date())
+                            // Persist to Supabase for future sessions
+                            Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                            completion(.success(limited))
+                        }
+                    } else {
+                        let limited = Array(results.prefix(10))
                         self?.autocompleteCache[cacheKey] = (results: limited, timestamp: Date())
+                        Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
                         completion(.success(limited))
                     }
-                } else {
-                    let limited = Array(results.prefix(10))
-                    self?.autocompleteCache[cacheKey] = (results: limited, timestamp: Date())
-                    completion(.success(limited))
+                case .failure(let error):
+                    completion(.failure(error))
                 }
-            case .failure(let error):
-                completion(.failure(error))
             }
         }
     }
