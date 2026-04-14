@@ -35,8 +35,27 @@ class PlacesAPIService {
     /// In-memory cache for autocomplete results to avoid duplicate API calls during active typing.
     /// Key: normalized "\(query)_\(roundedLat)_\(roundedLng)", Value: (results, timestamp)
     private var autocompleteCache: [String: (results: [PlaceAutocompleteResult], timestamp: Date)] = [:]
+    private let autocompleteCacheQueue = DispatchQueue(label: "places.autocompleteCache")
     private let autocompleteCacheTTL: TimeInterval = 180 // 3 minutes
+    private let autocompleteCacheMaxEntries = 100
     private let persistentAutocompleteTTL: TimeInterval = 7 * 24 * 3600 // 1 week
+
+    /// Thread-safe read from autocomplete cache.
+    private func cachedAutocompleteResult(for key: String) -> (results: [PlaceAutocompleteResult], timestamp: Date)? {
+        autocompleteCacheQueue.sync { autocompleteCache[key] }
+    }
+
+    /// Thread-safe write to autocomplete cache with eviction.
+    private func setAutocompleteCacheEntry(key: String, results: [PlaceAutocompleteResult]) {
+        autocompleteCacheQueue.sync {
+            // Evict oldest if at capacity
+            if autocompleteCache.count >= autocompleteCacheMaxEntries,
+               let oldestKey = autocompleteCache.min(by: { $0.value.timestamp < $1.value.timestamp })?.key {
+                autocompleteCache.removeValue(forKey: oldestKey)
+            }
+            autocompleteCache[key] = (results: results, timestamp: Date())
+        }
+    }
 
     /// Builds a cache key for the autocomplete request, rounding coordinates to 3 decimals
     private func autocompleteCacheKey(query: String, location: CLLocation?) -> String {
@@ -59,7 +78,7 @@ class PlacesAPIService {
     private func getPersistentAutocompleteResults(cacheKey: String) async -> [PlaceAutocompleteResult]? {
         do {
             let supabase = SupabaseManager.shared.client
-            let now = ISO8601DateFormatter().string(from: Date())
+            let now = ISO8601DateFormatter.fractionalSeconds.string(from: Date())
 
             let response: [AutocompleteCacheRow] = try await supabase
                 .from("autocomplete_cache")
@@ -86,7 +105,7 @@ class PlacesAPIService {
             let jsonData = try JSONEncoder().encode(results)
             guard let jsonString = String(data: jsonData, encoding: .utf8) else { return }
 
-            let expiresAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(persistentAutocompleteTTL))
+            let expiresAt = ISO8601DateFormatter.fractionalSeconds.string(from: Date().addingTimeInterval(persistentAutocompleteTTL))
             let row = AutocompleteCacheRow(cache_key: cacheKey, results_json: jsonString, expires_at: expiresAt)
 
             let supabase = SupabaseManager.shared.client
@@ -101,19 +120,68 @@ class PlacesAPIService {
 
     private init() {}
 
+    // MARK: - Autocomplete (async/await)
+
     /// Performs autocomplete search for places using a single 10km radius request with response caching.
-    /// - Parameters:
-    ///   - query: The search query text
-    ///   - location: Optional user location for location bias
-    ///   - completion: Completion handler with results or error
+    /// This is the primary API. The callback-based overload below delegates to this method.
+    func autocomplete(
+        query: String,
+        location: CLLocation? = nil
+    ) async throws -> [PlaceAutocompleteResult] {
+        // 1. Check in-memory cache first (thread-safe)
+        let cacheKey = autocompleteCacheKey(query: query, location: location)
+        if let cached = cachedAutocompleteResult(for: cacheKey),
+           Date().timeIntervalSince(cached.timestamp) < autocompleteCacheTTL {
+            print("Places API: In-memory cache hit for '\(query)' (\(cached.results.count) results)")
+            return cached.results
+        }
+
+        // 2. Check persistent (Supabase) cache
+        if let persistedResults = await getPersistentAutocompleteResults(cacheKey: cacheKey) {
+            print("Places API: Persistent cache hit for '\(query)' (\(persistedResults.count) results)")
+            setAutocompleteCacheEntry(key: cacheKey, results: persistedResults)
+            return persistedResults
+        }
+
+        // 3. No cache hit — make the API call
+        let results: [PlaceAutocompleteResult] = try await withCheckedThrowingContinuation { continuation in
+            performAutocompleteRequest(query: query, location: location, radius: 10000.0) { result in
+                continuation.resume(with: result)
+            }
+        }
+
+        print("Places API: Request returned \(results.count) results")
+
+        // Sort by distance if location available
+        let sorted: [PlaceAutocompleteResult]
+        if let location = location {
+            sorted = await withCheckedContinuation { continuation in
+                sortResultsByDistance(results, userLocation: location) { sortedResults in
+                    continuation.resume(returning: sortedResults)
+                }
+            }
+        } else {
+            sorted = results
+        }
+
+        let limited = Array(sorted.prefix(10))
+        setAutocompleteCacheEntry(key: cacheKey, results: limited)
+        // Persist to Supabase for future sessions
+        await persistAutocompleteResults(cacheKey: cacheKey, results: limited)
+        return limited
+    }
+
+    // MARK: - Autocomplete (callback wrapper)
+
+    /// Callback-based overload for backward compatibility. Delegates to the async version.
     func autocomplete(
         query: String,
         location: CLLocation? = nil,
         completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
     ) {
-        // 1. Check in-memory cache first
+        // 1. Check in-memory cache first (thread-safe)
         let cacheKey = autocompleteCacheKey(query: query, location: location)
-        if let cached = autocompleteCache[cacheKey],
+        if let cached = cachedAutocompleteResult(for: cacheKey),
            Date().timeIntervalSince(cached.timestamp) < autocompleteCacheTTL {
             print("Places API: In-memory cache hit for '\(query)' (\(cached.results.count) results)")
             completion(.success(cached.results))
@@ -124,7 +192,7 @@ class PlacesAPIService {
         Task { [weak self] in
             if let persistedResults = await self?.getPersistentAutocompleteResults(cacheKey: cacheKey) {
                 print("Places API: Persistent cache hit for '\(query)' (\(persistedResults.count) results)")
-                self?.autocompleteCache[cacheKey] = (results: persistedResults, timestamp: Date())
+                self?.setAutocompleteCacheEntry(key: cacheKey, results: persistedResults)
                 await MainActor.run { completion(.success(persistedResults)) }
                 return
             }
@@ -137,14 +205,14 @@ class PlacesAPIService {
                     if let location = location {
                         self?.sortResultsByDistance(results, userLocation: location) { sortedResults in
                             let limited = Array(sortedResults.prefix(10))
-                            self?.autocompleteCache[cacheKey] = (results: limited, timestamp: Date())
+                            self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
                             // Persist to Supabase for future sessions
                             Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
                             completion(.success(limited))
                         }
                     } else {
                         let limited = Array(results.prefix(10))
-                        self?.autocompleteCache[cacheKey] = (results: limited, timestamp: Date())
+                        self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
                         Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
                         completion(.success(limited))
                     }
@@ -478,7 +546,9 @@ class PlacesAPIService {
         // Convert API results to NearbySpot models
         var spots = nearbyResponse.places?.compactMap { $0.toNearbySpot() } ?? []
         
+        #if DEBUG
         print("📸 PlacesAPIService: Converted \(spots.count) spots. Spots with photos: \(spots.filter { $0.photoReference != nil }.count)")
+        #endif
         
         // Calculate distance for each spot and sort by distance
         spots = spots.map { $0.withDistance(from: location) }
@@ -501,15 +571,28 @@ class PlacesAPIService {
         return URL(string: urlString)
     }
     
+    /// In-memory cache for place details to avoid repeated API calls for the same POI.
+    private var placeDetailsCache: [String: NearbySpot] = [:]
+    private let placeDetailsCacheMaxEntries = 50
+
     /// Fetches place details by placeId from Google Places API
     /// Used for getting details of tapped POI markers
     /// - Parameter placeId: The Google Place ID
     /// - Returns: NearbySpot with full details, or nil if not found
     func fetchPlaceDetails(placeId: String) async throws -> NearbySpot? {
+        if let cached = placeDetailsCache[placeId] {
+            return cached
+        }
+        if let dbCached = await getCachedSpot(placeId: placeId) {
+            evictPlaceDetailsCacheIfNeeded()
+            placeDetailsCache[placeId] = dbCached
+            return dbCached
+        }
+
         guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
             throw PlacesAPIError.apiKeyNotConfigured
         }
-        
+
         let urlString = "https://places.googleapis.com/v1/places/\(placeId)"
         guard let url = URL(string: urlString) else {
             throw PlacesAPIError.invalidURL
@@ -563,8 +646,19 @@ class PlacesAPIService {
         
         let decoder = JSONDecoder()
         let placeResponse = try decoder.decode(PlaceDetailsResponse.self, from: data)
-        
-        return placeResponse.toNearbySpot()
+        let spot = placeResponse.toNearbySpot()
+        evictPlaceDetailsCacheIfNeeded()
+        if let spot = spot {
+            placeDetailsCache[placeId] = spot
+        }
+        return spot
+    }
+
+    private func evictPlaceDetailsCacheIfNeeded() {
+        guard placeDetailsCache.count >= placeDetailsCacheMaxEntries else { return }
+        if let keyToRemove = placeDetailsCache.keys.first {
+            placeDetailsCache.removeValue(forKey: keyToRemove)
+        }
     }
 }
 
@@ -698,8 +792,10 @@ extension PlacesAPIService {
         for result in resultsToFetch {
             // Check cache first — skip API call if we already have coordinates
             if let cached = coordinateCache[result.placeId] {
+                group.enter()
                 queue.async {
                     resultsWithCoordinates.append(result.withCoordinate(cached))
+                    group.leave()
                 }
                 continue
             }
@@ -716,11 +812,15 @@ extension PlacesAPIService {
             }
         }
 
-        group.notify(queue: .main) {
+        // Run final assembly on the serial queue so we read resultsWithCoordinates on the same thread that wrote it, then deliver on main.
+        group.notify(queue: queue) {
             let resultsWithoutCoordinates = results.filter { result in
                 !resultsToFetch.contains { $0.placeId == result.placeId }
             }
-            completion(resultsWithCoordinates + resultsWithoutCoordinates)
+            let finalResults = resultsWithCoordinates + resultsWithoutCoordinates
+            DispatchQueue.main.async {
+                completion(finalResults)
+            }
         }
     }
 
@@ -782,12 +882,17 @@ extension PlacesAPIService {
     private static let maxConcurrentUploads = 3
 
     func uploadSpotImages(spots: [NearbySpot]) async -> [String: String] {
-        // Filter to spots that need uploading
+        let placeIdsWithPhoto = spots.compactMap { $0.photoReference != nil ? $0.placeId : nil }
+        guard !placeIdsWithPhoto.isEmpty else { return [:] }
+
+        let existingUrls = await getCachedPhotoUrls(placeIds: placeIdsWithPhoto)
         var spotsToUpload: [(spot: NearbySpot, photoReference: String)] = []
         for spot in spots {
             guard let photoReference = spot.photoReference else { continue }
-            if await checkPhotoExists(placeId: spot.placeId) {
+            if existingUrls[spot.placeId] != nil {
+                #if DEBUG
                 print("✅ PlacesAPIService: Photo already cached for \(spot.name)")
+                #endif
                 continue
             }
             spotsToUpload.append((spot, photoReference))
@@ -854,7 +959,7 @@ extension PlacesAPIService {
                 latitude: spot.latitude,
                 longitude: spot.longitude,
                 photo_reference: spot.photoReference,
-                updated_at: ISO8601DateFormatter().string(from: Date())
+                updated_at: ISO8601DateFormatter.fractionalSeconds.string(from: Date())
             )
         }
         
@@ -1018,16 +1123,16 @@ extension PlacesAPIService {
             longitude: spot.longitude,
             photo_url: photoUrl,
             photo_reference: photoReference,
-            updated_at: ISO8601DateFormatter().string(from: Date())
+            updated_at: ISO8601DateFormatter.fractionalSeconds.string(from: Date())
         )
-        
+
         do {
             let supabase = SupabaseManager.shared.client
             try await supabase
                 .from("spots")
                 .upsert(row)
                 .execute()
-            
+
             print("✅ PlacesAPIService: Upserted spot with photo URL for \(spot.placeId)")
         } catch {
             print("❌ PlacesAPIService: Error upserting spot with photo: \(error.localizedDescription)")

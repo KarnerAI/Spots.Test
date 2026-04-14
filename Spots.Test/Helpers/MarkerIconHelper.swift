@@ -55,9 +55,9 @@ enum MarkerIconHelper {
         return icon
     }
 
-    /// Renders a 28×28 circular icon with a colored fill, white border, and a white SF Symbol.
+    /// Renders a 32×32 circular icon with a colored fill, white border, and a white SF Symbol.
     static func createCustomMarkerIcon(systemName: String, color: UIColor) -> UIImage? {
-        let size = CGSize(width: 28, height: 28)
+        let size = CGSize(width: 32, height: 32)
         let renderer = UIGraphicsImageRenderer(size: size)
 
         return renderer.image { context in
@@ -69,15 +69,15 @@ enum MarkerIconHelper {
 
             // White border
             context.cgContext.setStrokeColor(UIColor.white.cgColor)
-            context.cgContext.setLineWidth(1.5)
-            context.cgContext.strokeEllipse(in: rect.insetBy(dx: 0.75, dy: 0.75))
+            context.cgContext.setLineWidth(2.0)
+            context.cgContext.strokeEllipse(in: rect.insetBy(dx: 1.0, dy: 1.0))
 
             // White SF Symbol centered in circle
             if let icon = UIImage(systemName: systemName) {
-                let config = UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+                let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                 let configuredIcon = icon.withConfiguration(config)
                     .withTintColor(.white, renderingMode: .alwaysOriginal)
-                let iconSize: CGFloat = 13
+                let iconSize: CGFloat = 14
                 let iconRect = CGRect(
                     x: (size.width - iconSize) / 2,
                     y: (size.height - iconSize) / 2,

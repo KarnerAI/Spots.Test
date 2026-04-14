@@ -10,9 +10,12 @@ import Supabase
 
 class LocationSavingService {
     static let shared = LocationSavingService()
-    
+
     private let supabase = SupabaseManager.shared.client
-    
+
+    /// PlaceIds whose image fetch failed, so backfillMissingImages can retry them.
+    private var failedImageFetchPlaceIds: Set<String> = []
+
     private init() {}
     
     // MARK: - Lists
@@ -243,19 +246,10 @@ class LocationSavingService {
             .execute()
             .value
 
-        let spotDateFormatter = ISO8601DateFormatter()
-        spotDateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let spotFallbackFormatter = ISO8601DateFormatter()
-        spotFallbackFormatter.formatOptions = [.withInternetDateTime]
-
         var spotsMap: [String: Spot] = [:]
         for spotData in batchResponse {
-            let createdAt = spotData.created_at.flatMap {
-                spotDateFormatter.date(from: $0) ?? spotFallbackFormatter.date(from: $0)
-            }
-            let updatedAt = spotData.updated_at.flatMap {
-                spotDateFormatter.date(from: $0) ?? spotFallbackFormatter.date(from: $0)
-            }
+            let createdAt = spotData.created_at.flatMap { SharedFormatters.date(from: $0) }
+            let updatedAt = spotData.updated_at.flatMap { SharedFormatters.date(from: $0) }
             spotsMap[spotData.place_id] = Spot(
                 placeId: spotData.place_id,
                 name: spotData.name,
@@ -270,35 +264,49 @@ class LocationSavingService {
                 updatedAt: updatedAt
             )
         }
-        
+
+        // Collect (placeId, photoReference) for spots that need image fetch (bounded concurrency later)
+        let toFetch: [(String, String)] = spotsMap.compactMap { placeId, spot in
+            guard spot.photoUrl == nil, let ref = spot.photoReference else { return nil }
+            return (placeId, ref)
+        }
+
         // Transform to SpotWithMetadata
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        
-        let fallbackFormatter = ISO8601DateFormatter()
-        fallbackFormatter.formatOptions = [.withInternetDateTime]
-        
         let spots = listItems.compactMap { item -> SpotWithMetadata? in
             guard let spot = spotsMap[item.spot_id] else {
                 return nil
             }
-            
-            let savedAt = dateFormatter.date(from: item.saved_at) ?? fallbackFormatter.date(from: item.saved_at)
-            guard let savedAt = savedAt else {
+
+            guard let savedAt = SharedFormatters.date(from: item.saved_at) else {
                 print("Warning: Could not parse saved_at: \(item.saved_at)")
                 return nil
-            }
-            
-            // Lazy-load image in background for spots that have a photo_reference but no cached photo_url
-            if spot.photoUrl == nil, let photoRef = spot.photoReference {
-                Task {
-                    await fetchAndUpdateSpotImage(placeId: spot.placeId, photoReference: photoRef)
-                }
             }
 
             return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: [listType])
         }
-        
+
+        // Lazy-load images in background with bounded concurrency (max 4 at a time)
+        if !toFetch.isEmpty {
+            Task { [weak self] in
+                guard let self else { return }
+                let maxConcurrent = 4
+                for batchStart in stride(from: 0, to: toFetch.count, by: maxConcurrent) {
+                    let batch = Array(toFetch[batchStart ..< min(batchStart + maxConcurrent, toFetch.count)])
+                    await withTaskGroup(of: Void.self) { group in
+                        for (placeId, photoRef) in batch {
+                            group.addTask { [weak self] in
+                                guard let self else { return }
+                                let success = await self.fetchAndUpdateSpotImage(placeId: placeId, photoReference: photoRef)
+                                if !success {
+                                    self.failedImageFetchPlaceIds.insert(placeId)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         return spots
     }
     
@@ -360,19 +368,10 @@ class LocationSavingService {
             .execute()
             .value
 
-        let spotDateFormatter = ISO8601DateFormatter()
-        spotDateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let spotFallbackFormatter = ISO8601DateFormatter()
-        spotFallbackFormatter.formatOptions = [.withInternetDateTime]
-
         var spotsMap: [String: Spot] = [:]
         for spotData in batchResponse {
-            let createdAt = spotData.created_at.flatMap {
-                spotDateFormatter.date(from: $0) ?? spotFallbackFormatter.date(from: $0)
-            }
-            let updatedAt = spotData.updated_at.flatMap {
-                spotDateFormatter.date(from: $0) ?? spotFallbackFormatter.date(from: $0)
-            }
+            let createdAt = spotData.created_at.flatMap { SharedFormatters.date(from: $0) }
+            let updatedAt = spotData.updated_at.flatMap { SharedFormatters.date(from: $0) }
             spotsMap[spotData.place_id] = Spot(
                 placeId: spotData.place_id,
                 name: spotData.name,
@@ -388,18 +387,12 @@ class LocationSavingService {
             )
         }
 
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fallbackFormatter = ISO8601DateFormatter()
-        fallbackFormatter.formatOptions = [.withInternetDateTime]
-
         // Deduplicate: for each place_id, keep the most recent saved_at and union all listTypes
         var bestSavedAt: [String: Date] = [:]
         var listTypesPerSpot: [String: Set<ListType>] = [:]
 
         for item in allItems {
-            let savedAt = dateFormatter.date(from: item.saved_at) ?? fallbackFormatter.date(from: item.saved_at)
-            guard let savedAt else { continue }
+            guard let savedAt = SharedFormatters.date(from: item.saved_at) else { continue }
 
             if bestSavedAt[item.spot_id] == nil {
                 bestSavedAt[item.spot_id] = savedAt
@@ -462,18 +455,8 @@ class LocationSavingService {
             return nil
         }
 
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        let fallbackFormatter = ISO8601DateFormatter()
-        fallbackFormatter.formatOptions = [.withInternetDateTime]
-
-        let createdAt = spotData.created_at.flatMap {
-            dateFormatter.date(from: $0) ?? fallbackFormatter.date(from: $0)
-        }
-        let updatedAt = spotData.updated_at.flatMap {
-            dateFormatter.date(from: $0) ?? fallbackFormatter.date(from: $0)
-        }
+        let createdAt = spotData.created_at.flatMap { SharedFormatters.date(from: $0) }
+        let updatedAt = spotData.updated_at.flatMap { SharedFormatters.date(from: $0) }
 
         return Spot(
             placeId: spotData.place_id,
@@ -753,6 +736,7 @@ class LocationSavingService {
                 .eq("place_id", value: placeId)
                 .execute()
             print("✅ LocationSavingService: Successfully updated image for \(placeId)")
+            failedImageFetchPlaceIds.remove(placeId)
             return true
         } catch {
             print("❌ LocationSavingService: Error updating spot with photo URL: \(error.localizedDescription)")
@@ -775,7 +759,7 @@ class LocationSavingService {
             return (0, 0, 0)
         }
 
-        let needsBackfill = allSpots.map(\.spot).filter { $0.photoUrl == nil }
+        let needsBackfill = allSpots.map(\.spot).filter { $0.photoUrl == nil || failedImageFetchPlaceIds.contains($0.placeId) }
 
         guard !needsBackfill.isEmpty else {
             print("✅ LocationSavingService: No spots need image backfill")

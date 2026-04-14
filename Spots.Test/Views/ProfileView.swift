@@ -72,6 +72,8 @@ struct ProfileView: View {
     @State private var coverImage: UIImage?
     @State private var listTiles: [ListTileData] = []
     @State private var showCoverPicker = false
+    @State private var showErrorToast = false
+    @State private var errorToastMessage = ""
 
     private let coverHeight: CGFloat = 260
     private let cardOverlap: CGFloat = 30
@@ -121,6 +123,24 @@ struct ProfileView: View {
                     }
                 }
                 .environmentObject(viewModel)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if showErrorToast {
+                Text(errorToastMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(8)
+                    .padding(.bottom, 16)
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                            withAnimation { showErrorToast = false }
+                        }
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
     }
@@ -187,6 +207,10 @@ struct ProfileView: View {
             saveSnapshotToCache()
         } catch {
             print("⚠️ ProfileView: Could not load most explored city: \(error.localizedDescription)")
+            await MainActor.run {
+                errorToastMessage = "Could not load city data"
+                showErrorToast = true
+            }
         }
     }
 
@@ -256,6 +280,10 @@ struct ProfileView: View {
             saveSnapshotToCache()
         } catch {
             print("⚠️ ProfileView: Could not load list tiles: \(error.localizedDescription)")
+            await MainActor.run {
+                errorToastMessage = "Could not load some profile data"
+                showErrorToast = true
+            }
         }
     }
 

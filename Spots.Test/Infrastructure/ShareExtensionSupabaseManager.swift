@@ -15,14 +15,11 @@ class ShareExtensionSupabaseManager {
     let client: SupabaseClient
     
     private init() {
-        let supabaseURLString = "https://dirqixrgkcdpixmriyge.supabase.co"
-        let supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpcnFpeHJna2NkcGl4bXJpeWdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDQ5OTksImV4cCI6MjA4MjEyMDk5OX0.vi1r1eS0PqYxFHzsHOUv1_lifZgUadxklVehOtN_OMw"
-        
-        guard let supabaseURL = URL(string: supabaseURLString) else {
-            fatalError("Invalid Supabase URL")
+        guard let supabaseURL = URL(string: Config.supabaseURL) else {
+            fatalError("Invalid Supabase URL: '\(Config.supabaseURL)'. Check SupabaseURL in Info.plist.")
         }
-        
-        client = SupabaseClient(supabaseURL: supabaseURL, supabaseKey: supabaseKey)
+
+        client = SupabaseClient(supabaseURL: supabaseURL, supabaseKey: Config.supabaseAnonKey)
         
         // Set session token from App Group if available
         if AppGroupManager.shared.getSessionToken() != nil {

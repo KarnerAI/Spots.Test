@@ -120,6 +120,10 @@ struct GoogleMapView: UIViewRepresentable {
         var lastCameraPosition: GMSCameraPosition?
         
         func mapView(_ mapView: GMSMapView, didChange position: GMSCameraPosition) {
+            // Intentionally not reporting here — updates only when idle to avoid 60fps @Published updates
+        }
+
+        func mapView(_ mapView: GMSMapView, idleAt position: GMSCameraPosition) {
             onCameraChanged?(position)
         }
         

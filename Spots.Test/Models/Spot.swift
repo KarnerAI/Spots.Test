@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct Spot: Codable, Identifiable {
+struct Spot: Codable, Identifiable, Equatable, Hashable {
     let placeId: String
     let name: String
     let address: String?

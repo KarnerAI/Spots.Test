@@ -79,6 +79,39 @@ struct Config {
         return ""
     }()
 
+    // MARK: - Supabase Configuration
+    //
+    // To set up your Supabase credentials:
+    // 1. Go to your Supabase Dashboard → Settings → API
+    // 2. Copy the Project URL and anon/public key
+    // 3. Add them to Info.plist as "SupabaseURL" and "SupabaseAnonKey" (String type)
+    //
+    // Alternatively, set via environment variables SUPABASE_URL and SUPABASE_ANON_KEY (for CI/CD)
+
+    static let supabaseURL: String = {
+        if let url = Bundle.main.object(forInfoDictionaryKey: "SupabaseURL") as? String,
+           !url.isEmpty {
+            return url
+        }
+        if let url = ProcessInfo.processInfo.environment["SUPABASE_URL"],
+           !url.isEmpty {
+            return url
+        }
+        fatalError("Supabase URL not configured. Add 'SupabaseURL' to Info.plist or set the SUPABASE_URL environment variable.")
+    }()
+
+    static let supabaseAnonKey: String = {
+        if let key = Bundle.main.object(forInfoDictionaryKey: "SupabaseAnonKey") as? String,
+           !key.isEmpty {
+            return key
+        }
+        if let key = ProcessInfo.processInfo.environment["SUPABASE_ANON_KEY"],
+           !key.isEmpty {
+            return key
+        }
+        fatalError("Supabase anon key not configured. Add 'SupabaseAnonKey' to Info.plist or set the SUPABASE_ANON_KEY environment variable.")
+    }()
+
     // MARK: - App Group Configuration
     // App Group identifier for sharing data between main app and share extension
     // This must match the App Group identifier configured in Xcode project settings

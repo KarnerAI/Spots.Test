@@ -11,22 +11,26 @@ struct MainTabView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = 1 // Default to Explore tab (index 1)
     @StateObject private var mapViewModel = MapViewModel()
-    
+    @StateObject private var locationSavingVM = LocationSavingViewModel()
+
     var body: some View {
         ZStack(alignment: .bottom) {
-            // Content views
-            Group {
-                if selectedTab == 0 {
-                    NewsFeedView()
-                } else if selectedTab == 1 {
-                    ExploreView(viewModel: mapViewModel)
-                } else {
-                    NavigationStack {
-                        ProfileView()
-                    }
+            // Content views — keep all alive to avoid recreating GMSMapView on tab switch
+            ZStack {
+                NewsFeedView()
+                    .opacity(selectedTab == 0 ? 1 : 0)
+                    .allowsHitTesting(selectedTab == 0)
+                ExploreView(viewModel: mapViewModel)
+                    .opacity(selectedTab == 1 ? 1 : 0)
+                    .allowsHitTesting(selectedTab == 1)
+                NavigationStack {
+                    ProfileView()
                 }
+                .opacity(selectedTab == 2 ? 1 : 0)
+                .allowsHitTesting(selectedTab == 2)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .environmentObject(locationSavingVM)
             
             // Custom bottom navigation bar
             VStack {

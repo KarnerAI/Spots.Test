@@ -9,7 +9,7 @@ import SwiftUI
 import Foundation
 import UIKit
 
-// #region agent log
+#if DEBUG
 func debugLog(_ message: String, data: [String: Any] = [:]) {
     let logPath = "/Users/shaon/Library/CloudStorage/GoogleDrive-hussain@karnerblu.com/Shared drives/6. Spots 2.0/3. Engineering/2. CodeBase/SpotsTest/Spots.Test/.cursor/debug.log"
     let logEntry: [String: Any] = [
@@ -20,16 +20,12 @@ func debugLog(_ message: String, data: [String: Any] = [:]) {
         "sessionId": "debug-session",
         "runId": "run1"
     ]
-    // Also print to console for debugging
     print("🔍 DEBUG: \(message) - \(data)")
-    
     if let jsonData = try? JSONSerialization.data(withJSONObject: logEntry),
        let jsonString = String(data: jsonData, encoding: .utf8) {
-        // Create directory if it doesn't exist
         let fileManager = FileManager.default
         let directory = (logPath as NSString).deletingLastPathComponent
         try? fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: nil)
-        
         if let fileHandle = FileHandle(forWritingAtPath: logPath) {
             fileHandle.seekToEndOfFile()
             fileHandle.write((jsonString + "\n").data(using: .utf8)!)
@@ -39,7 +35,7 @@ func debugLog(_ message: String, data: [String: Any] = [:]) {
         }
     }
 }
-// #endregion
+#endif
 
 struct CustomBottomNav: View {
     @Binding var selectedTab: Int
@@ -71,9 +67,9 @@ struct CustomBottomNav: View {
                     label: "Explore",
                     isSelected: selectedTab == 1,
                     action: {
-                        // #region agent log
+                        #if DEBUG
                         debugLog("Explore tab clicked", data: ["icon": "safari", "selectedTab": selectedTab, "hypothesisId": "A"])
-                        // #endregion
+                        #endif
                         selectedTab = 1
                         onTabChange(1)
                     }
@@ -125,11 +121,6 @@ struct TabButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
-        // #region agent log
-        .onAppear {
-            debugLog("TabButton view appeared", data: ["icon": icon, "label": label, "isSelected": isSelected, "hypothesisId": "C"])
-        }
-        // #endregion
     }
 }
 

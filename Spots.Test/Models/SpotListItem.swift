@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct SpotListItem: Codable, Identifiable {
+struct SpotListItem: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let spotId: String
     let listId: UUID
@@ -22,11 +22,11 @@ struct SpotListItem: Codable, Identifiable {
 }
 
 // Combined model for UI (spot + metadata)
-struct SpotWithMetadata: Identifiable {
+struct SpotWithMetadata: Identifiable, Equatable, Hashable {
     let spot: Spot
     let savedAt: Date
     let listTypes: Set<ListType>  // All lists this spot belongs to
-    
+
     var id: String { spot.id }
 }
 

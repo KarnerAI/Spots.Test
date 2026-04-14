@@ -14,8 +14,8 @@ class ImageStorageService {
     
     private let bucketName = "spot-images"
     private let supabaseClient = SupabaseManager.shared.client
-    /// Base URL for the Supabase project (matches SupabaseManager). Used to build public Storage URLs.
-    private let supabaseBaseURLString = "https://dirqixrgkcdpixmriyge.supabase.co"
+    /// Base URL for the Supabase project. Used to build public Storage URLs.
+    private var supabaseBaseURLString: String { Config.supabaseURL }
     
     private init() {}
     

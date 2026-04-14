@@ -76,7 +76,8 @@ class ShareViewController: UIViewController, NSExtensionRequestHandling {
     private func showConfirmationView(places: [PlaceAutocompleteResult], context: NSExtensionContext) {
         let confirmationView = ShareConfirmationView(
             places: places,
-            onSave: { placesToSave, selectedPlaceIds in
+            onSave: { [weak self] placesToSave, selectedPlaceIds in
+                guard let self else { return 0 }
                 return try await self.savePlaces(places: placesToSave, selectedPlaceIds: selectedPlaceIds, context: context)
             },
             onCancel: {

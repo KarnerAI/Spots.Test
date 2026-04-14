@@ -49,29 +49,30 @@ struct ListDetailView: View {
     @State private var mapView: GMSMapView? = nil
     @State private var selectedSpot: SpotWithMetadata? = nil
     @State private var markerIconCache: [String: UIImage] = [:]
-    @StateObject private var locationSavingVM = LocationSavingViewModel()
+    @EnvironmentObject var locationSavingVM: LocationSavingViewModel
     @State private var spotForSaving: NearbySpot? = nil
     @StateObject private var locationManager = LocationManager()
     @State private var spotToOpenInMaps: NearbySpot? = nil
     @State private var shouldCenterWhenLocationArrives = false
 
-    // MARK: - Computed
+    // Cached derived data (updated only when spots, searchText, or sortOrder change)
+    @State private var cachedSpotListTypeMap: [String: ListType] = [:]
+    @State private var cachedFilteredAndSortedSpots: [SpotWithMetadata] = []
 
-    /// Map placeId → list type for bookmark icon on floating card (uses first list type per spot).
-    private var spotListTypeMap: [String: ListType] {
-        Dictionary(
+    // MARK: - Computed (delegate to cache)
+    private var spotListTypeMap: [String: ListType] { cachedSpotListTypeMap }
+    private var filteredAndSortedSpots: [SpotWithMetadata] { cachedFilteredAndSortedSpots }
+
+    private func updateCachedSpots() {
+        cachedSpotListTypeMap = Dictionary(
             uniqueKeysWithValues: spots.compactMap { s in
                 s.listTypes.first.map { (s.spot.placeId, $0) }
             }
         )
-    }
-
-    private var filteredAndSortedSpots: [SpotWithMetadata] {
         let filtered = searchText.isEmpty
             ? spots
             : spots.filter { $0.spot.name.localizedCaseInsensitiveContains(searchText) }
-
-        return filtered.sorted { a, b in
+        cachedFilteredAndSortedSpots = filtered.sorted { a, b in
             switch sortOrder {
             case .dateNewest: return a.savedAt > b.savedAt
             case .dateOldest: return a.savedAt < b.savedAt
@@ -137,6 +138,9 @@ struct ListDetailView: View {
             shouldCenterWhenLocationArrives = false
             centerMapOnLocation(location)
         }
+        .onChange(of: spots) { _, _ in updateCachedSpots() }
+        .onChange(of: searchText) { _, _ in updateCachedSpots() }
+        .onChange(of: sortOrder) { _, _ in updateCachedSpots() }
         .task { await loadSpots() }
         .overlay {
             ZStack(alignment: .bottom) {
@@ -323,12 +327,13 @@ struct ListDetailView: View {
 
                 // Spot detail card (slides up when a marker is tapped) — matches Explore SpotCardView
                 if let spot = selectedSpot {
+                    let nearby = spot.toNearbySpot()
                     SpotCardView(
-                        spot: spot.toNearbySpot(),
+                        spot: nearby,
                         spotListTypeMap: spotListTypeMap,
                         hasLoadedSavedPlaces: true,
-                        onBookmarkTap: { spotForSaving = spot.toNearbySpot() },
-                        onCardTap: { spotToOpenInMaps = spot.toNearbySpot() }
+                        onBookmarkTap: { spotForSaving = nearby },
+                        onCardTap: { spotToOpenInMaps = nearby }
                     )
                     .frame(width: SpotCardView.cardWidth(for: UIScreen.main.bounds.width))
                     .padding(.horizontal, 16)
@@ -669,5 +674,6 @@ struct SavedSpotRow: View {
 #Preview {
     NavigationView {
         ListDetailView(title: "Starred", mode: .allSpots)
+            .environmentObject(LocationSavingViewModel())
     }
 }

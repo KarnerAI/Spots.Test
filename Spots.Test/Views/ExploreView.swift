@@ -10,9 +10,9 @@ import GoogleMaps
 
 struct ExploreView: View {
     @ObservedObject var viewModel: MapViewModel
+    @EnvironmentObject var locationSavingVM: LocationSavingViewModel
     @State private var showSearchView = false
     @State private var showFiltersPlaceholder = false
-    @StateObject private var locationSavingVM = LocationSavingViewModel()
     @State private var mapView: GMSMapView?
     @State private var markers: [GMSMarker] = []
 
@@ -54,11 +54,11 @@ struct ExploreView: View {
                     }
                 },
                 onCameraChanged: { position in
-                    // Update current camera position in ViewModel
                     viewModel.currentCameraPosition = position
-                    // Handle camera changes if needed
+                    #if DEBUG
                     let radius = viewModel.calculateRadius(for: position.zoom)
                     print("Map zoom: \(position.zoom), calculated radius: \(radius)m")
+                    #endif
                 },
                 onMarkerTapped: { marker in
                     handleMarkerTap(marker)
@@ -217,7 +217,7 @@ struct ExploreView: View {
                     },
                     onSaveComplete: {
                         Task {
-                            await viewModel.loadSavedPlaces()
+                            await viewModel.loadSavedPlaces(forceRefresh: true)
                             updateMarkers()
                         }
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -237,12 +237,12 @@ struct ExploreView: View {
                 viewModel.cameraPosition = lastCamera
             }
             viewModel.hasExploreAppearedBefore = true
-            // Load saved places and lists; nearby spots are fetched when location becomes available (MapViewModel)
-            Task {
-                await viewModel.loadSavedPlaces()
-                await locationSavingVM.loadUserLists()
-                updateMarkers()
-            }
+        }
+        .task {
+            // Load saved places and lists (staleness guard inside ViewModels avoids redundant fetches on tab re-appearance)
+            await viewModel.loadSavedPlaces()
+            await locationSavingVM.loadUserLists()
+            updateMarkers()
         }
         .onChange(of: markerTrigger) { _, _ in
             updateMarkers()
@@ -267,9 +267,9 @@ struct ExploreView: View {
                 onUserFollow: { userId, isFollowing in
                     print("User \(userId) follow state: \(isFollowing)")
                     // Handle follow/unfollow here
-                },
-                passedLocationSavingVM: locationSavingVM
+                }
             )
+            .environmentObject(locationSavingVM)
         }
         .confirmationDialog(
             "Open in Google Maps?",
@@ -325,5 +325,6 @@ struct ExploreView: View {
 
 #Preview {
     ExploreView(viewModel: MapViewModel())
+        .environmentObject(LocationSavingViewModel())
 }
 
