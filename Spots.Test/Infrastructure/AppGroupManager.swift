@@ -11,19 +11,18 @@ import Foundation
 class AppGroupManager {
     static let shared = AppGroupManager()
     
-    private let appGroupIdentifier = Config.appGroupIdentifier
-    private var sharedUserDefaults: UserDefaults? {
-        return UserDefaults(suiteName: appGroupIdentifier)
+    private let sharedUserDefaults: UserDefaults? = UserDefaults(suiteName: Config.appGroupIdentifier)
+
+    private init() {
+        assert(sharedUserDefaults != nil,
+               "App Group '\(Config.appGroupIdentifier)' not configured. Check entitlements and provisioning profile.")
     }
-    
-    private init() {}
     
     // MARK: - Session Token Sharing
     
     /// Save Supabase session token to shared container
     func saveSessionToken(_ token: String) {
         sharedUserDefaults?.set(token, forKey: "supabase_session_token")
-        sharedUserDefaults?.synchronize()
     }
     
     /// Retrieve Supabase session token from shared container
@@ -34,7 +33,6 @@ class AppGroupManager {
     /// Clear session token from shared container
     func clearSessionToken() {
         sharedUserDefaults?.removeObject(forKey: "supabase_session_token")
-        sharedUserDefaults?.synchronize()
     }
     
     // MARK: - Share Extension Data
@@ -42,7 +40,6 @@ class AppGroupManager {
     /// Save data to be processed by share extension
     func saveShareData(_ data: [String: Any]) {
         sharedUserDefaults?.set(data, forKey: "share_extension_data")
-        sharedUserDefaults?.synchronize()
     }
     
     /// Retrieve share extension data
@@ -53,7 +50,6 @@ class AppGroupManager {
     /// Clear share extension data
     func clearShareData() {
         sharedUserDefaults?.removeObject(forKey: "share_extension_data")
-        sharedUserDefaults?.synchronize()
     }
 }
 

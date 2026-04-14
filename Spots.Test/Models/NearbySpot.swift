@@ -36,7 +36,9 @@ struct NearbySpot: Identifiable, Equatable {
     func photoURL(maxWidth: Int = 400) -> URL? {
         // Prefer Supabase Storage URL if available (faster, cached, no API cost)
         if let photoUrl = photoUrl, !photoUrl.isEmpty {
+            #if DEBUG
             print("🖼️ NearbySpot: Using Supabase cached URL for \(name): \(photoUrl)")
+            #endif
             return URL(string: photoUrl)
         }
         
@@ -189,11 +191,13 @@ struct NearbyPlaceResult: Codable {
         // Store the full path for the new Places API, or just the photo ID for fallback
         let photoReference = photos?.first?.name // Store full path: "places/{placeId}/photos/{photoId}"
 
+        #if DEBUG
         if photoReference == nil {
             print("⚠️ NearbySpot: No photos found for \(name) (placeId: \(id))")
         } else {
             print("✅ NearbySpot: Found photo for \(name): \(photoReference!)")
         }
+        #endif
 
         return NearbySpot(
             placeId: id,

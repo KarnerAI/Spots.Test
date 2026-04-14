@@ -74,16 +74,13 @@ class PlaceExtractionService {
             
             await withTaskGroup(of: PlaceAutocompleteResult?.self) { group in
                 for placeName in batch {
-                    group.addTask {
+                    group.addTask { [weak self] in
+                        guard let self else { return nil }
                         do {
-                            let results = try await withCheckedThrowingContinuation { continuation in
-                                self.placesAPIService.autocomplete(
-                                    query: placeName,
-                                    location: userLocation
-                                ) { result in
-                                    continuation.resume(with: result)
-                                }
-                            }
+                            let results = try await self.placesAPIService.autocomplete(
+                                query: placeName,
+                                location: userLocation
+                            )
                             // Take the first/best match
                             return results.first
                         } catch {

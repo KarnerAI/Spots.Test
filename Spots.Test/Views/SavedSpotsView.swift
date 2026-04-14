@@ -9,7 +9,7 @@ import SwiftUI
 
 struct SavedSpotsView: View {
     let list: UserList
-    @StateObject private var viewModel = LocationSavingViewModel()
+    @EnvironmentObject var viewModel: LocationSavingViewModel
     @State private var spots: [SpotWithMetadata] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -20,6 +20,25 @@ struct SavedSpotsView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding()
+            } else if let errorMessage {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 48))
+                        .foregroundColor(.orange)
+
+                    Text(errorMessage)
+                        .font(.system(size: 15))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    Button("Retry") {
+                        Task { await loadSpots() }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 60)
+                .listRowSeparator(.hidden)
             } else if spots.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "map")

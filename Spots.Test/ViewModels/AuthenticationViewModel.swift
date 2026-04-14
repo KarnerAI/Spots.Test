@@ -211,7 +211,7 @@ class AuthenticationViewModel: ObservableObject {
     /// Subscribes to Supabase auth state changes for the lifetime of this ViewModel.
     /// Handles initial session, sign-in, sign-out, and token refresh events reactively.
     private func listenForAuthStateChanges() {
-        authListenerTask = Task { [weak self] in
+        authListenerTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await (event, session) in self.supabase.auth.authStateChanges {
                 guard !Task.isCancelled else { return }
@@ -225,7 +225,8 @@ class AuthenticationViewModel: ObservableObject {
                             // Ensure default lists exist for every new sign-in.
                             // Covers email/password login, post-confirmation login, and future social login.
                             // ensureDefaultListsForCurrentUser() is idempotent so safe to call each time.
-                            Task {
+                            Task { [weak self] in
+                                guard self != nil else { return }
                                 do {
                                     try await LocationSavingService.shared.ensureDefaultListsForCurrentUser()
                                 } catch {

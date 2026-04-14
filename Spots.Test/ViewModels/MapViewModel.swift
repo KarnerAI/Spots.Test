@@ -32,6 +32,8 @@ class MapViewModel: ObservableObject {
     // MARK: - Spot List Membership State
     @Published var hasLoadedSavedPlacesOnce: Bool = false
     @Published var spotListTypeMap: [String: ListType] = [:]
+    private var savedPlacesLastLoadedAt: Date?
+    private let savedPlacesStaleInterval: TimeInterval = 30
     
     // Pagination state
     private var nextPageToken: String? = nil
@@ -414,19 +416,18 @@ class MapViewModel: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
-                // Single batch update to nearbySpots (one @Published notification)
+                // Surgical per-spot updates to avoid clobbering newer fetches
                 if !resolvedRefs.isEmpty || !uploadedUrls.isEmpty {
-                    var updatedSpots = nearbySpots
-                    for i in updatedSpots.indices {
-                        let pid = updatedSpots[i].placeId
-                        if let ref = resolvedRefs[pid] {
-                            updatedSpots[i].photoReference = ref
-                        }
-                        if let url = uploadedUrls[pid] {
-                            updatedSpots[i].photoUrl = url
+                    for (pid, ref) in resolvedRefs {
+                        if let idx = nearbySpots.firstIndex(where: { $0.placeId == pid }) {
+                            nearbySpots[idx].photoReference = ref
                         }
                     }
-                    nearbySpots = updatedSpots
+                    for (pid, url) in uploadedUrls {
+                        if let idx = nearbySpots.firstIndex(where: { $0.placeId == pid }) {
+                            nearbySpots[idx].photoUrl = url
+                        }
+                    }
                 }
             }
             
@@ -453,8 +454,9 @@ class MapViewModel: ObservableObject {
 
         photoResolutionInFlight.insert(placeId)
 
-        Task {
-            defer { photoResolutionInFlight.remove(placeId) }
+        Task { [weak self] in
+            defer { self?.photoResolutionInFlight.remove(placeId) }
+            guard let self else { return }
 
             guard let details = try? await placesAPIService.fetchPlaceDetails(placeId: placeId),
                   let ref = details.photoReference else { return }
@@ -606,10 +608,14 @@ class MapViewModel: ObservableObject {
     
     // MARK: - Saved Places
     
-    func loadSavedPlaces() async {
+    func loadSavedPlaces(forceRefresh: Bool = false) async {
+        if !forceRefresh, hasLoadedSavedPlacesOnce, let last = savedPlacesLastLoadedAt,
+           Date().timeIntervalSince(last) < savedPlacesStaleInterval {
+            return
+        }
         isLoading = true
         errorMessage = nil
-        
+
         do {
             // Get all three lists
             let starredList = try await locationSavingService.getListByType(.starred)
@@ -663,8 +669,9 @@ class MapViewModel: ObservableObject {
             )
             
             hasLoadedSavedPlacesOnce = true
+            savedPlacesLastLoadedAt = Date()
             isLoading = false
-            
+
         } catch {
             errorMessage = "Failed to load saved places: \(error.localizedDescription)"
             isLoading = false
@@ -690,7 +697,8 @@ class MapViewModel: ObservableObject {
             marker.title = placeWithMetadata.spot.name
             marker.snippet = placeWithMetadata.spot.address
             marker.userData = placeWithMetadata.spot.placeId  // Store placeId for tap handling
-            marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)  // Center icon on coordinate so it overlays POI
+            // Bias anchor slightly downward so the larger circular icon covers the underlying POI pin head.
+            marker.groundAnchor = CGPoint(x: 0.5, y: 0.6)
             
             // Get base icon
             var icon = iconForListTypes(placeWithMetadata.listTypes)
@@ -699,10 +707,11 @@ class MapViewModel: ObservableObject {
             if let selectedSpot = selectedSpot,
                selectedSpot.placeId == placeWithMetadata.spot.placeId,
                let baseIcon = icon {
-                icon = scaleImage(baseIcon, to: 1.4)  // 40% larger
-                marker.zIndex = 1  // Bring to front
+                icon = scaleImage(baseIcon, to: 1.3)  // Slightly larger for selection emphasis
+                marker.zIndex = 20  // Bring to front above other saved markers
             } else {
-                marker.zIndex = 0
+                // Ensure saved markers sit above any non-list markers that might be added in future.
+                marker.zIndex = 10
             }
             
             marker.icon = icon

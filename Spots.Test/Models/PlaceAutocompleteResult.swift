@@ -8,7 +8,7 @@
 import Foundation
 import CoreLocation
 
-struct PlaceAutocompleteResult: Identifiable, Codable {
+struct PlaceAutocompleteResult: Identifiable, Codable, Equatable, Hashable {
     let id: String // place_id from Google
     let placeId: String
     let name: String
@@ -77,6 +77,24 @@ struct PlaceAutocompleteResult: Identifiable, Codable {
         var result = self
         result.coordinate = coordinate
         return result
+    }
+
+    // MARK: - Equatable
+    static func == (lhs: PlaceAutocompleteResult, rhs: PlaceAutocompleteResult) -> Bool {
+        lhs.placeId == rhs.placeId
+            && lhs.name == rhs.name
+            && lhs.address == rhs.address
+            && lhs.city == rhs.city
+            && lhs.types == rhs.types
+            && lhs.photoUrl == rhs.photoUrl
+            && lhs.photoReference == rhs.photoReference
+            && lhs.coordinate?.latitude == rhs.coordinate?.latitude
+            && lhs.coordinate?.longitude == rhs.coordinate?.longitude
+    }
+
+    // MARK: - Hashable
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(placeId)
     }
 }
 

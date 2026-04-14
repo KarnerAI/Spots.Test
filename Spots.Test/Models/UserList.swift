@@ -67,7 +67,7 @@ struct ListIconView: View {
     }
 }
 
-struct UserList: Codable, Identifiable {
+struct UserList: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let userId: UUID
     let listType: ListType?

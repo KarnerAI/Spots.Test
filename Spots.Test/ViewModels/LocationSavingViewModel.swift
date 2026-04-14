@@ -16,15 +16,22 @@ class LocationSavingViewModel: ObservableObject {
     @Published var errorMessage: String?
     
     private let service = LocationSavingService.shared
-    
+    private var userListsLastLoadedAt: Date?
+    private let userListsStaleInterval: TimeInterval = 30
+
     // MARK: - Load Lists
-    
-    func loadUserLists() async {
+
+    func loadUserLists(forceRefresh: Bool = false) async {
+        if !forceRefresh, let last = userListsLastLoadedAt,
+           Date().timeIntervalSince(last) < userListsStaleInterval {
+            return
+        }
         isLoading = true
         errorMessage = nil
-        
+
         do {
             userLists = try await service.getUserLists()
+            userListsLastLoadedAt = Date()
         } catch {
             errorMessage = "Failed to load lists: \(error.localizedDescription)"
             print("Error loading lists: \(error)")

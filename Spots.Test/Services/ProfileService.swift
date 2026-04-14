@@ -43,7 +43,9 @@ class ProfileService {
 
     private let supabase = SupabaseManager.shared.client
     private let avatarsBucket = "avatars"
-    private let supabaseBaseURL = "https://dirqixrgkcdpixmriyge.supabase.co"
+    private var supabaseBaseURL: String { Config.supabaseURL }
+    private var profileCache: [UUID: (profile: UserProfile, timestamp: Date)] = [:]
+    private let profileCacheTTL: TimeInterval = 60
 
     private init() {}
 
@@ -51,6 +53,9 @@ class ProfileService {
 
     /// Load the profile row for the given user. Returns nil if no row exists yet.
     func fetchProfile(userId: UUID) async throws -> UserProfile? {
+        if let entry = profileCache[userId], Date().timeIntervalSince(entry.timestamp) < profileCacheTTL {
+            return entry.profile
+        }
         let rows: [UserProfile] = try await supabase
             .from("profiles")
             .select()
@@ -58,6 +63,9 @@ class ProfileService {
             .limit(1)
             .execute()
             .value
+        if let profile = rows.first {
+            profileCache[userId] = (profile, Date())
+        }
         return rows.first
     }
 
@@ -156,9 +164,7 @@ class ProfileService {
             }
         }
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let now = formatter.string(from: Date())
+        let now = ISO8601DateFormatter.fractionalSeconds.string(from: Date())
 
         let row = UpdateRow(
             first_name: firstName,
@@ -182,9 +188,7 @@ class ProfileService {
             let cover_photo_url: String
             let updated_at: String
         }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let row = UpdateRow(cover_photo_url: url, updated_at: formatter.string(from: Date()))
+        let row = UpdateRow(cover_photo_url: url, updated_at: ISO8601DateFormatter.fractionalSeconds.string(from: Date()))
         try await supabase
             .from("profiles")
             .update(row)

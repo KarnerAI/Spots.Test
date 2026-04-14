@@ -52,8 +52,8 @@ struct SearchView: View {
     var onSearch: ((String, SearchMode) -> Void)?
     var onUserFollow: ((String, Bool) -> Void)?
     var initialSearchMode: SearchMode = .spots
-    var passedLocationSavingVM: LocationSavingViewModel? = nil
-    
+
+    @EnvironmentObject var locationSavingVM: LocationSavingViewModel
     @State private var searchQuery: String = ""
     @State private var searchMode: SearchMode
     @State private var followStates: [String: Bool] = [:]
@@ -62,9 +62,8 @@ struct SearchView: View {
     @State private var autocompleteResults: [PlaceAutocompleteResult] = []
     @State private var isLoadingPlaces: Bool = false
     @State private var placesError: String?
-    @StateObject private var locationSavingVM = LocationSavingViewModel()
     @State private var selectedSpotForSaving: PlaceAutocompleteResult?
-    
+
     init(
         onSelectSpot: @escaping (String) -> Void,
         onFiltersClick: (() -> Void)? = nil,
@@ -73,8 +72,7 @@ struct SearchView: View {
         searchResults: (spots: [SpotResult], users: [UserResult]) = ([], []),
         onSearch: ((String, SearchMode) -> Void)? = nil,
         onUserFollow: ((String, Bool) -> Void)? = nil,
-        initialSearchMode: SearchMode = .spots,
-        passedLocationSavingVM: LocationSavingViewModel? = nil
+        initialSearchMode: SearchMode = .spots
     ) {
         self.onSelectSpot = onSelectSpot
         self.onFiltersClick = onFiltersClick
@@ -84,12 +82,7 @@ struct SearchView: View {
         self.onSearch = onSearch
         self.onUserFollow = onUserFollow
         self.initialSearchMode = initialSearchMode
-        self.passedLocationSavingVM = passedLocationSavingVM
         _searchMode = State(initialValue: initialSearchMode)
-    }
-    
-    private var effectiveLocationSavingVM: LocationSavingViewModel {
-        passedLocationSavingVM ?? locationSavingVM
     }
     
     var body: some View {
@@ -248,7 +241,7 @@ struct SearchView: View {
             if let spot = selectedSpotForSaving {
                 ListPickerView(
                     spotData: spot,
-                    viewModel: effectiveLocationSavingVM,
+                    viewModel: locationSavingVM,
                     onDismiss: {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                             selectedSpotForSaving = nil
@@ -266,7 +259,7 @@ struct SearchView: View {
         .onAppear {
             locationManager.requestLocationPermission()
             Task {
-                await effectiveLocationSavingVM.loadUserLists()
+                await locationSavingVM.loadUserLists()
             }
         }
     }
@@ -736,5 +729,6 @@ struct SearchView: View {
             )
         ]
     )
+    .environmentObject(LocationSavingViewModel())
 }
 
