@@ -24,15 +24,6 @@ struct SpotResult: Identifiable {
     }
 }
 
-struct UserResult: Identifiable {
-    let id: String
-    let name: String
-    let username: String
-    let avatar: String
-    var isFollowing: Bool
-    let mutualFriends: Int?
-}
-
 enum SearchMode {
     case spots
     case users
@@ -42,21 +33,16 @@ enum SearchMode {
 
 struct SearchView: View {
     @Environment(\.dismiss) var dismiss
-    
+
     let onSelectSpot: (String) -> Void
     let onFiltersClick: (() -> Void)?
-    
+
     var recentSpots: [SpotResult] = []
-    var recentUsers: [UserResult] = []
-    var searchResults: (spots: [SpotResult], users: [UserResult]) = ([], [])
-    var onSearch: ((String, SearchMode) -> Void)?
-    var onUserFollow: ((String, Bool) -> Void)?
     var initialSearchMode: SearchMode = .spots
 
     @EnvironmentObject var locationSavingVM: LocationSavingViewModel
     @State private var searchQuery: String = ""
     @State private var searchMode: SearchMode
-    @State private var followStates: [String: Bool] = [:]
     @State private var searchTask: Task<Void, Never>?
     @StateObject private var locationManager = LocationManager()
     @State private var autocompleteResults: [PlaceAutocompleteResult] = []
@@ -64,23 +50,23 @@ struct SearchView: View {
     @State private var placesError: String?
     @State private var selectedSpotForSaving: PlaceAutocompleteResult?
 
+    // User search state (backed by ProfileService.searchUsers + FollowService).
+    @State private var userResults: [UserProfile] = []
+    @State private var isLoadingUsers: Bool = false
+    @State private var usersError: String?
+    @State private var userRelationships: [UUID: FollowRelationship] = [:]
+    @State private var followActionInFlight: Set<UUID> = []
+    @State private var presentedUserProfileId: UUID?
+
     init(
         onSelectSpot: @escaping (String) -> Void,
         onFiltersClick: (() -> Void)? = nil,
         recentSpots: [SpotResult] = [],
-        recentUsers: [UserResult] = [],
-        searchResults: (spots: [SpotResult], users: [UserResult]) = ([], []),
-        onSearch: ((String, SearchMode) -> Void)? = nil,
-        onUserFollow: ((String, Bool) -> Void)? = nil,
         initialSearchMode: SearchMode = .spots
     ) {
         self.onSelectSpot = onSelectSpot
         self.onFiltersClick = onFiltersClick
         self.recentSpots = recentSpots
-        self.recentUsers = recentUsers
-        self.searchResults = searchResults
-        self.onSearch = onSearch
-        self.onUserFollow = onUserFollow
         self.initialSearchMode = initialSearchMode
         _searchMode = State(initialValue: initialSearchMode)
     }
@@ -262,6 +248,31 @@ struct SearchView: View {
                 await locationSavingVM.loadUserLists()
             }
         }
+        .sheet(item: Binding(
+            get: { presentedUserProfileId.map(IdentifiableUUID.init) },
+            set: { presentedUserProfileId = $0?.id }
+        )) { wrapper in
+            NavigationStack {
+                UserProfileView(userId: wrapper.id)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { presentedUserProfileId = nil }
+                        }
+                    }
+            }
+            .onDisappear {
+                // Refresh the relationship pill in case the user followed/unfollowed inside the sheet.
+                Task {
+                    if let updated = try? await FollowService.shared.relationship(with: wrapper.id, forceRefresh: true) {
+                        await MainActor.run { userRelationships[wrapper.id] = updated }
+                    }
+                }
+            }
+        }
+    }
+
+    private struct IdentifiableUUID: Identifiable {
+        let id: UUID
     }
     
     // MARK: - Recent Spots View
@@ -359,28 +370,22 @@ struct SearchView: View {
     // MARK: - Recent Users View
     
     private var recentUsersView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Recent")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.gray900)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
-                
-                Spacer()
-            }
-            
-            if recentUsers.isEmpty {
-                emptyStateView(message: "No recent users")
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(recentUsers) { user in
-                        userRow(user: user)
-                    }
-                }
-            }
+        VStack(spacing: 12) {
+            Spacer().frame(height: 32)
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 36))
+                .foregroundColor(.gray400)
+            Text("Search for people")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(.gray900)
+            Text("Type a name or @username to find someone to follow.")
+                .font(.system(size: 13))
+                .foregroundColor(.gray500)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Spacer()
         }
+        .frame(maxWidth: .infinity)
     }
     
     // MARK: - Search Results Views
@@ -411,166 +416,147 @@ struct SearchView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 48)
-            } else if autocompleteResults.isEmpty && searchResults.spots.isEmpty {
+            } else if autocompleteResults.isEmpty {
                 emptyStateView(message: "No spots found")
             } else {
-                // Show autocomplete results if available, otherwise show searchResults
-                if !autocompleteResults.isEmpty {
-                    ForEach(autocompleteResults) { result in
-                        autocompleteResultRow(result: result)
-                    }
-                } else {
-                    ForEach(searchResults.spots) { spot in
-                        searchResultSpotRow(spot: spot)
-                    }
+                ForEach(autocompleteResults) { result in
+                    autocompleteResultRow(result: result)
                 }
             }
         }
         .padding(.top, 8)
     }
-    
-    private func searchResultSpotRow(spot: SpotResult) -> some View {
-        Button(action: {
-            onSelectSpot(spot.name)
-            dismiss()
-        }) {
-            HStack(spacing: 12) {
-                // Map Pin Icon
-                ZStack {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(.red)
-                        .frame(width: 40, height: 40)
-                        .background(Color(red: 1.0, green: 0.9, blue: 0.9))
-                        .clipShape(Circle())
+
+    private var searchResultsUsersView: some View {
+        VStack(spacing: 0) {
+            if isLoadingUsers && userResults.isEmpty {
+                VStack {
+                    Spacer()
+                    ProgressView()
+                        .padding()
+                    Spacer()
                 }
-                
-                // Text Content
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(spot.name)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.gray900)
-                        .lineLimit(1)
-                        .multilineTextAlignment(.leading)
-                    
-                    Text(spot.address)
-                        .font(.system(size: 13))
-                        .foregroundColor(.gray500)
-                        .lineLimit(1)
-                        .multilineTextAlignment(.leading)
-                    
-                    if let status = spot.status {
-                        Text(status)
-                            .font(.system(size: 13))
-                            .foregroundColor(.gray500)
-                            .lineLimit(1)
-                            .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 48)
+            } else if let usersError, userResults.isEmpty {
+                emptyStateView(message: usersError)
+            } else if userResults.isEmpty {
+                emptyStateView(message: "No users found")
+            } else {
+                ForEach(userResults) { profile in
+                    userRow(profile: profile)
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    // MARK: - User Row
+
+    private func userRow(profile: UserProfile) -> some View {
+        let relationship = userRelationships[profile.id] ?? .none
+        let isBusy = followActionInFlight.contains(profile.id)
+
+        return Button {
+            presentedUserProfileId = profile.id
+        } label: {
+            HStack(spacing: 12) {
+                // Avatar
+                AsyncImage(url: profile.avatarUrl.flatMap(URL.init(string:))) { phase in
+                    switch phase {
+                    case .empty:
+                        ProgressView()
+                            .frame(width: 48, height: 48)
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    case .failure:
+                        Circle()
+                            .fill(Color.gray200)
+                            .frame(width: 48, height: 48)
+                            .overlay(
+                                Image(systemName: "person.fill")
+                                    .foregroundColor(.gray400)
+                            )
+                    @unknown default:
+                        EmptyView()
                     }
                 }
+                .frame(width: 48, height: 48)
+                .clipShape(Circle())
+
+                // User Info
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Text(profile.displayName)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.gray900)
+                            .lineLimit(1)
+                        if profile.isPrivate {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.gray400)
+                        }
+                    }
+
+                    Text("@\(profile.username)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray500)
+                        .lineLimit(1)
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                
-                Spacer()
+
+                // Follow Button
+                followButton(for: profile, relationship: relationship, isBusy: isBusy)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .contentShape(Rectangle())
+            .overlay(
+                Rectangle()
+                    .fill(Color(red: 0.98, green: 0.98, blue: 0.98))
+                    .frame(height: 0.5),
+                alignment: .bottom
+            )
         }
         .buttonStyle(PlainButtonStyle())
     }
-    
-    private var searchResultsUsersView: some View {
-        VStack(spacing: 0) {
-            if searchResults.users.isEmpty {
-                emptyStateView(message: "No users found")
-            } else {
-                ForEach(searchResults.users) { user in
-                    userRow(user: user)
-                }
+
+    @ViewBuilder
+    private func followButton(for profile: UserProfile, relationship: FollowRelationship, isBusy: Bool) -> some View {
+        switch relationship {
+        case .isSelf:
+            EmptyView()
+        case .none, .followsYou:
+            followPillButton(label: "Follow", primary: true, isBusy: isBusy) {
+                Task { await tapFollow(profile: profile) }
+            }
+        case .requested:
+            followPillButton(label: "Requested", primary: false, isBusy: isBusy) {
+                Task { await tapUnfollow(profile: profile) }
+            }
+        case .following, .mutual:
+            followPillButton(label: relationship == .mutual ? "Friends" : "Following", primary: false, isBusy: isBusy) {
+                Task { await tapUnfollow(profile: profile) }
             }
         }
-        .padding(.top, 8)
     }
-    
-    // MARK: - User Row
-    
-    private func userRow(user: UserResult) -> some View {
-        HStack(spacing: 12) {
-            // Avatar
-            AsyncImage(url: URL(string: user.avatar)) { phase in
-                switch phase {
-                case .empty:
-                    ProgressView()
-                        .frame(width: 48, height: 48)
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                case .failure:
-                    Circle()
-                        .fill(Color.gray200)
-                        .frame(width: 48, height: 48)
-                        .overlay(
-                            Image(systemName: "person.fill")
-                                .foregroundColor(.gray400)
-                        )
-                @unknown default:
-                    EmptyView()
-                }
-            }
-            .frame(width: 48, height: 48)
-            .clipShape(Circle())
-            
-            // User Info
-            VStack(alignment: .leading, spacing: 4) {
-                Text(user.name)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.gray900)
-                    .lineLimit(1)
-                
-                HStack(spacing: 4) {
-                    Text(user.username)
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray500)
-                    
-                    if let mutualFriends = user.mutualFriends {
-                        Text("· \(mutualFriends) mutual friends")
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray500)
-                    }
-                }
-                .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            
-            // Follow Button
-            Button(action: {
-                let currentState = isUserFollowing(user.id, user.isFollowing)
-                let newState = !currentState
-                followStates[user.id] = newState
-                onUserFollow?(user.id, newState)
-            }) {
-                Text(isUserFollowing(user.id, user.isFollowing) ? "Following" : "Follow")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(isUserFollowing(user.id, user.isFollowing) ? .gray700 : .white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
-                    .background(
-                        isUserFollowing(user.id, user.isFollowing)
-                            ? Color(red: 0.95, green: 0.95, blue: 0.95)
-                            : Color.spotsTeal
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
-            }
-            .frame(minWidth: 80, minHeight: 44)
+
+    private func followPillButton(label: String, primary: Bool, isBusy: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(primary ? .white : .gray700)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(primary ? Color.spotsTeal : Color(red: 0.95, green: 0.95, blue: 0.95))
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
+                .opacity(isBusy ? 0.5 : 1)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .overlay(
-            Rectangle()
-                .fill(Color(red: 0.98, green: 0.98, blue: 0.98))
-                .frame(height: 0.5),
-            alignment: .bottom
-        )
+        .buttonStyle(PlainButtonStyle())
+        .disabled(isBusy)
+        .frame(minWidth: 80, minHeight: 44)
     }
     
     // MARK: - Empty State
@@ -588,11 +574,7 @@ struct SearchView: View {
     }
     
     // MARK: - Helper Methods
-    
-    private func isUserFollowing(_ userId: String, _ defaultState: Bool) -> Bool {
-        return followStates[userId] ?? defaultState
-    }
-    
+
     private func handleSearchQueryChange(_ query: String) {
         // Cancel previous search task
         searchTask?.cancel()
@@ -617,14 +599,70 @@ struct SearchView: View {
                 }
             }
         } else {
-            // For users mode, use existing search callback
+            // For users mode, hit Supabase via ProfileService.searchUsers
             searchTask = Task {
                 try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
-                
                 if !Task.isCancelled {
-                    onSearch?(query, searchMode)
+                    await performUserSearch(query: query)
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func performUserSearch(query: String) async {
+        isLoadingUsers = true
+        usersError = nil
+        do {
+            let results = try await ProfileService.shared.searchUsers(query: query, limit: 25)
+            userResults = results
+            await loadRelationships(for: results.map(\.id))
+        } catch {
+            usersError = "Couldn't search users. \(error.localizedDescription)"
+            userResults = []
+        }
+        isLoadingUsers = false
+    }
+
+    private func loadRelationships(for userIds: [UUID]) async {
+        // Fan out — small N (search limit 25) so per-user calls are fine here.
+        // A batch RPC is a future optimization once user search becomes hot.
+        await withTaskGroup(of: (UUID, FollowRelationship?).self) { group in
+            for id in userIds {
+                group.addTask {
+                    let relationship = try? await FollowService.shared.relationship(with: id)
+                    return (id, relationship)
+                }
+            }
+            for await (id, relationship) in group {
+                if let relationship {
+                    await MainActor.run { userRelationships[id] = relationship }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func tapFollow(profile: UserProfile) async {
+        followActionInFlight.insert(profile.id)
+        defer { followActionInFlight.remove(profile.id) }
+        do {
+            let status = try await FollowService.shared.follow(userId: profile.id)
+            userRelationships[profile.id] = (status == .accepted) ? .following : .requested
+        } catch {
+            usersError = "Couldn't follow @\(profile.username). \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func tapUnfollow(profile: UserProfile) async {
+        followActionInFlight.insert(profile.id)
+        defer { followActionInFlight.remove(profile.id) }
+        do {
+            try await FollowService.shared.unfollow(userId: profile.id)
+            userRelationships[profile.id] = try await FollowService.shared.relationship(with: profile.id, forceRefresh: true)
+        } catch {
+            usersError = "Couldn't update follow. \(error.localizedDescription)"
         }
     }
     
@@ -716,16 +754,6 @@ struct SearchView: View {
                 status: nil,
                 type: .recent,
                 placeId: nil
-            )
-        ],
-        recentUsers: [
-            UserResult(
-                id: "1",
-                name: "John Doe",
-                username: "@john.doe",
-                avatar: "https://via.placeholder.com/48",
-                isFollowing: false,
-                mutualFriends: 5
             )
         ]
     )

@@ -11,7 +11,7 @@ import Supabase
 
 // MARK: - Model
 
-struct UserProfile: Codable {
+struct UserProfile: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     var username: String
     var firstName: String?
@@ -19,6 +19,15 @@ struct UserProfile: Codable {
     var email: String?
     var avatarUrl: String?
     var coverPhotoUrl: String?
+    var isPrivate: Bool
+
+    /// First + last name when both present, else whichever is non-empty, else username.
+    var displayName: String {
+        let first = firstName?.trimmingCharacters(in: .whitespaces) ?? ""
+        let last = lastName?.trimmingCharacters(in: .whitespaces) ?? ""
+        let full = [first, last].filter { !$0.isEmpty }.joined(separator: " ")
+        return full.isEmpty ? username : full
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -28,6 +37,20 @@ struct UserProfile: Codable {
         case email
         case avatarUrl = "avatar_url"
         case coverPhotoUrl = "cover_photo_url"
+        case isPrivate = "is_private"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        username = try c.decode(String.self, forKey: .username)
+        firstName = try c.decodeIfPresent(String.self, forKey: .firstName)
+        lastName = try c.decodeIfPresent(String.self, forKey: .lastName)
+        email = try c.decodeIfPresent(String.self, forKey: .email)
+        avatarUrl = try c.decodeIfPresent(String.self, forKey: .avatarUrl)
+        coverPhotoUrl = try c.decodeIfPresent(String.self, forKey: .coverPhotoUrl)
+        // is_private was added in the social schema migration; tolerate older rows.
+        isPrivate = try c.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
     }
 }
 
@@ -127,6 +150,46 @@ class ProfileService {
             .execute()
             .value
         return !rows.isEmpty
+    }
+
+    // MARK: - Search
+
+    /// Search profiles by username or first name (case-insensitive prefix match).
+    /// Excludes the current user. Returns at most `limit` rows ordered by username.
+    func searchUsers(query: String, limit: Int = 25) async throws -> [UserProfile] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        let pattern = "%\(trimmed)%"
+        let currentUserId = try await SupabaseManager.shared.client.auth.session.user.id.uuidString
+
+        let rows: [UserProfile] = try await supabase
+            .from("profiles")
+            .select()
+            .or("username.ilike.\(pattern),first_name.ilike.\(pattern),last_name.ilike.\(pattern)")
+            .neq("id", value: currentUserId)
+            .order("username", ascending: true)
+            .limit(limit)
+            .execute()
+            .value
+        return rows
+    }
+
+    /// Fetch profiles for a set of user ids in a single query.
+    /// Used to resolve actor info for feed items and pending follow requests.
+    func fetchProfiles(ids: [UUID]) async throws -> [UserProfile] {
+        guard !ids.isEmpty else { return [] }
+        let uniqueIds = Array(Set(ids)).map { $0.uuidString }
+        let rows: [UserProfile] = try await supabase
+            .from("profiles")
+            .select()
+            .in("id", values: uniqueIds)
+            .execute()
+            .value
+        for profile in rows {
+            profileCache[profile.id] = (profile, Date())
+        }
+        return rows
     }
 
     // MARK: - Update

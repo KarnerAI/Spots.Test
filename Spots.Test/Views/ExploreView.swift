@@ -251,22 +251,9 @@ struct ExploreView: View {
             SearchView(
                 onSelectSpot: { spotName in
                     print("Selected spot: \(spotName)")
-                    // Handle spot selection here
                 },
                 onFiltersClick: {
-                    // Handle filters click here
                     print("Filters clicked")
-                },
-                recentSpots: [],
-                recentUsers: [],
-                searchResults: (spots: [], users: []),
-                onSearch: { query, mode in
-                    print("Search: \(query) in mode: \(mode)")
-                    // Handle search here - fetch results and update searchResults
-                },
-                onUserFollow: { userId, isFollowing in
-                    print("User \(userId) follow state: \(isFollowing)")
-                    // Handle follow/unfollow here
                 }
             )
             .environmentObject(locationSavingVM)
