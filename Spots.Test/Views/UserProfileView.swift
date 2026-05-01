@@ -494,11 +494,20 @@ struct UserProfileView: View {
         // Don't toggle isLoadingProfile back on if we already have a cached
         // profile — the header is already rendered, no spinner needed.
         if profile == nil { isLoadingProfile = true }
+
+        // Fan out the lists + city fetches in parallel with profile/rel/counts.
+        // They're independent — no reason to wait for Wave 1. Using Task here
+        // (not async let) so the handles can outlive this function and the
+        // tile-hydration step can await them in a detached follow-up.
+        //
+        // forceRefresh: false (default) — the 60s caches in ProfileService
+        // and FollowService make repeat navigation instant. Mutations
+        // (follow / unfollow) invalidate the cache themselves so we don't
+        // need to bypass it on every navigation.
+        let listsTask = Task { try await LocationSavingService.shared.getUserLists(userId: userId) }
+        let cityTask = Task { try await LocationSavingService.shared.getMostExploredCity(userId: userId) }
+
         do {
-            // forceRefresh: false (default) — the 60s caches in ProfileService
-            // and FollowService make repeat navigation instant. Mutations
-            // (follow / unfollow) invalidate the cache themselves so we don't
-            // need to bypass it on every navigation.
             async let profileTask = ProfileService.shared.fetchProfile(userId: userId)
             async let relTask = FollowService.shared.relationship(with: userId)
             async let countsTask = FollowService.shared.counts(userId: userId)
@@ -511,40 +520,54 @@ struct UserProfileView: View {
                 errorMessage = "Profile not found."
                 scheduleErrorDismiss()
                 isLoadingProfile = false
+                listsTask.cancel()
+                cityTask.cancel()
                 return
             }
 
+            // Header is fully populated now — render and clear the spinner.
+            // Tile + cover hydration continue in the background below.
             profile = loadedProfile
             relationship = loadedRelationship
             followersCount = loadedCounts.followers
             followingCount = loadedCounts.following
+            isLoadingProfile = false
 
-            // Lists + travel data are gated on visibility.
             let visible = !loadedProfile.isPrivate
                 || loadedRelationship == .following
                 || loadedRelationship == .mutual
                 || loadedRelationship == .isSelf
 
             if visible {
-                await loadListsAndCity(userId: userId)
+                // Detached: header is already interactive; tiles fade in when ready.
+                Task { await hydrateListsAndCity(listsTask: listsTask, cityTask: cityTask) }
+            } else {
+                // Private user we can't see — drop the in-flight queries.
+                listsTask.cancel()
+                cityTask.cancel()
             }
 
-            // Cover photo always loads (it's effectively public — header art).
-            await loadCoverImage(profile: loadedProfile)
+            // Cover photo: also non-blocking. Header art, not critical path.
+            Task { await loadCoverImage(profile: loadedProfile) }
         } catch {
             errorMessage = "Couldn't load profile. \(error.localizedDescription)"
             scheduleErrorDismiss()
+            isLoadingProfile = false
+            listsTask.cancel()
+            cityTask.cancel()
         }
-        isLoadingProfile = false
     }
 
-    private func loadListsAndCity(userId: UUID) async {
+    /// Awaits the already-in-flight lists/city tasks fanned out in `load()`,
+    /// then runs the tile RPC + spots batch and applies the result. Runs in a
+    /// detached Task so the header doesn't wait on tile latency.
+    private func hydrateListsAndCity(
+        listsTask: Task<[UserList], Error>,
+        cityTask: Task<String?, Error>
+    ) async {
         do {
-            async let listsTask = LocationSavingService.shared.getUserLists(userId: userId)
-            async let cityTask = LocationSavingService.shared.getMostExploredCity(userId: userId)
-
-            let userLists = try await listsTask
-            let city = try await cityTask
+            let userLists = try await listsTask.value
+            let city = try await cityTask.value
             let (tiles, totalCount) = try await ProfileTileBuilder.buildTiles(from: userLists)
 
             listTiles = tiles
