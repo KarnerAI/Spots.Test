@@ -546,6 +546,77 @@ class LocationSavingService {
         return try await getSpotByPlaceId(spotId)
     }
 
+    /// Per-list summary returned by `get_list_tile_summaries` RPC.
+    /// `mostRecentSpotId` / `mostRecentSavedAt` are nil when the list is empty.
+    struct ListTileSummary: Codable {
+        let listId: UUID
+        let spotCount: Int
+        let mostRecentSpotId: String?
+        let mostRecentSavedAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case listId = "list_id"
+            case spotCount = "spot_count"
+            case mostRecentSpotId = "most_recent_spot_id"
+            case mostRecentSavedAt = "most_recent_saved_at"
+        }
+    }
+
+    /// Batch-fetches spot count + most-recently-saved spot id per list in one RPC call.
+    /// Replaces the per-list round-trip pattern in ProfileTileBuilder.buildTiles.
+    /// Returns rows only for lists the caller can see (RLS enforced server-side).
+    func getListTileSummaries(listIds: [UUID]) async throws -> [ListTileSummary] {
+        guard !listIds.isEmpty else { return [] }
+        let rows: [ListTileSummary] = try await supabase
+            .rpc("get_list_tile_summaries", params: ["p_list_ids": listIds.map { $0.uuidString }])
+            .execute()
+            .value
+        return rows
+    }
+
+    /// Batch-fetches Spot rows for a set of place_ids in one round-trip.
+    /// Used by ProfileTileBuilder to hydrate tile cover photos after the
+    /// summary RPC returns the most_recent_spot_id per list.
+    func getSpotsByPlaceIds(_ placeIds: [String]) async throws -> [Spot] {
+        guard !placeIds.isEmpty else { return [] }
+        let unique = Array(Set(placeIds))
+
+        struct SpotResponse: Codable {
+            let place_id: String
+            let name: String
+            let address: String?
+            let city: String?
+            let latitude: Double?
+            let longitude: Double?
+            let types: [String]?
+            let photo_url: String?
+            let photo_reference: String?
+        }
+
+        let response: [SpotResponse] = try await supabase
+            .from("spots")
+            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference")
+            .in("place_id", values: unique)
+            .execute()
+            .value
+
+        return response.map { row in
+            Spot(
+                placeId: row.place_id,
+                name: row.name,
+                address: row.address,
+                city: row.city,
+                latitude: row.latitude,
+                longitude: row.longitude,
+                types: row.types,
+                photoUrl: row.photo_url,
+                photoReference: row.photo_reference,
+                createdAt: nil,
+                updatedAt: nil
+            )
+        }
+    }
+
     /// Returns spot IDs (place_id) in the given list. Used for computing unique count across lists.
     func getSpotIdsInList(listId: UUID) async throws -> [String] {
         struct SpotIdRow: Codable {
@@ -564,17 +635,36 @@ class LocationSavingService {
     /// Falls back to parsing city from the address field for spots saved before city extraction was added.
     func getMostExploredCity() async throws -> String? {
         try await ensureDefaultListsForCurrentUser()
-        let lists = try await getUserLists()
-        return try await mostExploredCity(forLists: lists)
+        let userId = try await getCurrentUserId()
+        return try await mostExploredCity(userId: userId)
     }
 
     /// Read-only variant for an arbitrary user. Does not create default lists.
     func getMostExploredCity(userId: UUID) async throws -> String? {
-        let lists = try await getUserLists(userId: userId)
-        return try await mostExploredCity(forLists: lists)
+        return try await mostExploredCity(userId: userId)
     }
 
-    private func mostExploredCity(forLists lists: [UserList]) async throws -> String? {
+    private func mostExploredCity(userId: UUID) async throws -> String? {
+        // Fast path: server-side aggregation across the user's saved spots.
+        // Returns nil when no spot has city populated — falls through to the
+        // legacy address-parsing path for users with only pre-backfill data.
+        let rpcResult: String? = try await supabase
+            .rpc("get_most_explored_city", params: ["p_user_id": userId.uuidString])
+            .execute()
+            .value
+        if let city = rpcResult, !city.isEmpty {
+            return city
+        }
+
+        return try await legacyMostExploredCityFromAddresses(userId: userId)
+    }
+
+    /// Pre-backfill fallback: gathers every saved spot's address and parses
+    /// city from the formatted-address string. Used only when the RPC finds
+    /// no city-populated rows (legacy data). Kept as-is to preserve behavior.
+    private func legacyMostExploredCityFromAddresses(userId: UUID) async throws -> String? {
+        let lists = try await getUserLists(userId: userId)
+
         // Gather all unique spot IDs across all lists
         var allSpotIds = Set<String>()
         for list in lists {
@@ -583,7 +673,6 @@ class LocationSavingService {
         }
         guard !allSpotIds.isEmpty else { return nil }
 
-        // Batch-fetch city + address for each spot (address is the fallback for older spots)
         struct CityRow: Codable {
             let place_id: String
             let city: String?
@@ -596,8 +685,6 @@ class LocationSavingService {
             .execute()
             .value
 
-        // Count occurrences per city.
-        // Prefer the stored city column; fall back to parsing the address for older spots.
         var cityCounts: [String: Int] = [:]
         for row in rows {
             let resolvedCity: String?

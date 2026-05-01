@@ -16,7 +16,7 @@ struct AvatarView: View {
     var body: some View {
         Group {
             if let url = resolvedURL {
-                AsyncImage(url: url) { phase in
+                CachedAsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
                         image.resizable().aspectRatio(contentMode: .fill)

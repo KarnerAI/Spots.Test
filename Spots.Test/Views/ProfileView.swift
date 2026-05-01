@@ -121,7 +121,9 @@ struct ProfileView: View {
 
     private func refreshFollowCounts(userId: UUID) async {
         do {
-            let counts = try await FollowService.shared.counts(userId: userId, forceRefresh: true)
+            // forceRefresh: false — the 60s FollowService cache is fine for
+            // repeat opens of own profile. Mutations invalidate the cache.
+            let counts = try await FollowService.shared.counts(userId: userId)
             await MainActor.run {
                 withTransaction(Transaction(animation: nil)) {
                     followersCount = counts.followers
@@ -298,7 +300,7 @@ struct ProfileView: View {
                     .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 4)
 
                 if let urlString = viewModel.currentUserAvatarUrl, let url = URL(string: urlString) {
-                    AsyncImage(url: url) { phase in
+                    CachedAsyncImage(url: url) { phase in
                         switch phase {
                         case .success(let img):
                             img.resizable().scaledToFill()
@@ -433,6 +435,11 @@ struct ProfileView: View {
                     .font(.system(size: 12))
                     .foregroundColor(.gray500)
             }
+            // Without contentShape, only the rendered text glyphs catch taps —
+            // the gap between the number and the label is a dead zone. A clear
+            // rectangle over the VStack bounds makes the whole stat tappable
+            // with zero visual change.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -481,7 +488,7 @@ struct ProfileView: View {
         ZStack(alignment: .bottomLeading) {
             // Background: Supabase photo URL → Google photo reference → solid color
             if let urlString = list.coverImageUrl, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
+                CachedAsyncImage(url: url) { phase in
                     if case .success(let img) = phase {
                         img.resizable().aspectRatio(contentMode: .fill)
                     } else {
