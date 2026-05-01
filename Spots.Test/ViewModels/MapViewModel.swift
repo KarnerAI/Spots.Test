@@ -80,7 +80,8 @@ class MapViewModel: ObservableObject {
     /// pans the map across the same spots.
     private var uploadedImageSpotIds: Set<String> = []
 
-    /// Cache for rendered marker icons keyed by list type (e.g. "starred", "favorites", "bucketList")
+    /// Cache for rendered marker icons keyed by internal list-type identifier (e.g. "starred", "favorites", "bucketList").
+    /// Identifiers intentionally kept as code-level names; user-facing labels are Top Spots / Favorites / Want to Go.
     private var cachedMarkerIcons: [String: UIImage] = [:]
     
     /// True after we've triggered the first nearby fetch when location became available (avoids refetch on every location update).
@@ -149,8 +150,25 @@ class MapViewModel: ObservableObject {
     
     // MARK: - Location Management
     
+    /// Treat two locations as "the same" if they're within this distance.
+    /// Filters out CLLocationManager's redundant emissions when the device is
+    /// stationary (jitter from accuracy refinement) and small drift from a
+    /// non-moving phone in someone's pocket. 25m is well below the
+    /// nearbyRefreshMinDistance threshold so we never block a real refresh.
+    private let locationDedupeThreshold: CLLocationDistance = 25
+
     private func setupLocationObserver() {
+        // Capture the threshold by value so the predicate closure doesn't
+        // retain self (the publisher chain is held by self via cancellables).
+        let dedupeThreshold = locationDedupeThreshold
         locationManager.$location
+            .removeDuplicates { old, new in
+                switch (old, new) {
+                case (nil, nil):                   return true
+                case (nil, _), (_, nil):           return false
+                case let (old?, new?):             return old.distance(from: new) < dedupeThreshold
+                }
+            }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] location in
                 guard let self = self else { return }
