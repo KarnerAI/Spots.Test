@@ -326,48 +326,24 @@ class FollowService {
 
     // MARK: - Counts
 
-    private struct CountRow: Decodable { let follower_id: String? ; let followee_id: String? }
-
-    /// Accepted followers of `userId` (people who follow them).
-    func followerCount(userId: UUID) async throws -> Int {
-        if let cached = countsCache[userId], Date().timeIntervalSince(cached.timestamp) < cacheTTL {
-            return cached.followers
-        }
-        let rows: [CountRow] = try await supabase
-            .from("follows")
-            .select("follower_id")
-            .eq("followee_id", value: userId.uuidString)
-            .eq("status", value: FollowStatus.accepted.rawValue)
-            .execute()
-            .value
-        return rows.count
-    }
-
-    /// Accepted users that `userId` follows.
-    func followingCount(userId: UUID) async throws -> Int {
-        if let cached = countsCache[userId], Date().timeIntervalSince(cached.timestamp) < cacheTTL {
-            return cached.following
-        }
-        let rows: [CountRow] = try await supabase
-            .from("follows")
-            .select("followee_id")
-            .eq("follower_id", value: userId.uuidString)
-            .eq("status", value: FollowStatus.accepted.rawValue)
-            .execute()
-            .value
-        return rows.count
-    }
-
-    /// Both counts in parallel; cached together with 60s TTL.
+    /// Both counts in one RPC round-trip; cached together with 60s TTL.
+    /// Backed by `get_follow_counts` (SECURITY DEFINER) which uses COUNT(*)
+    /// against the (follower_id, status) and (followee_id, status) composite
+    /// indexes. Cheaper than the previous per-side SELECT-and-count-rows
+    /// pattern both in network bytes and DB work.
     func counts(userId: UUID, forceRefresh: Bool = false) async throws -> (followers: Int, following: Int) {
         if !forceRefresh,
            let cached = countsCache[userId],
            Date().timeIntervalSince(cached.timestamp) < cacheTTL {
             return (cached.followers, cached.following)
         }
-        async let followers = followerCount(userId: userId)
-        async let following = followingCount(userId: userId)
-        let (f, g) = try await (followers, following)
+        struct CountsRow: Codable { let followers: Int; let following: Int }
+        let rows: [CountsRow] = try await supabase
+            .rpc("get_follow_counts", params: ["p_user_id": userId.uuidString])
+            .execute()
+            .value
+        let f = rows.first?.followers ?? 0
+        let g = rows.first?.following ?? 0
         countsCache[userId] = (f, g, Date())
         return (f, g)
     }
