@@ -546,6 +546,77 @@ class LocationSavingService {
         return try await getSpotByPlaceId(spotId)
     }
 
+    /// Per-list summary returned by `get_list_tile_summaries` RPC.
+    /// `mostRecentSpotId` / `mostRecentSavedAt` are nil when the list is empty.
+    struct ListTileSummary: Codable {
+        let listId: UUID
+        let spotCount: Int
+        let mostRecentSpotId: String?
+        let mostRecentSavedAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case listId = "list_id"
+            case spotCount = "spot_count"
+            case mostRecentSpotId = "most_recent_spot_id"
+            case mostRecentSavedAt = "most_recent_saved_at"
+        }
+    }
+
+    /// Batch-fetches spot count + most-recently-saved spot id per list in one RPC call.
+    /// Replaces the per-list round-trip pattern in ProfileTileBuilder.buildTiles.
+    /// Returns rows only for lists the caller can see (RLS enforced server-side).
+    func getListTileSummaries(listIds: [UUID]) async throws -> [ListTileSummary] {
+        guard !listIds.isEmpty else { return [] }
+        let rows: [ListTileSummary] = try await supabase
+            .rpc("get_list_tile_summaries", params: ["p_list_ids": listIds.map { $0.uuidString }])
+            .execute()
+            .value
+        return rows
+    }
+
+    /// Batch-fetches Spot rows for a set of place_ids in one round-trip.
+    /// Used by ProfileTileBuilder to hydrate tile cover photos after the
+    /// summary RPC returns the most_recent_spot_id per list.
+    func getSpotsByPlaceIds(_ placeIds: [String]) async throws -> [Spot] {
+        guard !placeIds.isEmpty else { return [] }
+        let unique = Array(Set(placeIds))
+
+        struct SpotResponse: Codable {
+            let place_id: String
+            let name: String
+            let address: String?
+            let city: String?
+            let latitude: Double?
+            let longitude: Double?
+            let types: [String]?
+            let photo_url: String?
+            let photo_reference: String?
+        }
+
+        let response: [SpotResponse] = try await supabase
+            .from("spots")
+            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference")
+            .in("place_id", values: unique)
+            .execute()
+            .value
+
+        return response.map { row in
+            Spot(
+                placeId: row.place_id,
+                name: row.name,
+                address: row.address,
+                city: row.city,
+                latitude: row.latitude,
+                longitude: row.longitude,
+                types: row.types,
+                photoUrl: row.photo_url,
+                photoReference: row.photo_reference,
+                createdAt: nil,
+                updatedAt: nil
+            )
+        }
+    }
+
     /// Returns spot IDs (place_id) in the given list. Used for computing unique count across lists.
     func getSpotIdsInList(listId: UUID) async throws -> [String] {
         struct SpotIdRow: Codable {
