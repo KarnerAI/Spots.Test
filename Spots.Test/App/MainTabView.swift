@@ -6,44 +6,72 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct MainTabView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedTab = 1 // Default to Explore tab (index 1)
+    @State private var selectedTab = 1
+    // Tabs are mounted on first visit and then kept alive (preserves map camera,
+    // feed scroll position, etc.). We start with only the default tab mounted so
+    // cold start doesn't pay for the other tabs' .task / .onAppear work.
+    @State private var mountedTabs: Set<Int> = [1]
     @StateObject private var mapViewModel = MapViewModel()
     @StateObject private var locationSavingVM = LocationSavingViewModel()
 
+    // Force opaque white tab bar with a very subtle hairline (Instagram-style).
+    init() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = .white
+        // Subtle hairline: ~6% black instead of iOS's heavier system separator
+        appearance.shadowColor = UIColor.black.withAlphaComponent(0.06)
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // Content views — keep all alive to avoid recreating GMSMapView on tab switch
-            ZStack {
-                NewsFeedView()
-                    .opacity(selectedTab == 0 ? 1 : 0)
-                    .allowsHitTesting(selectedTab == 0)
-                ExploreView(viewModel: mapViewModel)
-                    .opacity(selectedTab == 1 ? 1 : 0)
-                    .allowsHitTesting(selectedTab == 1)
-                NavigationStack {
-                    ProfileView()
-                }
-                .opacity(selectedTab == 2 ? 1 : 0)
-                .allowsHitTesting(selectedTab == 2)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .environmentObject(locationSavingVM)
-            
-            // Custom bottom navigation bar
-            VStack {
-                Spacer()
-                CustomBottomNav(selectedTab: $selectedTab) { tab in
-                    selectedTab = tab
+        TabView(selection: $selectedTab) {
+            Group {
+                if mountedTabs.contains(0) {
+                    NewsFeedView()
+                } else {
+                    Color.clear
                 }
             }
+            .tabItem { Label("Newsfeed", systemImage: "newspaper") }
+            .tag(0)
+
+            Group {
+                if mountedTabs.contains(1) {
+                    ExploreView(viewModel: mapViewModel)
+                } else {
+                    Color.clear
+                }
+            }
+            .tabItem { Label("Explore", systemImage: "magnifyingglass") }
+            .tag(1)
+
+            Group {
+                if mountedTabs.contains(2) {
+                    NavigationStack {
+                        ProfileView()
+                    }
+                } else {
+                    Color.clear
+                }
+            }
+            .tabItem { Label("Profile", systemImage: "person") }
+            .tag(2)
+        }
+        .symbolVariant(.none)
+        .environmentObject(locationSavingVM)
+        .onChange(of: selectedTab) { _, newTab in
+            mountedTabs.insert(newTab)
         }
         .onAppear {
             mapViewModel.requestLocation()
         }
-        .onChange(of: scenePhase) { oldPhase, newPhase in
+        .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
                 mapViewModel.resetExploreSession()
             }
@@ -54,4 +82,3 @@ struct MainTabView: View {
 #Preview {
     MainTabView()
 }
-

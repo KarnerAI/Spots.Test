@@ -8,13 +8,21 @@
 import SwiftUI
 import GoogleMaps
 
+/// One-shot Google Maps SDK bootstrap. Called lazily the first time a
+/// `GMSMapView` is about to be instantiated so the SDK warmup doesn't sit
+/// on the cold-start main-thread path.
+enum GoogleMapsBootstrap {
+    private static let _initialize: Void = {
+        GMSServices.provideAPIKey(Config.googlePlacesAPIKey)
+    }()
+
+    static func ensureInitialized() {
+        _ = _initialize
+    }
+}
+
 @main
 struct Spots_TestApp: App {
-    init() {
-        // Initialize Google Maps with API key
-        GMSServices.provideAPIKey(Config.googlePlacesAPIKey)
-    }
-    
     var body: some Scene {
         WindowGroup {
             ContentView()

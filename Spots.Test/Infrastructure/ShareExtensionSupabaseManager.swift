@@ -19,7 +19,13 @@ class ShareExtensionSupabaseManager {
             fatalError("Invalid Supabase URL: '\(Config.supabaseURL)'. Check SupabaseURL in Info.plist.")
         }
 
-        client = SupabaseClient(supabaseURL: supabaseURL, supabaseKey: Config.supabaseAnonKey)
+        client = SupabaseClient(
+            supabaseURL: supabaseURL,
+            supabaseKey: Config.supabaseAnonKey,
+            options: SupabaseClientOptions(
+                auth: .init(emitLocalSessionAsInitialSession: true)
+            )
+        )
         
         // Set session token from App Group if available
         if AppGroupManager.shared.getSessionToken() != nil {
