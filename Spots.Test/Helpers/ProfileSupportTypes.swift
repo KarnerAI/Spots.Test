@@ -66,7 +66,7 @@ struct CityRowData {
 // MARK: - List tile loading
 
 enum ProfileTileBuilder {
-    /// Build the four-tile array (All Spots + Starred + Favorites + Bucket List)
+    /// Build the four-tile array (All Spots + Top Spots + Favorites + Want to Go)
     /// for any user given their pre-fetched lists. Returns the tiles plus the
     /// total spot count across system lists (used for the "Spots" stat).
     ///
@@ -74,9 +74,9 @@ enum ProfileTileBuilder {
     /// spot rows = 2 total. (Was ~8 sequential round-trips pre-perf-pass.)
     static func buildTiles(from userLists: [UserList]) async throws -> (tiles: [ListTileData], totalCount: Int) {
         let configs: [(type: ListType, title: String, color: Color)] = [
-            (.starred,    "Starred",     ListTileData.color(forTitle: "Starred")),
-            (.favorites,  "Favorites",   ListTileData.color(forTitle: "Favorites")),
-            (.bucketList, "Bucket List", ListTileData.color(forTitle: "Bucket List")),
+            (.starred,    ListType.starred.displayName,    ListTileData.color(forTitle: ListType.starred.displayName)),
+            (.favorites,  ListType.favorites.displayName,  ListTileData.color(forTitle: ListType.favorites.displayName)),
+            (.bucketList, ListType.bucketList.displayName, ListTileData.color(forTitle: ListType.bucketList.displayName)),
         ]
 
         // Map list-type → user's owned list, if it exists.

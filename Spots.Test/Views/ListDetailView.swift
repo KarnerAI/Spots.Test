@@ -658,7 +658,7 @@ struct SavedSpotRow: View {
 
 #Preview {
     NavigationView {
-        ListDetailView(title: "Starred", mode: .allSpots)
+        ListDetailView(title: "Top Spots", mode: .allSpots)
             .environmentObject(LocationSavingViewModel())
     }
 }

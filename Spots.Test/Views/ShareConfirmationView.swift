@@ -178,7 +178,7 @@ struct ShareConfirmationView: View {
                 .font(.system(size: 24, weight: .bold))
                 .foregroundColor(.gray900)
             
-            Text("\(selectedPlaceIds.count) spot\(selectedPlaceIds.count == 1 ? "" : "s") added to your bucket list")
+            Text("\(selectedPlaceIds.count) spot\(selectedPlaceIds.count == 1 ? "" : "s") added to your Want to Go list")
                 .font(.system(size: 16))
                 .foregroundColor(.gray600)
                 .multilineTextAlignment(.center)

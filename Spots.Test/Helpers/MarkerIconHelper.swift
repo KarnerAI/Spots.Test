@@ -17,6 +17,7 @@ enum MarkerIconHelper {
     /// Icons are looked up / stored in the provided cache to avoid repeated rendering.
     ///
     /// **Precedence (for All Spots / multi-list):** starred > favorites > bucketList.
+    /// (Internal enum names kept; user-facing labels are Top Spots / Favorites / Want to Go.)
     /// Only spots that belong to at least one of these three list types get a custom icon;
     /// spots in no list or in other list types use the default teal pin.
     static func iconForListTypes(
@@ -40,7 +41,7 @@ enum MarkerIconHelper {
             systemName = "flag.fill"
             color = .listBucketList
         } else {
-            // Default marker: spot is not in Starred, Favorites, or Bucketlist
+            // Default marker: spot is not in Top Spots, Favorites, or Want to Go
             let tealColor = UIColor(red: 0.36, green: 0.69, blue: 0.72, alpha: 1.0)
             return GMSMarker.markerImage(with: tealColor)
         }

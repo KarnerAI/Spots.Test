@@ -73,7 +73,8 @@ class LocationSavingService {
         return response.first
     }
     
-    /// Creates the three default lists (Starred, Favorites, Bucket List) for the current user if they don't exist.
+    /// Creates the three default lists (Top Spots, Favorites, Want to Go) for the current user if they don't exist.
+    /// DB enum values intentionally remain `starred` / `favorites` / `bucket_list` — only display labels were renamed.
     /// Idempotent; safe to call after signup, login, or when lists are missing.
     func ensureDefaultListsForCurrentUser() async throws {
         let userId = try await getCurrentUserId()
@@ -442,15 +443,17 @@ class LocationSavingService {
     }
 
     /// Resolves a canonical ListType for a user list. Uses list_type when present;
-    /// otherwise infers from list name so default lists (Starred, Favorites, Bucket List)
-    /// always map to a type for marker icon resolution in All Spots map.
+    /// otherwise infers from list name so default lists always map to a type for
+    /// marker icon resolution in All Spots map. Accepts both current names
+    /// (Top Spots / Favorites / Want to Go) and legacy names (Starred / Bucket List)
+    /// so rows seeded under the old labels still resolve correctly.
     private static func resolveListType(for list: UserList) -> ListType? {
         if let listType = list.listType { return listType }
         guard let name = list.name?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return nil }
         let lower = name.lowercased()
-        if lower == "starred" { return .starred }
+        if lower == "top spots" || lower == "starred" { return .starred }
         if lower == "favorites" { return .favorites }
-        if lower == "bucket list" { return .bucketList }
+        if lower == "want to go" || lower == "bucket list" { return .bucketList }
         return nil
     }
 
