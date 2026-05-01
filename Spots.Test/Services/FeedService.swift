@@ -68,18 +68,20 @@ class FeedService {
             let name: String
             let address: String?
             let city: String?
+            let country: String?
             let latitude: Double?
             let longitude: Double?
             let types: [String]?
             let photo_url: String?
             let photo_reference: String?
-            let created_at: String?
-            let updated_at: String?
+            let rating: Double?
         }
 
+        // created_at/updated_at intentionally omitted — feed UI doesn't read
+        // Spot.createdAt or Spot.updatedAt; only FeedItem.createdAt is rendered.
         let rows: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating")
             .in("place_id", values: unique)
             .execute()
             .value
@@ -91,13 +93,15 @@ class FeedService {
                 name: r.name,
                 address: r.address,
                 city: r.city,
+                country: r.country,
                 latitude: r.latitude,
                 longitude: r.longitude,
                 types: r.types,
                 photoUrl: r.photo_url,
                 photoReference: r.photo_reference,
-                createdAt: r.created_at.flatMap { SharedFormatters.date(from: $0) },
-                updatedAt: r.updated_at.flatMap { SharedFormatters.date(from: $0) }
+                rating: r.rating,
+                createdAt: nil,
+                updatedAt: nil
             )
         }
         return map

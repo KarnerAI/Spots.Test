@@ -8,38 +8,126 @@
 //
 
 import SwiftUI
+import CoreLocation
 
 struct NewsFeedView: View {
     @StateObject private var viewModel = FeedViewModel()
+    @EnvironmentObject private var locationSavingVM: LocationSavingViewModel
     @State private var navigationPath = NavigationPath()
     @State private var presentSearch = false
+    @State private var spotForSaving: PlaceAutocompleteResult?
+    @State private var spotToOpenInMaps: Spot?
+    @State private var didLoadOnce = false
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            content
-                .background(Color.gray100.ignoresSafeArea())
-                .navigationTitle("Feed")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { toolbarContent }
-                .navigationDestination(for: FeedRoute.self) { route in
-                    destination(for: route)
-                }
-                .task {
-                    await viewModel.loadInitial()
-                    await viewModel.refreshPendingRequestCount()
-                }
-                .refreshable {
-                    await viewModel.refresh()
-                    await viewModel.refreshPendingRequestCount()
-                }
-                .sheet(isPresented: $presentSearch) {
-                    NavigationStack {
+            ZStack {
+                content
+                    .background(Color.gray100.ignoresSafeArea())
+                    .navigationTitle("Feed")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { toolbarContent }
+                    .toolbarBackground(Color.white, for: .navigationBar)
+                    .toolbarBackground(.visible, for: .navigationBar)
+                    .navigationDestination(for: FeedRoute.self) { route in
+                        destination(for: route)
+                    }
+                    .task {
+                        // Run once per view lifetime — sheet dismissal and nav-pop
+                        // re-fire .task by default, but FeedViewModel.loadInitial
+                        // already has its own staleness guard so re-running here
+                        // is just Combine churn we don't need.
+                        guard !didLoadOnce else { return }
+                        didLoadOnce = true
+                        await viewModel.loadInitial()
+                        await viewModel.refreshPendingRequestCount()
+                    }
+                    .refreshable {
+                        await viewModel.refresh()
+                        await viewModel.refreshPendingRequestCount()
+                    }
+                    .sheet(isPresented: $presentSearch) {
                         SearchView(
                             onSelectSpot: { _ in presentSearch = false },
                             initialSearchMode: .users
                         )
                     }
+
+                googleMapsPromptOverlay
+            }
+            .listPickerSheet(spot: $spotForSaving)
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotToOpenInMaps != nil)
+        }
+    }
+
+    // MARK: - Open in Google Maps Overlay
+
+    @ViewBuilder
+    private var googleMapsPromptOverlay: some View {
+        if let spot = spotToOpenInMaps {
+            ZStack {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .onTapGesture { spotToOpenInMaps = nil }
+                    .transition(.opacity)
+
+                VStack(spacing: 8) {
+                    Spacer()
+
+                    VStack(spacing: 0) {
+                        VStack(spacing: 2) {
+                            Text("Open in Google Maps?")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            Text(spot.name)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+
+                        Divider()
+
+                        Button {
+                            openInGoogleMaps(spot: spot)
+                            spotToOpenInMaps = nil
+                        } label: {
+                            Text("Open")
+                                .font(.system(size: 20))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 57)
+                        }
+                    }
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    Button {
+                        spotToOpenInMaps = nil
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 57)
+                    }
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 110)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    private func openInGoogleMaps(spot: Spot) {
+        let urlString = "https://www.google.com/maps/search/?api=1&query=\(spot.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&query_place_id=\(spot.placeId)"
+        if let url = URL(string: urlString) {
+            UIApplication.shared.open(url)
         }
     }
 
@@ -127,10 +215,9 @@ struct NewsFeedView: View {
 
     private var feedList: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
-                ForEach(viewModel.items) { item in
+            LazyVStack(spacing: 8) {
+                ForEach(viewModel.items, id: \.id) { item in
                     feedRow(item)
-                        .padding(.horizontal, 16)
                         .onAppear {
                             if item.id == viewModel.items.last?.id {
                                 Task { await viewModel.loadMore() }
@@ -146,7 +233,7 @@ struct NewsFeedView: View {
                 // Bottom spacer so the last card clears the custom bottom nav.
                 Color.clear.frame(height: 88)
             }
-            .padding(.vertical, 16)
+            .padding(.top, 8)
         }
     }
 
@@ -172,12 +259,36 @@ struct NewsFeedView: View {
                     navigationPath.append(
                         FeedRoute.list(actorId: item.actorId, listId: payload.listId, name: payload.listDisplayName)
                     )
-                case .spotSave(let payload):
-                    navigationPath.append(
-                        FeedRoute.list(actorId: item.actorId, listId: payload.listId, name: payload.listDisplayName)
-                    )
+                case .spotSave:
+                    guard let spot else { return }
+                    spotToOpenInMaps = spot
+                }
+            },
+            onTapSpot: {
+                guard let spot else { return }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    spotForSaving = placeAutocompleteResult(from: spot)
                 }
             }
+        )
+    }
+
+    private func placeAutocompleteResult(from spot: Spot) -> PlaceAutocompleteResult {
+        let coordinate: CLLocationCoordinate2D? = {
+            if let lat = spot.latitude, let lon = spot.longitude {
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            }
+            return nil
+        }()
+        return PlaceAutocompleteResult(
+            placeId: spot.placeId,
+            name: spot.name,
+            address: spot.address ?? "",
+            city: spot.city,
+            types: spot.types,
+            coordinate: coordinate,
+            photoUrl: spot.photoUrl,
+            photoReference: spot.photoReference
         )
     }
 

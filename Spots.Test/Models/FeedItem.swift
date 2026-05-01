@@ -23,12 +23,19 @@ enum FeedItemPayload: Equatable, Hashable {
         let listType: ListType?
         let listName: String?
         let spotId: String
+        let otherSaversCount: Int
+        let otherSavers: [OtherSaver]
 
         /// Display label for the destination list ("Favorites", or the custom list's name).
         var listDisplayName: String {
             if let listType { return listType.displayName }
             return listName ?? "a list"
         }
+    }
+
+    struct OtherSaver: Equatable, Hashable {
+        let userId: UUID
+        let avatarUrl: String?
     }
 
     struct ListCreatedPayload: Equatable, Hashable {
@@ -85,7 +92,11 @@ extension FeedItem: Decodable {
                 listId: raw.list_id,
                 listType: raw.list_type,
                 listName: raw.list_name,
-                spotId: raw.spot_id
+                spotId: raw.spot_id,
+                otherSaversCount: raw.other_savers_count ?? 0,
+                otherSavers: (raw.other_savers ?? []).map {
+                    FeedItemPayload.OtherSaver(userId: $0.user_id, avatarUrl: $0.avatar_url)
+                }
             ))
         case .listCreated:
             let raw = try ListCreatedRaw(from: payloadDecoder)
@@ -101,6 +112,13 @@ extension FeedItem: Decodable {
         let list_type: ListType?
         let list_name: String?
         let spot_id: String
+        let other_savers_count: Int?
+        let other_savers: [OtherSaverRaw]?
+    }
+
+    private struct OtherSaverRaw: Decodable {
+        let user_id: UUID
+        let avatar_url: String?
     }
 
     private struct ListCreatedRaw: Decodable {
