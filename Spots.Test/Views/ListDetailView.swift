@@ -14,6 +14,10 @@ import CoreLocation
 enum ListDetailMode {
     case singleList(UserList)
     case allSpots
+    /// Same as `.allSpots` but driven by an explicit list of `UserList`s — used
+    /// when viewing another user's profile so we don't fall back to the current
+    /// user's lists via `getListByType`.
+    case allSpotsForLists([UserList])
 }
 
 enum SpotSortOrder: String, CaseIterable {
@@ -142,40 +146,8 @@ struct ListDetailView: View {
         .onChange(of: searchText) { _, _ in updateCachedSpots() }
         .onChange(of: sortOrder) { _, _ in updateCachedSpots() }
         .task { await loadSpots() }
-        .overlay {
-            ZStack(alignment: .bottom) {
-                if spotForSaving != nil {
-                    Color.black.opacity(0.3)
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                spotForSaving = nil
-                            }
-                        }
-                        .transition(.opacity)
-                }
-                if let spot = spotForSaving {
-                    ListPickerView(
-                        spotData: spot.toPlaceAutocompleteResult(),
-                        viewModel: locationSavingVM,
-                        onDismiss: {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                spotForSaving = nil
-                            }
-                        },
-                        onSaveComplete: {
-                            Task { await loadSpots() }
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                spotForSaving = nil
-                            }
-                        }
-                    )
-                    .padding(.bottom, 70)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotForSaving != nil)
-            .allowsHitTesting(spotForSaving != nil)
+        .listPickerSheet(spot: $spotForSaving) {
+            Task { await loadSpots() }
         }
     }
 
@@ -481,20 +453,16 @@ struct ListDetailView: View {
                 if let id = favoritesList?.id { allPlaces += try await service.getSpotsInList(listId: id, listType: .favorites) }
                 if let id = bucketList?.id { allPlaces += try await service.getSpotsInList(listId: id, listType: .bucketList) }
 
-                // Deduplicate by placeId, union listTypes, keep most recent savedAt
-                var unique: [String: SpotWithMetadata] = [:]
-                for place in allPlaces {
-                    if let existing = unique[place.spot.placeId] {
-                        unique[place.spot.placeId] = SpotWithMetadata(
-                            spot: existing.spot,
-                            savedAt: max(existing.savedAt, place.savedAt),
-                            listTypes: existing.listTypes.union(place.listTypes)
-                        )
-                    } else {
-                        unique[place.spot.placeId] = place
-                    }
+                spots = Self.dedupedAndSorted(allPlaces)
+
+            case .allSpotsForLists(let lists):
+                let service = LocationSavingService.shared
+                var allPlaces: [SpotWithMetadata] = []
+                for list in lists {
+                    guard let type = list.listType else { continue }
+                    allPlaces += try await service.getSpotsInList(listId: list.id, listType: type)
                 }
-                spots = Array(unique.values).sorted { $0.savedAt > $1.savedAt }
+                spots = Self.dedupedAndSorted(allPlaces)
             }
             buildMarkers()
         } catch {
@@ -503,6 +471,23 @@ struct ListDetailView: View {
         }
 
         isLoading = false
+    }
+
+    /// Dedupe by placeId, union listTypes, keep the most recent savedAt; sort newest first.
+    private static func dedupedAndSorted(_ allPlaces: [SpotWithMetadata]) -> [SpotWithMetadata] {
+        var unique: [String: SpotWithMetadata] = [:]
+        for place in allPlaces {
+            if let existing = unique[place.spot.placeId] {
+                unique[place.spot.placeId] = SpotWithMetadata(
+                    spot: existing.spot,
+                    savedAt: max(existing.savedAt, place.savedAt),
+                    listTypes: existing.listTypes.union(place.listTypes)
+                )
+            } else {
+                unique[place.spot.placeId] = place
+            }
+        }
+        return Array(unique.values).sorted { $0.savedAt > $1.savedAt }
     }
 
     // MARK: - Map Helpers
