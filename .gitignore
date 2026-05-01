@@ -2,6 +2,11 @@
 #
 # gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
 
+# Stray Node artifacts (no JS toolchain in this iOS project)
+package-lock.json
+package.json
+node_modules/
+
 ## User settings
 xcuserdata/
 
