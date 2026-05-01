@@ -217,7 +217,20 @@ class AuthenticationViewModel: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 switch event {
-                case .initialSession, .signedIn, .tokenRefreshed:
+                case .initialSession:
+                    // With emitLocalSessionAsInitialSession=true the SDK always emits
+                    // .initialSession with the locally stored session, even if expired.
+                    // Treat an expired stored session as logged-out so the UI doesn't
+                    // strand the user; the SDK will follow up with .tokenRefreshed or
+                    // .signedOut once it resolves the refresh.
+                    if let session, !session.isExpired {
+                        self.loadProfileFromUser(session.user)
+                        self.isAuthenticated = true
+                    } else {
+                        self.isAuthenticated = false
+                        self.clearCurrentUserProfile()
+                    }
+                case .signedIn, .tokenRefreshed:
                     if let session {
                         self.loadProfileFromUser(session.user)
                         self.isAuthenticated = true
@@ -235,7 +248,6 @@ class AuthenticationViewModel: ObservableObject {
                             }
                         }
                     } else {
-                        // initialSession with nil session → no stored session
                         self.isAuthenticated = false
                         self.clearCurrentUserProfile()
                     }

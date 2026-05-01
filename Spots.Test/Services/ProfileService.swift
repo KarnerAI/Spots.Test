@@ -268,7 +268,11 @@ class ProfileService {
             print("ProfileService: Failed to convert image to JPEG")
             throw ProfileServiceError.failedToConvertImage
         }
-        let path = "\(userId.uuidString)/avatar.jpg"
+        // Supabase Storage paths are case-sensitive. Postgres serializes uuid columns
+        // as lowercase, so any backfill or RLS-style URL reconstruction will produce
+        // a lowercase path — match that here so the URL we write to profiles.avatar_url
+        // always points at a real object.
+        let path = "\(userId.uuidString.lowercased())/avatar.jpg"
         do {
             _ = try await supabase.storage
                 .from(avatarsBucket)
