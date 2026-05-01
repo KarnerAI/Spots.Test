@@ -635,17 +635,36 @@ class LocationSavingService {
     /// Falls back to parsing city from the address field for spots saved before city extraction was added.
     func getMostExploredCity() async throws -> String? {
         try await ensureDefaultListsForCurrentUser()
-        let lists = try await getUserLists()
-        return try await mostExploredCity(forLists: lists)
+        let userId = try await getCurrentUserId()
+        return try await mostExploredCity(userId: userId)
     }
 
     /// Read-only variant for an arbitrary user. Does not create default lists.
     func getMostExploredCity(userId: UUID) async throws -> String? {
-        let lists = try await getUserLists(userId: userId)
-        return try await mostExploredCity(forLists: lists)
+        return try await mostExploredCity(userId: userId)
     }
 
-    private func mostExploredCity(forLists lists: [UserList]) async throws -> String? {
+    private func mostExploredCity(userId: UUID) async throws -> String? {
+        // Fast path: server-side aggregation across the user's saved spots.
+        // Returns nil when no spot has city populated — falls through to the
+        // legacy address-parsing path for users with only pre-backfill data.
+        let rpcResult: String? = try await supabase
+            .rpc("get_most_explored_city", params: ["p_user_id": userId.uuidString])
+            .execute()
+            .value
+        if let city = rpcResult, !city.isEmpty {
+            return city
+        }
+
+        return try await legacyMostExploredCityFromAddresses(userId: userId)
+    }
+
+    /// Pre-backfill fallback: gathers every saved spot's address and parses
+    /// city from the formatted-address string. Used only when the RPC finds
+    /// no city-populated rows (legacy data). Kept as-is to preserve behavior.
+    private func legacyMostExploredCityFromAddresses(userId: UUID) async throws -> String? {
+        let lists = try await getUserLists(userId: userId)
+
         // Gather all unique spot IDs across all lists
         var allSpotIds = Set<String>()
         for list in lists {
@@ -654,7 +673,6 @@ class LocationSavingService {
         }
         guard !allSpotIds.isEmpty else { return nil }
 
-        // Batch-fetch city + address for each spot (address is the fallback for older spots)
         struct CityRow: Codable {
             let place_id: String
             let city: String?
@@ -667,8 +685,6 @@ class LocationSavingService {
             .execute()
             .value
 
-        // Count occurrences per city.
-        // Prefer the stored city column; fall back to parsing the address for older spots.
         var cityCounts: [String: Int] = [:]
         for row in rows {
             let resolvedCity: String?
