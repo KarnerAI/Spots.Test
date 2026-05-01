@@ -24,9 +24,38 @@ struct CachedListTile: Codable {
 struct ProfileSnapshot: Codable {
     let userId: String
     let spotsCount: Int
+    let followersCount: Int
+    let followingCount: Int
     let mostExploredCity: String?
     let listTiles: [CachedListTile]
     let savedAt: Date
+
+    init(userId: String,
+         spotsCount: Int,
+         followersCount: Int = 0,
+         followingCount: Int = 0,
+         mostExploredCity: String?,
+         listTiles: [CachedListTile],
+         savedAt: Date) {
+        self.userId = userId
+        self.spotsCount = spotsCount
+        self.followersCount = followersCount
+        self.followingCount = followingCount
+        self.mostExploredCity = mostExploredCity
+        self.listTiles = listTiles
+        self.savedAt = savedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try c.decode(String.self, forKey: .userId)
+        spotsCount = try c.decode(Int.self, forKey: .spotsCount)
+        followersCount = try c.decodeIfPresent(Int.self, forKey: .followersCount) ?? 0
+        followingCount = try c.decodeIfPresent(Int.self, forKey: .followingCount) ?? 0
+        mostExploredCity = try c.decodeIfPresent(String.self, forKey: .mostExploredCity)
+        listTiles = try c.decode([CachedListTile].self, forKey: .listTiles)
+        savedAt = try c.decode(Date.self, forKey: .savedAt)
+    }
 }
 
 // MARK: - Cache

@@ -52,9 +52,7 @@ struct FollowRequestsView: View {
         let isBusy = pendingActionIds.contains(request.id)
 
         return HStack(spacing: 12) {
-            avatar(urlString: request.profile.avatarUrl)
-                .frame(width: 48, height: 48)
-                .clipShape(Circle())
+            AvatarView(urlString: request.profile.avatarUrl, size: 48)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(request.profile.displayName)
@@ -99,31 +97,6 @@ struct FollowRequestsView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-    }
-
-    private func avatar(urlString: String?) -> some View {
-        Group {
-            if let urlString, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image): image.resizable().aspectRatio(contentMode: .fill)
-                    case .empty, .failure:    avatarPlaceholder
-                    @unknown default:         avatarPlaceholder
-                    }
-                }
-            } else {
-                avatarPlaceholder
-            }
-        }
-    }
-
-    private var avatarPlaceholder: some View {
-        Circle()
-            .fill(Color.gray200)
-            .overlay(
-                Image(systemName: "person.fill")
-                    .foregroundColor(.gray400)
-            )
     }
 
     private var emptyState: some View {

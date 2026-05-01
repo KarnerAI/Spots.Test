@@ -70,6 +70,20 @@ class FollowService {
         invalidateCache(viewerId: viewerId, targetId: userId)
     }
 
+    /// Drop a follower: delete the row where `userId` follows the current user. The
+    /// inverse direction of `unfollow`. Used by the Followers list X button.
+    /// RLS must allow the followee (auth.uid()) to delete rows where followee_id = auth.uid().
+    func removeFollower(userId: UUID) async throws {
+        let viewerId = try await getCurrentUserId()
+        try await supabase
+            .from("follows")
+            .delete()
+            .eq("follower_id", value: userId.uuidString)
+            .eq("followee_id", value: viewerId.uuidString)
+            .execute()
+        invalidateCache(viewerId: viewerId, targetId: userId)
+    }
+
     /// Approve a pending follow request from `userId` (the requesting follower).
     func acceptRequest(from userId: UUID) async throws {
         let viewerId = try await getCurrentUserId()
@@ -135,7 +149,9 @@ class FollowService {
     }
 
     /// Pending follow requests addressed to the current user, with the requester's profile.
-    func pendingRequests() async throws -> [PendingRequest] {
+    /// `limit` caps how many rows are fetched server-side; pass a small value when you only
+    /// need a preview (e.g. one row to render the "sherlock.holmes + N others" summary).
+    func pendingRequests(limit: Int = 100) async throws -> [PendingRequest] {
         let viewerId = try await getCurrentUserId()
 
         let rows: [Follow] = try await supabase
@@ -144,6 +160,7 @@ class FollowService {
             .eq("followee_id", value: viewerId.uuidString)
             .eq("status", value: FollowStatus.pending.rawValue)
             .order("created_at", ascending: false)
+            .limit(limit)
             .execute()
             .value
 
@@ -172,15 +189,203 @@ class FollowService {
         return rows.count
     }
 
+    // MARK: - Lists
+
+    /// One page of a follow-graph list. `nextCursor` is the `created_at` of the last
+    /// row; pass it to the next call's `before` parameter to fetch the next page.
+    /// `nextCursor` is nil when the page is empty (no further pages exist).
+    struct FollowListPage: Equatable {
+        var profiles: [UserProfile]
+        var nextCursor: Date?
+    }
+
+    /// Accepted followers of `userId` (people who follow them), newest-first.
+    /// `query` filters server-side by username/first_name/last_name (ILIKE substring).
+    /// `before` is a cursor on `follows.created_at`; pass the last page's `nextCursor`
+    /// to fetch the next page. `limit` caps page size.
+    func followers(
+        userId: UUID,
+        query: String? = nil,
+        limit: Int = 50,
+        before: Date? = nil
+    ) async throws -> FollowListPage {
+        try await fetchFollowList(
+            userId: userId,
+            direction: .followers,
+            query: query,
+            limit: limit,
+            before: before
+        )
+    }
+
+    /// Users `userId` follows (accepted), newest-first.
+    /// See `followers(...)` for parameter semantics.
+    func following(
+        userId: UUID,
+        query: String? = nil,
+        limit: Int = 50,
+        before: Date? = nil
+    ) async throws -> FollowListPage {
+        try await fetchFollowList(
+            userId: userId,
+            direction: .following,
+            query: query,
+            limit: limit,
+            before: before
+        )
+    }
+
+    private enum FollowDirection {
+        case followers   // rows where followee_id == userId; resolve follower_id
+        case following   // rows where follower_id == userId; resolve followee_id
+    }
+
+    private func fetchFollowList(
+        userId: UUID,
+        direction: FollowDirection,
+        query: String?,
+        limit: Int,
+        before: Date?
+    ) async throws -> FollowListPage {
+        let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasQuery = !(trimmed?.isEmpty ?? true)
+
+        // When searching, narrow the profile id space first so we can intersect
+        // server-side. No client-side filtering — works regardless of total count.
+        // Cap at 200 to stay under PostgREST's URL length ceiling (~8KB) when this
+        // list flows into the follows.in() filter. 200 UUIDs ≈ 7.4KB. Above that,
+        // a search like "a" matching thousands of profiles would silently 414.
+        var matchingIds: [String]? = nil
+        if hasQuery, let q = trimmed {
+            struct IdRow: Decodable { let id: UUID }
+            let pattern = "%\(q)%"
+            let profileRows: [IdRow] = try await supabase
+                .from("profiles")
+                .select("id")
+                .or("username.ilike.\(pattern),first_name.ilike.\(pattern),last_name.ilike.\(pattern)")
+                .order("username", ascending: true)
+                .limit(200)
+                .execute()
+                .value
+            if profileRows.isEmpty { return FollowListPage(profiles: [], nextCursor: nil) }
+            matchingIds = profileRows.map { $0.id.uuidString }
+        }
+
+        let pivotColumn: String
+        switch direction {
+        case .followers: pivotColumn = "followee_id"
+        case .following: pivotColumn = "follower_id"
+        }
+        let resolveColumn: String
+        switch direction {
+        case .followers: resolveColumn = "follower_id"
+        case .following: resolveColumn = "followee_id"
+        }
+
+        var followQuery = supabase
+            .from("follows")
+            .select()
+            .eq(pivotColumn, value: userId.uuidString)
+            .eq("status", value: FollowStatus.accepted.rawValue)
+
+        if let matchingIds {
+            followQuery = followQuery.in(resolveColumn, values: matchingIds)
+        }
+        if let before {
+            followQuery = followQuery.lt("created_at", value: Self.cursorFormatter.string(from: before))
+        }
+
+        let rows: [Follow] = try await followQuery
+            .order("created_at", ascending: false)
+            .limit(limit)
+            .execute()
+            .value
+
+        guard !rows.isEmpty else { return FollowListPage(profiles: [], nextCursor: nil) }
+
+        let resolveIds: [UUID] = rows.map {
+            switch direction {
+            case .followers: return $0.followerId
+            case .following: return $0.followeeId
+            }
+        }
+
+        let profiles = try await ProfileService.shared.fetchProfiles(ids: resolveIds)
+        let profilesById = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
+        let ordered = resolveIds.compactMap { profilesById[$0] }
+        return FollowListPage(profiles: ordered, nextCursor: rows.last?.createdAt)
+    }
+
+    /// ISO8601 with fractional seconds — Supabase's PostgREST expects this shape for
+    /// timestamptz columns when filtering via query string.
+    private static let cursorFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    // MARK: - Counts
+
+    private struct CountRow: Decodable { let follower_id: String? ; let followee_id: String? }
+
+    /// Accepted followers of `userId` (people who follow them).
+    func followerCount(userId: UUID) async throws -> Int {
+        if let cached = countsCache[userId], Date().timeIntervalSince(cached.timestamp) < cacheTTL {
+            return cached.followers
+        }
+        let rows: [CountRow] = try await supabase
+            .from("follows")
+            .select("follower_id")
+            .eq("followee_id", value: userId.uuidString)
+            .eq("status", value: FollowStatus.accepted.rawValue)
+            .execute()
+            .value
+        return rows.count
+    }
+
+    /// Accepted users that `userId` follows.
+    func followingCount(userId: UUID) async throws -> Int {
+        if let cached = countsCache[userId], Date().timeIntervalSince(cached.timestamp) < cacheTTL {
+            return cached.following
+        }
+        let rows: [CountRow] = try await supabase
+            .from("follows")
+            .select("followee_id")
+            .eq("follower_id", value: userId.uuidString)
+            .eq("status", value: FollowStatus.accepted.rawValue)
+            .execute()
+            .value
+        return rows.count
+    }
+
+    /// Both counts in parallel; cached together with 60s TTL.
+    func counts(userId: UUID, forceRefresh: Bool = false) async throws -> (followers: Int, following: Int) {
+        if !forceRefresh,
+           let cached = countsCache[userId],
+           Date().timeIntervalSince(cached.timestamp) < cacheTTL {
+            return (cached.followers, cached.following)
+        }
+        async let followers = followerCount(userId: userId)
+        async let following = followingCount(userId: userId)
+        let (f, g) = try await (followers, following)
+        countsCache[userId] = (f, g, Date())
+        return (f, g)
+    }
+
+    private var countsCache: [UUID: (followers: Int, following: Int, timestamp: Date)] = [:]
+
     // MARK: - Cache
 
     func invalidateCache(viewerId: UUID? = nil, targetId: UUID? = nil) {
         guard let viewerId, let targetId else {
             relationshipCache.removeAll()
+            countsCache.removeAll()
             return
         }
         relationshipCache[Key(viewerId: viewerId, targetId: targetId)] = nil
         relationshipCache[Key(viewerId: targetId, targetId: viewerId)] = nil
+        countsCache[viewerId] = nil
+        countsCache[targetId] = nil
     }
 
     // MARK: - Helpers
