@@ -392,10 +392,10 @@ class MapViewModel: ObservableObject {
 
                 guard !Task.isCancelled else { return }
 
-                // Resolve photo references only for the first few visible spots upfront.
-                // Remaining spots are resolved on-demand via resolvePhotoReferenceIfNeeded()
-                // when the user scrolls to them in the carousel.
-                let prefetchCount = 3
+                // Photo references resolve on-demand via resolvePhotoReferenceIfNeeded()
+                // when a carousel card scrolls into view. Prefetch is disabled to avoid
+                // paying for Places Details (Advanced SKU) on every map pan.
+                let prefetchCount = 0
                 var resolvedSpots = spotsToUpload
                 // Skip ids we already resolved this session — panning the map
                 // over the same area shouldn't re-fetch Places details.
