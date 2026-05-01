@@ -21,6 +21,7 @@ struct GoogleMapView: UIViewRepresentable {
     var onMapTapped: (() -> Void)?
     
     func makeUIView(context: Context) -> GMSMapView {
+        GoogleMapsBootstrap.ensureInitialized()
         // Use the OS-cached location if available so the map opens near the user.
         // Falls back to a neutral world-level view if no cached fix exists yet.
         let cachedCoord = CLLocationManager().location?.coordinate

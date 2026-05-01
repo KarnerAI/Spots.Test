@@ -282,9 +282,15 @@ class PlacesAPIService {
             print("⚠️ WARNING: Bundle identifier is empty. iOS app restrictions may not work.")
         }
         
-        // Note: Field mask is optional for autocomplete - try without it first
-        // If needed, uncomment and adjust format:
-        // request.setValue("suggestions.placePrediction.placeId,suggestions.placePrediction.text", forHTTPHeaderField: "X-Goog-FieldMask")
+        // Field mask: only request the fields we actually decode in the response
+        // handler below (placeId, text.text, structuredFormat.{mainText,secondaryText}).
+        // Without a mask, Places Autocomplete (New) returns the full payload and
+        // bills the higher SKU (~3× the masked rate). Keep this in sync with the
+        // decoder above.
+        request.setValue(
+            "suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat,suggestions.placePrediction.types",
+            forHTTPHeaderField: "X-Goog-FieldMask"
+        )
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
@@ -376,7 +382,7 @@ class PlacesAPIService {
                         placeId: placePrediction.placeId,
                         name: name,
                         address: address,
-                        types: nil
+                        types: placePrediction.types
                     )
                 }
                 
@@ -580,10 +586,14 @@ class PlacesAPIService {
     /// - Parameter placeId: The Google Place ID
     /// - Returns: NearbySpot with full details, or nil if not found
     func fetchPlaceDetails(placeId: String) async throws -> NearbySpot? {
-        if let cached = placeDetailsCache[placeId] {
+        // Only honor cache hits that have everything the feed hero needs.
+        // A sparse cached row would short-circuit to a NearbySpot with nil
+        // city/country/rating and feed enrichment would never get those
+        // fields filled in.
+        if let cached = placeDetailsCache[placeId], cached.hasFullEnrichmentFields {
             return cached
         }
-        if let dbCached = await getCachedSpot(placeId: placeId) {
+        if let dbCached = await getCachedSpot(placeId: placeId), dbCached.hasFullEnrichmentFields {
             evictPlaceDetailsCacheIfNeeded()
             placeDetailsCache[placeId] = dbCached
             return dbCached
@@ -608,7 +618,8 @@ class PlacesAPIService {
             request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
         }
         
-        // Request specific fields
+        // Request specific fields. addressComponents is required for the
+        // city + country derivation in PlaceDetailsResponse.toNearbySpot().
         let fieldMask = [
             "id",
             "displayName",
@@ -617,7 +628,8 @@ class PlacesAPIService {
             "location",
             "types",
             "rating",
-            "photos"
+            "photos",
+            "addressComponents"
         ].joined(separator: ",")
         request.setValue(fieldMask, forHTTPHeaderField: "X-Goog-FieldMask")
         
@@ -717,11 +729,13 @@ struct PlacePrediction: Codable {
     let placeId: String
     let text: PlaceText
     let structuredFormat: StructuredFormat?
-    
+    let types: [String]?
+
     enum CodingKeys: String, CodingKey {
         case placeId = "placeId"
         case text
         case structuredFormat
+        case types
     }
 }
 
@@ -1058,36 +1072,40 @@ extension PlacesAPIService {
                 let place_id: String
                 let name: String
                 let address: String?
+                let city: String?
+                let country: String?
                 let latitude: Double?
                 let longitude: Double?
                 let types: [String]?
                 let photo_url: String?
                 let photo_reference: String?
+                let rating: Double?
             }
-            
+
             let response: [CachedSpotRow] = try await supabase
                 .from("spots")
-                .select("place_id, name, address, latitude, longitude, types, photo_url, photo_reference")
+                .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating")
                 .eq("place_id", value: placeId)
                 .limit(1)
                 .execute()
                 .value
-            
+
             guard let row = response.first,
                   let lat = row.latitude,
                   let lng = row.longitude else {
                 return nil
             }
-            
+
             let category = NearbySpot.mapCategory(from: row.types ?? [])
-            
+
             return NearbySpot(
                 placeId: row.place_id,
                 name: row.name,
                 address: row.address ?? "",
-                city: nil, // Not available from cached spot row
+                city: row.city,
+                country: row.country,
                 category: category,
-                rating: nil,
+                rating: row.rating,
                 photoReference: row.photo_reference,
                 photoUrl: row.photo_url,
                 latitude: lat,

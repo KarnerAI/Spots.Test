@@ -29,6 +29,10 @@ enum SearchMode {
     case users
 }
 
+enum ProfileRoute: Hashable {
+    case user(UUID)
+}
+
 // MARK: - SearchView
 
 struct SearchView: View {
@@ -56,7 +60,6 @@ struct SearchView: View {
     @State private var usersError: String?
     @State private var userRelationships: [UUID: FollowRelationship] = [:]
     @State private var followActionInFlight: Set<UUID> = []
-    @State private var presentedUserProfileId: UUID?
 
     init(
         onSelectSpot: @escaping (String) -> Void,
@@ -72,6 +75,19 @@ struct SearchView: View {
     }
     
     var body: some View {
+        NavigationStack {
+            content
+                .navigationBarHidden(true)
+                .navigationDestination(for: ProfileRoute.self) { route in
+                    switch route {
+                    case .user(let id):
+                        UserProfileView(userId: id)
+                    }
+                }
+        }
+    }
+
+    private var content: some View {
         ZStack {
             Color.white
                 .ignoresSafeArea()
@@ -211,70 +227,24 @@ struct SearchView: View {
                 }
             }
             
-            // MARK: - List Picker Overlay
-            if selectedSpotForSaving != nil {
-                // Dimmed background - tap to dismiss
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            selectedSpotForSaving = nil
-                        }
-                    }
-                    .transition(.opacity)
-            }
-            
-            if let spot = selectedSpotForSaving {
-                ListPickerView(
-                    spotData: spot,
-                    viewModel: locationSavingVM,
-                    onDismiss: {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            selectedSpotForSaving = nil
-                        }
-                    },
-                    onSaveComplete: {
-                        dismiss()
-                    }
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedSpotForSaving != nil)
+        .listPickerSheet(spot: $selectedSpotForSaving) {
+            dismiss()
+        }
         .transition(.move(edge: .trailing))
         .onAppear {
             locationManager.requestLocationPermission()
             Task {
                 await locationSavingVM.loadUserLists()
             }
-        }
-        .sheet(item: Binding(
-            get: { presentedUserProfileId.map(IdentifiableUUID.init) },
-            set: { presentedUserProfileId = $0?.id }
-        )) { wrapper in
-            NavigationStack {
-                UserProfileView(userId: wrapper.id)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Done") { presentedUserProfileId = nil }
-                        }
-                    }
-            }
-            .onDisappear {
-                // Refresh the relationship pill in case the user followed/unfollowed inside the sheet.
-                Task {
-                    if let updated = try? await FollowService.shared.relationship(with: wrapper.id, forceRefresh: true) {
-                        await MainActor.run { userRelationships[wrapper.id] = updated }
-                    }
-                }
+            // Re-sync follow pills when returning from a pushed UserProfileView,
+            // in case the user followed/unfollowed inside the detail screen.
+            if !userResults.isEmpty {
+                Task { await loadRelationships(for: userResults.map(\.id)) }
             }
         }
     }
 
-    private struct IdentifiableUUID: Identifiable {
-        let id: UUID
-    }
-    
     // MARK: - Recent Spots View
     
     private var recentSpotsView: some View {
@@ -457,70 +427,46 @@ struct SearchView: View {
         let relationship = userRelationships[profile.id] ?? .none
         let isBusy = followActionInFlight.contains(profile.id)
 
-        return Button {
-            presentedUserProfileId = profile.id
-        } label: {
-            HStack(spacing: 12) {
-                // Avatar
-                AsyncImage(url: profile.avatarUrl.flatMap(URL.init(string:))) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                            .frame(width: 48, height: 48)
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    case .failure:
-                        Circle()
-                            .fill(Color.gray200)
-                            .frame(width: 48, height: 48)
-                            .overlay(
-                                Image(systemName: "person.fill")
+        return HStack(spacing: 12) {
+            NavigationLink(value: ProfileRoute.user(profile.id)) {
+                HStack(spacing: 12) {
+                    AvatarView(urlString: profile.avatarUrl, size: 48)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 4) {
+                            Text(profile.displayName)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.gray900)
+                                .lineLimit(1)
+                            if profile.isPrivate {
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 10))
                                     .foregroundColor(.gray400)
-                            )
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
-                .frame(width: 48, height: 48)
-                .clipShape(Circle())
-
-                // User Info
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        Text(profile.displayName)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.gray900)
-                            .lineLimit(1)
-                        if profile.isPrivate {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.gray400)
+                            }
                         }
+
+                        Text("@\(profile.username)")
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray500)
+                            .lineLimit(1)
                     }
-
-                    Text("@\(profile.username)")
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray500)
-                        .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // Follow Button
-                followButton(for: profile, relationship: relationship, isBusy: isBusy)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-            .overlay(
-                Rectangle()
-                    .fill(Color(red: 0.98, green: 0.98, blue: 0.98))
-                    .frame(height: 0.5),
-                alignment: .bottom
-            )
+            .buttonStyle(PlainButtonStyle())
+
+            // Follow Button — sibling of the NavigationLink so its tap is not swallowed.
+            followButton(for: profile, relationship: relationship, isBusy: isBusy)
         }
-        .buttonStyle(PlainButtonStyle())
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .overlay(
+            Rectangle()
+                .fill(Color(red: 0.98, green: 0.98, blue: 0.98))
+                .frame(height: 0.5),
+            alignment: .bottom
+        )
     }
 
     @ViewBuilder
@@ -698,14 +644,22 @@ struct SearchView: View {
             selectedSpotForSaving = result
         }) {
             HStack(spacing: 12) {
-                // Map Pin Icon
+                // Category emoji (or fallback pin)
                 ZStack {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(.red)
-                        .frame(width: 40, height: 40)
-                        .background(Color(red: 1.0, green: 0.9, blue: 0.9))
-                        .clipShape(Circle())
+                    if let emoji = PlaceTypeEmoji.emoji(for: result.types) {
+                        Text(emoji)
+                            .font(.system(size: 20))
+                            .frame(width: 40, height: 40)
+                            .background(Color(red: 1.0, green: 0.9, blue: 0.9))
+                            .clipShape(Circle())
+                    } else {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.red)
+                            .frame(width: 40, height: 40)
+                            .background(Color(red: 1.0, green: 0.9, blue: 0.9))
+                            .clipShape(Circle())
+                    }
                 }
                 
                 // Text Content

@@ -13,17 +13,49 @@ struct NearbySpot: Identifiable, Equatable {
     let name: String
     let address: String
     let city: String?
+    let country: String?
     let category: String
     let rating: Double?
     var photoReference: String?
     var photoUrl: String?
     let latitude: Double
     let longitude: Double
-    
-    var id: String { placeId }
-    
+
     // Distance is computed based on user location
     var distanceMeters: Double?
+
+    /// Explicit init that defaults `country` and `distanceMeters` so existing
+    /// call sites (which pre-date the country field) keep compiling without
+    /// changes.
+    init(
+        placeId: String,
+        name: String,
+        address: String,
+        city: String? = nil,
+        country: String? = nil,
+        category: String,
+        rating: Double? = nil,
+        photoReference: String? = nil,
+        photoUrl: String? = nil,
+        latitude: Double,
+        longitude: Double,
+        distanceMeters: Double? = nil
+    ) {
+        self.placeId = placeId
+        self.name = name
+        self.address = address
+        self.city = city
+        self.country = country
+        self.category = category
+        self.rating = rating
+        self.photoReference = photoReference
+        self.photoUrl = photoUrl
+        self.latitude = latitude
+        self.longitude = longitude
+        self.distanceMeters = distanceMeters
+    }
+
+    var id: String { placeId }
     
     /// Formatted distance string (e.g., "0.1 mi" or "250 ft")
     var formattedDistance: String {
@@ -31,6 +63,17 @@ struct NearbySpot: Identifiable, Equatable {
         return DistanceCalculator.formattedDistance(meters)
     }
     
+    /// True when this row has every field the new feed hero card needs.
+    /// Used by `PlacesAPIService.fetchPlaceDetails` to decide whether the
+    /// cached row is good enough or whether to round-trip to Google.
+    var hasFullEnrichmentFields: Bool {
+        let hasPhoto = (photoUrl?.isEmpty == false) || (photoReference?.isEmpty == false)
+        let hasCity = (city?.isEmpty == false)
+        let hasCountry = (country?.isEmpty == false)
+        let hasRating = (rating != nil)
+        return hasPhoto && hasCity && hasCountry && hasRating
+    }
+
     /// Returns the best available photo URL (prefers Supabase cached URL)
     /// Returns nil if only Google API is available (requires custom loader with headers)
     func photoURL(maxWidth: Int = 400) -> URL? {
@@ -67,6 +110,26 @@ struct NearbySpot: Identifiable, Equatable {
         return spot
     }
     
+    /// Converts to a `Spot`, mapping the user-friendly category back into a
+    /// best-effort `types` array so downstream UI that keys off `Spot.types`
+    /// still works. Used by feed enrichment to merge live Google Places data
+    /// into the cached `spots` row.
+    func toSpot() -> Spot {
+        Spot(
+            placeId: placeId,
+            name: name,
+            address: address,
+            city: city,
+            country: country,
+            latitude: latitude,
+            longitude: longitude,
+            types: category.isEmpty ? nil : [category.lowercased().replacingOccurrences(of: " ", with: "_")],
+            photoUrl: photoUrl,
+            photoReference: photoReference,
+            rating: rating
+        )
+    }
+
     /// Converts to PlaceAutocompleteResult for use with ListPickerView
     func toPlaceAutocompleteResult() -> PlaceAutocompleteResult {
         PlaceAutocompleteResult(
@@ -183,8 +246,18 @@ struct NearbyPlaceResult: Codable {
         
         let category = NearbySpot.mapCategory(from: types ?? [])
 
-        // Extract city (locality) from addressComponents
-        let city = addressComponents?.first { $0.types?.contains("locality") ?? false }?.longText
+        // The Spot model's `city` field is repurposed as "regional locality" —
+        // for US/CA addresses this is the state, for international it's the
+        // closest equivalent (province, region, prefecture). Drives the
+        // 'State • Country • Category' subtitle on the feed hero card.
+        let city = addressComponents?
+            .first { $0.types?.contains("administrative_area_level_1") ?? false }?
+            .longText
+
+        // Country long name (e.g. "United States", "Japan") for the subtitle.
+        let country = addressComponents?
+            .first { $0.types?.contains("country") ?? false }?
+            .longText
 
         // Extract photo reference from the first photo
         // The photo name format is: "places/{placeId}/photos/{photoReference}"
@@ -204,6 +277,7 @@ struct NearbyPlaceResult: Codable {
             name: name,
             address: address,
             city: city,
+            country: country,
             category: category,
             rating: rating,
             photoReference: photoReference,
@@ -225,37 +299,56 @@ struct PlaceDetailsResponse: Codable {
     let types: [String]?
     let rating: Double?
     let photos: [PlacePhoto]?
-    
+    let addressComponents: [AddressComponent]?
+
     struct DisplayName: Codable {
         let text: String
         let languageCode: String?
     }
-    
+
     struct PlaceLocation: Codable {
         let latitude: Double
         let longitude: Double
     }
-    
+
     struct PlacePhoto: Codable {
         let name: String
         let widthPx: Int?
         let heightPx: Int?
     }
-    
+
+    /// Mirrors the `addressComponents` shape on `PlaceResult`. Used to derive
+    /// city + country from a single Place Details lookup so feed enrichment
+    /// doesn't have to make a second call.
+    struct AddressComponent: Codable {
+        let types: [String]?
+        let longText: String?
+        let shortText: String?
+    }
+
     /// Converts API response to NearbySpot model
     func toNearbySpot() -> NearbySpot? {
         guard let location = location else { return nil }
-        
+
         let name = displayName?.text ?? "Unknown"
         let address = shortFormattedAddress ?? formattedAddress ?? ""
         let category = NearbySpot.mapCategory(from: types ?? [])
         let photoReference = photos?.first?.name
-        
+
+        // Same semantics as PlaceResult.toNearbySpot: state-level + long country.
+        let city = addressComponents?
+            .first { $0.types?.contains("administrative_area_level_1") ?? false }?
+            .longText
+        let country = addressComponents?
+            .first { $0.types?.contains("country") ?? false }?
+            .longText
+
         return NearbySpot(
             placeId: id,
             name: name,
             address: address,
-            city: nil, // PlaceDetailsResponse has no addressComponents
+            city: city,
+            country: country,
             category: category,
             rating: rating,
             photoReference: photoReference,

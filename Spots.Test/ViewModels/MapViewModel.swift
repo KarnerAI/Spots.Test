@@ -69,6 +69,17 @@ class MapViewModel: ObservableObject {
     /// Tracks place IDs with in-flight photo resolution to avoid duplicate requests
     private var photoResolutionInFlight: Set<String> = []
 
+    /// Place IDs whose photo reference has already been resolved (prefetch path).
+    /// Persists across `fetchNearbySpots` calls so panning back over the same
+    /// region doesn't re-issue Places-detail lookups whose results are already
+    /// cached locally.
+    private var resolvedPhotoRefIds: Set<String> = []
+
+    /// Place IDs whose image has already been uploaded to Storage this session.
+    /// Avoids re-uploading the same Google Places photo every time the user
+    /// pans the map across the same spots.
+    private var uploadedImageSpotIds: Set<String> = []
+
     /// Cache for rendered marker icons keyed by list type (e.g. "starred", "favorites", "bucketList")
     private var cachedMarkerIcons: [String: UIImage] = [:]
     
@@ -386,8 +397,11 @@ class MapViewModel: ObservableObject {
                 // when the user scrolls to them in the carousel.
                 let prefetchCount = 3
                 var resolvedSpots = spotsToUpload
+                // Skip ids we already resolved this session — panning the map
+                // over the same area shouldn't re-fetch Places details.
                 let unresolvedIds = Array(resolvedSpots.enumerated()
-                    .filter { $0.element.photoReference == nil }
+                    .filter { $0.element.photoReference == nil
+                        && !self.resolvedPhotoRefIds.contains($0.element.placeId) }
                     .prefix(prefetchCount)
                     .map { $0.offset })
 
@@ -395,11 +409,13 @@ class MapViewModel: ObservableObject {
                 var resolvedRefs: [String: String] = [:]
                 for idx in unresolvedIds {
                     guard !Task.isCancelled else { return }
-                    if let details = try? await placesAPIService.fetchPlaceDetails(placeId: resolvedSpots[idx].placeId),
+                    let placeId = resolvedSpots[idx].placeId
+                    if let details = try? await placesAPIService.fetchPlaceDetails(placeId: placeId),
                        let ref = details.photoReference {
                         resolvedSpots[idx].photoReference = ref
-                        resolvedRefs[resolvedSpots[idx].placeId] = ref
+                        resolvedRefs[placeId] = ref
                     }
+                    self.resolvedPhotoRefIds.insert(placeId)
                 }
 
                 guard !Task.isCancelled else { return }
@@ -411,8 +427,15 @@ class MapViewModel: ObservableObject {
                 }
 
                 // Only upload images for spots that have a photo reference (prefetched ones)
-                let spotsForImageUpload = resolvedSpots.filter { $0.photoReference != nil || $0.photoUrl != nil }
+                // and that we haven't already uploaded this session.
+                let spotsForImageUpload = resolvedSpots.filter {
+                    ($0.photoReference != nil || $0.photoUrl != nil)
+                        && !self.uploadedImageSpotIds.contains($0.placeId)
+                }
                 let uploadedUrls = await placesAPIService.uploadSpotImages(spots: spotsForImageUpload)
+                for spot in spotsForImageUpload {
+                    self.uploadedImageSpotIds.insert(spot.placeId)
+                }
 
                 guard !Task.isCancelled else { return }
 
