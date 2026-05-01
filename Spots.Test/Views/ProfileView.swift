@@ -433,6 +433,11 @@ struct ProfileView: View {
                     .font(.system(size: 12))
                     .foregroundColor(.gray500)
             }
+            // Without contentShape, only the rendered text glyphs catch taps —
+            // the gap between the number and the label is a dead zone. A clear
+            // rectangle over the VStack bounds makes the whole stat tappable
+            // with zero visual change.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
