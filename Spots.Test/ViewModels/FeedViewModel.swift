@@ -29,6 +29,11 @@ class FeedViewModel: ObservableObject {
     private var lastLoadedAt: Date?
     private let staleInterval: TimeInterval = 60
 
+    /// Place ids whose Places-details fetch is in flight or already merged this
+    /// session. Prevents loadMore from re-issuing details for spots that an
+    /// earlier page already enriched (or is mid-enriching).
+    private var enrichedPlaceIds: Set<String> = []
+
     var canLoadMore: Bool { hasMore && !isLoadingMore && !isLoadingInitial }
 
     // MARK: - Initial load (entering the tab)
@@ -106,9 +111,112 @@ class FeedViewModel: ObservableObject {
             items.append(contentsOf: newItems)
         } else {
             items = newItems
+            // Fresh page — allow failed/stale enrichments to retry on this load.
+            enrichedPlaceIds.removeAll(keepingCapacity: true)
         }
         actorsById.merge(actors) { _, new in new }
         spotsById.merge(spots) { _, new in new }
+
+        // Lazy enrichment: any spot with missing display data (photo, city, types,
+        // rating) gets a Google Places lookup so the new hero card always has the
+        // fields it needs. Detached so the loading spinner clears as soon as the
+        // basic feed is published; cards will fill in via @Published as fetches
+        // complete.
+        Task { [weak self] in
+            await self?.enrichMissingSpotFields(for: newItems)
+        }
+    }
+
+    /// For every referenced spot whose cached row is sparse, fetch Google
+    /// Places details with bounded concurrency, merge into `spotsById`, and
+    /// fire-and-forget an `upsertSpot` so the next session reads complete
+    /// data straight from Supabase without re-hitting Google.
+    ///
+    /// Concurrency is capped at `enrichmentConcurrencyLimit` so a feed page
+    /// referencing many sparse spots doesn't burst the Google Places quota.
+    private func enrichMissingSpotFields(for items: [FeedItem]) async {
+        let referencedPlaceIds: [String] = items.compactMap {
+            if case .spotSave(let p) = $0.payload { return p.spotId }
+            return nil
+        }
+        let needsEnrichment = Array(Set(referencedPlaceIds.filter { placeId in
+            guard !enrichedPlaceIds.contains(placeId) else { return false }
+            guard let spot = spotsById[placeId] else { return true }
+            return spot.needsEnrichment
+        }))
+        guard !needsEnrichment.isEmpty else { return }
+
+        // Mark in flight up-front so a concurrent page doesn't re-issue the
+        // same Places lookups before this group resolves.
+        enrichedPlaceIds.formUnion(needsEnrichment)
+
+        await withTaskGroup(of: (String, Spot?).self) { group in
+            var iterator = needsEnrichment.makeIterator()
+            var inFlight = 0
+
+            // Prime the pump up to the concurrency limit.
+            while inFlight < Self.enrichmentConcurrencyLimit, let placeId = iterator.next() {
+                group.addTask { await Self.fetchEnrichment(placeId: placeId) }
+                inFlight += 1
+            }
+
+            while let (placeId, fetched) = await group.next() {
+                inFlight -= 1
+                if let fetched {
+                    let merged: Spot
+                    if let existing = spotsById[placeId] {
+                        merged = existing.merging(missingFieldsFrom: fetched)
+                    } else {
+                        merged = fetched
+                    }
+                    spotsById[placeId] = merged
+                    persistEnrichment(merged)
+                }
+
+                // Refill the slot.
+                if let nextPlaceId = iterator.next() {
+                    group.addTask { await Self.fetchEnrichment(placeId: nextPlaceId) }
+                    inFlight += 1
+                }
+            }
+        }
+    }
+
+    private static let enrichmentConcurrencyLimit = 4
+
+    private static func fetchEnrichment(placeId: String) async -> (String, Spot?) {
+        do {
+            let nearby = try await PlacesAPIService.shared.fetchPlaceDetails(placeId: placeId)
+            return (placeId, nearby?.toSpot())
+        } catch {
+            print("FeedViewModel.enrich: \(placeId) failed: \(error)")
+            return (placeId, nil)
+        }
+    }
+
+    /// Fire-and-forget DB writeback so the spots row catches up. We don't wait
+    /// on this — the UI already has the merged value via @Published, and a
+    /// failed write only means we'll re-enrich the same row next session.
+    private func persistEnrichment(_ spot: Spot) {
+        Task.detached(priority: .background) {
+            do {
+                try await LocationSavingService.shared.upsertSpot(
+                    placeId: spot.placeId,
+                    name: spot.name,
+                    address: spot.address,
+                    city: spot.city,
+                    country: spot.country,
+                    latitude: spot.latitude,
+                    longitude: spot.longitude,
+                    types: spot.types,
+                    photoUrl: spot.photoUrl,
+                    photoReference: spot.photoReference,
+                    rating: spot.rating
+                )
+            } catch {
+                print("FeedViewModel.persistEnrichment: \(spot.placeId) failed: \(error)")
+            }
+        }
     }
 
     private func friendlyMessage(for error: Error) -> String {
