@@ -136,7 +136,7 @@ struct ExploreView: View {
                     }
                     .padding(.trailing, 16)
                 }
-                .padding(.bottom, viewModel.selectedSpot != nil ? 222 : bottomSheetHeight + 70 + 16) // Above floating card or bottom sheet + tab bar
+                .padding(.bottom, viewModel.selectedSpot != nil ? bottomSheetHeight + 152 : bottomSheetHeight + 16)
             }
             
             // Bottom sheet only when no spot selected
@@ -171,7 +171,6 @@ struct ExploreView: View {
                             viewModel.resolvePhotoReferenceIfNeeded(for: spot.placeId)
                         }
                     )
-                    .padding(.bottom, 78) // Space for tab bar
                 }
             }
 
@@ -188,48 +187,18 @@ struct ExploreView: View {
                     )
                     .frame(width: SpotCardView.cardWidth(for: UIScreen.main.bounds.width))
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 78 + 16)
+                    .padding(.bottom, 16)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             
-            // MARK: - List Picker Overlay
-            if spotForSaving != nil {
-                // Dimmed background - tap to dismiss
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            spotForSaving = nil
-                        }
-                    }
-                    .transition(.opacity)
-            }
-            
-            if let spot = spotForSaving {
-                ListPickerView(
-                    spotData: spot.toPlaceAutocompleteResult(),
-                    viewModel: locationSavingVM,
-                    onDismiss: {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            spotForSaving = nil
-                        }
-                    },
-                    onSaveComplete: {
-                        Task {
-                            await viewModel.loadSavedPlaces(forceRefresh: true)
-                            updateMarkers()
-                        }
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            spotForSaving = nil
-                        }
-                    }
-                )
-                .padding(.bottom, 70) // Keep sheet above tab bar so Save button stays visible
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+        .listPickerSheet(spot: $spotForSaving) {
+            Task {
+                await viewModel.loadSavedPlaces(forceRefresh: true)
+                updateMarkers()
             }
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotForSaving != nil)
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: viewModel.selectedSpot?.placeId)
         .onAppear {
             // Restore map to last camera only when returning from another tab in the same session (not on first open or after app was backgrounded)

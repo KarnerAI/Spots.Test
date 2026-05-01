@@ -10,14 +10,24 @@ import SwiftUI
 enum BottomSheetState {
     case collapsed
     case expanded
-    
+
+    static let collapsedHeight: CGFloat = 110 // Just drag handle + title
+    static let expandedHeight: CGFloat = 240  // Title + carousel
+
+    /// Visible height of the sheet — used by parent layout to position
+    /// elements (e.g. the locate button) above the sheet.
     var height: CGFloat {
         switch self {
-        case .collapsed:
-            return 110 // Just drag handle + title
-        case .expanded:
-            return 240 // Title + carousel
+        case .collapsed: return Self.collapsedHeight
+        case .expanded: return Self.expandedHeight
         }
+    }
+
+    /// Distance to translate the sheet downward off-screen so only `height`
+    /// remains visible. The sheet renders at a constant `expandedHeight`;
+    /// state changes are expressed purely as a y-offset.
+    var hiddenTranslation: CGFloat {
+        Self.expandedHeight - height
     }
 }
 
@@ -65,11 +75,10 @@ struct SpotsBottomSheetView: View {
             carouselSection
                 .opacity(sheetState == .expanded ? 1.0 : 0.0)
                 .allowsHitTesting(sheetState == .expanded)
-                .animation(.easeInOut(duration: 0.2), value: sheetState)
 
             Spacer(minLength: 0)
         }
-        .frame(height: sheetState.height, alignment: .top)
+        .frame(height: BottomSheetState.expandedHeight, alignment: .top)
         .frame(maxWidth: .infinity)
         .clipped()
         .background(
@@ -84,7 +93,7 @@ struct SpotsBottomSheetView: View {
             .shadow(color: Color.black.opacity(0.15), radius: 12, x: 0, y: -4)
         )
         .gesture(dragGesture)
-        .offset(y: dragOffset)
+        .offset(y: sheetState.hiddenTranslation + dragOffset)
         .animation(springAnimation, value: sheetState)
     }
     

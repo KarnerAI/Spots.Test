@@ -16,7 +16,13 @@ class ImageStorageService {
     private let supabaseClient = SupabaseManager.shared.client
     /// Base URL for the Supabase project. Used to build public Storage URLs.
     private var supabaseBaseURLString: String { Config.supabaseURL }
-    
+
+    /// Session-scoped cache of placeId → uploaded public URL. Avoids
+    /// re-downloading from Google + re-uploading to Storage when the same
+    /// place is hit multiple times (map pan, feed hydration, list re-open).
+    /// Cleared automatically on app restart, where Storage is the source of truth.
+    private let uploadedURLCache = NSCache<NSString, NSString>()
+
     private init() {}
     
     // MARK: - Public Methods
@@ -29,8 +35,14 @@ class ImageStorageService {
     ///   - placeId: The Google Place ID (used as filename)
     /// - Returns: The public URL of the uploaded image in Supabase Storage, or nil if failed
     func uploadSpotImage(photoReference: String, placeId: String) async -> String? {
+        // Skip the entire download + upload pipeline if we already uploaded
+        // this place this session.
+        if let cachedURL = uploadedURLCache.object(forKey: placeId as NSString) {
+            return cachedURL as String
+        }
+
         let imageData: Data
-        
+
         if let cached = SpotImageCache.shared.image(for: photoReference),
            let jpegData = cached.jpegData(compressionQuality: 0.85) {
             imageData = jpegData
@@ -45,8 +57,12 @@ class ImageStorageService {
                 SpotImageCache.shared.store(uiImage, for: photoReference)
             }
         }
-        
-        return await uploadToSupabase(imageData: imageData, placeId: placeId)
+
+        let url = await uploadToSupabase(imageData: imageData, placeId: placeId)
+        if let url {
+            uploadedURLCache.setObject(url as NSString, forKey: placeId as NSString)
+        }
+        return url
     }
     
     /// Checks if an image already exists in Supabase Storage for a place
