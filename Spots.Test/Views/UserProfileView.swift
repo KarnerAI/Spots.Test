@@ -18,9 +18,19 @@ struct UserProfileView: View {
 
     @State private var profile: UserProfile?
     @State private var relationship: FollowRelationship = .none
-    @State private var isLoadingProfile = true
+    @State private var isLoadingProfile: Bool
     @State private var isMutatingFollow = false
     @State private var errorMessage: String?
+
+    /// Seed `profile` synchronously from ProfileService's cache so navigating
+    /// from feed / search / followers lists paints the header instantly.
+    /// Cache miss = same behavior as before (spinner until network resolves).
+    init(userId: UUID) {
+        self.userId = userId
+        let cached = ProfileService.shared.cachedProfile(userId: userId)
+        _profile = State(initialValue: cached)
+        _isLoadingProfile = State(initialValue: cached == nil)
+    }
 
     @State private var followersCount: Int = 0
     @State private var followingCount: Int = 0
@@ -481,11 +491,17 @@ struct UserProfileView: View {
     // MARK: - Data loading
 
     private func load() async {
-        isLoadingProfile = true
+        // Don't toggle isLoadingProfile back on if we already have a cached
+        // profile — the header is already rendered, no spinner needed.
+        if profile == nil { isLoadingProfile = true }
         do {
+            // forceRefresh: false (default) — the 60s caches in ProfileService
+            // and FollowService make repeat navigation instant. Mutations
+            // (follow / unfollow) invalidate the cache themselves so we don't
+            // need to bypass it on every navigation.
             async let profileTask = ProfileService.shared.fetchProfile(userId: userId)
-            async let relTask = FollowService.shared.relationship(with: userId, forceRefresh: true)
-            async let countsTask = FollowService.shared.counts(userId: userId, forceRefresh: true)
+            async let relTask = FollowService.shared.relationship(with: userId)
+            async let countsTask = FollowService.shared.counts(userId: userId)
 
             let loadedProfileOptional = try await profileTask
             let loadedRelationship = try await relTask

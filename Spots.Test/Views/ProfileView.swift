@@ -121,7 +121,9 @@ struct ProfileView: View {
 
     private func refreshFollowCounts(userId: UUID) async {
         do {
-            let counts = try await FollowService.shared.counts(userId: userId, forceRefresh: true)
+            // forceRefresh: false — the 60s FollowService cache is fine for
+            // repeat opens of own profile. Mutations invalidate the cache.
+            let counts = try await FollowService.shared.counts(userId: userId)
             await MainActor.run {
                 withTransaction(Transaction(animation: nil)) {
                     followersCount = counts.followers

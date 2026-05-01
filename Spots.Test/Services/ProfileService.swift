@@ -74,6 +74,17 @@ class ProfileService {
 
     // MARK: - Fetch
 
+    /// Synchronous cache lookup. Returns the cached profile if it exists and is fresh,
+    /// else nil. Use to seed view state before the async fetch fires so the first
+    /// render shows the user instantly when navigating from feed / search / followers.
+    func cachedProfile(userId: UUID) -> UserProfile? {
+        guard let entry = profileCache[userId],
+              Date().timeIntervalSince(entry.timestamp) < profileCacheTTL else {
+            return nil
+        }
+        return entry.profile
+    }
+
     /// Load the profile row for the given user. Returns nil if no row exists yet.
     func fetchProfile(userId: UUID) async throws -> UserProfile? {
         if let entry = profileCache[userId], Date().timeIntervalSince(entry.timestamp) < profileCacheTTL {
@@ -172,6 +183,10 @@ class ProfileService {
             .limit(limit)
             .execute()
             .value
+        // Warm the cache so tapping a search result paints the profile instantly.
+        for profile in rows {
+            profileCache[profile.id] = (profile, Date())
+        }
         return rows
     }
 

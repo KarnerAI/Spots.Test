@@ -18,12 +18,15 @@ struct ListTileData {
     let isAllSpots: Bool
 
     /// Deterministic fallback color based on tile title.
+    /// Accepts both current titles (Top Spots / Want to Go) and legacy titles
+    /// (Starred / Bucket List) so cached `CachedListTile` rows from before the
+    /// rename still resolve to the correct color instead of the gray default.
     static func color(forTitle title: String) -> Color {
         switch title {
-        case "Starred":     return Color(red: 0.60, green: 0.50, blue: 0.30)
-        case "Favorites":   return Color(red: 0.55, green: 0.30, blue: 0.30)
-        case "Bucket List": return Color(red: 0.28, green: 0.45, blue: 0.60)
-        default:            return Color.gray400
+        case "Top Spots", "Starred":     return Color(red: 0.60, green: 0.50, blue: 0.30)
+        case "Favorites":                return Color(red: 0.55, green: 0.30, blue: 0.30)
+        case "Want to Go", "Bucket List": return Color(red: 0.28, green: 0.45, blue: 0.60)
+        default:                         return Color.gray400
         }
     }
 

@@ -13,11 +13,14 @@ enum ListType: String, Codable, CaseIterable {
     case favorites
     case bucketList = "bucket_list"
     
+    /// User-facing label. Internal enum cases and DB enum values intentionally
+    /// keep their original spellings (`starred`, `favorites`, `bucket_list`) —
+    /// only the display strings change.
     var displayName: String {
         switch self {
-        case .starred: return "Starred"
+        case .starred: return "Top Spots"
         case .favorites: return "Favorites"
-        case .bucketList: return "Bucket List"
+        case .bucketList: return "Want to Go"
         }
     }
     
