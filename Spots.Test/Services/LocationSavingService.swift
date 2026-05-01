@@ -23,7 +23,7 @@ class LocationSavingService {
     /// Get all lists for the current user
     func getUserLists() async throws -> [UserList] {
         let userId = try await getCurrentUserId()
-        
+
         var response: [UserList] = try await supabase
             .from("user_lists")
             .select()
@@ -31,7 +31,7 @@ class LocationSavingService {
             .order("list_type", ascending: true)
             .execute()
             .value
-        
+
         if response.isEmpty {
             try await ensureDefaultListsForCurrentUser()
             response = try await supabase
@@ -42,8 +42,19 @@ class LocationSavingService {
                 .execute()
                 .value
         }
-        
+
         return response
+    }
+
+    /// Get all lists belonging to an arbitrary user. Read-only — no default-list creation.
+    func getUserLists(userId: UUID) async throws -> [UserList] {
+        try await supabase
+            .from("user_lists")
+            .select()
+            .eq("user_id", value: userId.uuidString)
+            .order("list_type", ascending: true)
+            .execute()
+            .value
     }
     
     /// Get a specific list by type
@@ -77,11 +88,13 @@ class LocationSavingService {
         name: String,
         address: String?,
         city: String? = nil,
+        country: String? = nil,
         latitude: Double?,
         longitude: Double?,
         types: [String]?,
         photoUrl: String? = nil,
-        photoReference: String? = nil
+        photoReference: String? = nil,
+        rating: Double? = nil
     ) async throws {
         // Call the database function
         // Custom Encodable to ensure all parameters are always included
@@ -91,11 +104,13 @@ class LocationSavingService {
             let p_name: String
             let p_address: String?
             let p_city: String?
+            let p_country: String?
             let p_latitude: Double?
             let p_longitude: Double?
             let p_types: [String]?
             let p_photo_url: String?
             let p_photo_reference: String?
+            let p_rating: Double?
 
             // Custom encoding to always include all parameters, even when nil
             func encode(to encoder: Encoder) throws {
@@ -112,6 +127,11 @@ class LocationSavingService {
                     try container.encode(city, forKey: .p_city)
                 } else {
                     try container.encodeNil(forKey: .p_city)
+                }
+                if let country = p_country {
+                    try container.encode(country, forKey: .p_country)
+                } else {
+                    try container.encodeNil(forKey: .p_country)
                 }
                 if let latitude = p_latitude {
                     try container.encode(latitude, forKey: .p_latitude)
@@ -138,6 +158,11 @@ class LocationSavingService {
                 } else {
                     try container.encodeNil(forKey: .p_photo_reference)
                 }
+                if let rating = p_rating {
+                    try container.encode(rating, forKey: .p_rating)
+                } else {
+                    try container.encodeNil(forKey: .p_rating)
+                }
             }
 
             enum CodingKeys: String, CodingKey {
@@ -145,11 +170,13 @@ class LocationSavingService {
                 case p_name
                 case p_address
                 case p_city
+                case p_country
                 case p_latitude
                 case p_longitude
                 case p_types
                 case p_photo_url
                 case p_photo_reference
+                case p_rating
             }
         }
 
@@ -158,11 +185,13 @@ class LocationSavingService {
             p_name: name,
             p_address: address,
             p_city: city,
+            p_country: country,
             p_latitude: latitude,
             p_longitude: longitude,
             p_types: types,
             p_photo_url: photoUrl,
-            p_photo_reference: photoReference
+            p_photo_reference: photoReference,
+            p_rating: rating
         )
         
         do {
@@ -235,21 +264,19 @@ class LocationSavingService {
             let types: [String]?
             let photo_url: String?
             let photo_reference: String?
-            let created_at: String?
-            let updated_at: String?
         }
 
+        // created_at/updated_at intentionally omitted from the SELECT — list
+        // UI uses SpotWithMetadata.savedAt, not Spot.createdAt/updatedAt.
         let batchResponse: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference")
             .in("place_id", values: placeIds)
             .execute()
             .value
 
         var spotsMap: [String: Spot] = [:]
         for spotData in batchResponse {
-            let createdAt = spotData.created_at.flatMap { SharedFormatters.date(from: $0) }
-            let updatedAt = spotData.updated_at.flatMap { SharedFormatters.date(from: $0) }
             spotsMap[spotData.place_id] = Spot(
                 placeId: spotData.place_id,
                 name: spotData.name,
@@ -260,8 +287,8 @@ class LocationSavingService {
                 types: spotData.types,
                 photoUrl: spotData.photo_url,
                 photoReference: spotData.photo_reference,
-                createdAt: createdAt,
-                updatedAt: updatedAt
+                createdAt: nil,
+                updatedAt: nil
             )
         }
 
@@ -538,7 +565,16 @@ class LocationSavingService {
     func getMostExploredCity() async throws -> String? {
         try await ensureDefaultListsForCurrentUser()
         let lists = try await getUserLists()
+        return try await mostExploredCity(forLists: lists)
+    }
 
+    /// Read-only variant for an arbitrary user. Does not create default lists.
+    func getMostExploredCity(userId: UUID) async throws -> String? {
+        let lists = try await getUserLists(userId: userId)
+        return try await mostExploredCity(forLists: lists)
+    }
+
+    private func mostExploredCity(forLists lists: [UserList]) async throws -> String? {
         // Gather all unique spot IDs across all lists
         var allSpotIds = Set<String>()
         for list in lists {
