@@ -298,7 +298,7 @@ struct ProfileView: View {
                     .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 4)
 
                 if let urlString = viewModel.currentUserAvatarUrl, let url = URL(string: urlString) {
-                    AsyncImage(url: url) { phase in
+                    CachedAsyncImage(url: url) { phase in
                         switch phase {
                         case .success(let img):
                             img.resizable().scaledToFill()
@@ -486,7 +486,7 @@ struct ProfileView: View {
         ZStack(alignment: .bottomLeading) {
             // Background: Supabase photo URL → Google photo reference → solid color
             if let urlString = list.coverImageUrl, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
+                CachedAsyncImage(url: url) { phase in
                     if case .success(let img) = phase {
                         img.resizable().aspectRatio(contentMode: .fill)
                     } else {

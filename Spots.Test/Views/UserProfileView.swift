@@ -367,7 +367,7 @@ struct UserProfileView: View {
     private func listCard(_ list: ListTileData) -> some View {
         ZStack(alignment: .bottomLeading) {
             if let urlString = list.coverImageUrl, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
+                CachedAsyncImage(url: url) { phase in
                     if case .success(let img) = phase {
                         img.resizable().aspectRatio(contentMode: .fill)
                     } else {
