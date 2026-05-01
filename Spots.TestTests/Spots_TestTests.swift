@@ -17,6 +17,27 @@ struct Spots_TestTests {
 
 }
 
+// MARK: - List Type Display Name Tests
+//
+// Guards against accidental rename / typo regressions in the user-facing
+// labels for the three default lists. Internal enum cases (`starred`,
+// `favorites`, `bucketList`) intentionally keep their original spellings
+// — only `displayName` should change here in future renames.
+struct ListTypeDisplayNameTests {
+
+    @Test func starredDisplaysAsTopSpots() {
+        #expect(ListType.starred.displayName == "Top Spots")
+    }
+
+    @Test func favoritesDisplaysAsFavorites() {
+        #expect(ListType.favorites.displayName == "Favorites")
+    }
+
+    @Test func bucketListDisplaysAsWantToGo() {
+        #expect(ListType.bucketList.displayName == "Want to Go")
+    }
+}
+
 // MARK: - Display List Type Resolver Tests
 
 struct DisplayListTypeResolverTests {

@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ListPickerView: View {
     let spotData: PlaceAutocompleteResult
@@ -21,6 +22,13 @@ struct ListPickerView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var errorMessage: String?
+
+    /// Bumped each time the user toggles Top Spots ON via `toggle(_:)`.
+    /// Bound to `.symbolEffect(.bounce, value:)` on the Top Spots row's star
+    /// icon so only user-initiated additions fire the celebration — initial
+    /// pre-selection from existing membership and toggle-OFF do not animate.
+    @State private var topSpotsBouncePulse: Int = 0
+    private let lightHaptic = UIImpactFeedbackGenerator(style: .light)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,11 +79,16 @@ struct ListPickerView: View {
     private func listRow(_ list: UserList) -> some View {
         let isSelected = selectedListIds.contains(list.id)
         let count = listCounts[list.id] ?? 0
+        let isTopSpots = list.listType == .starred
 
         return HStack(spacing: 12) {
             Image(systemName: list.listType?.iconName ?? "list.bullet")
                 .foregroundColor(list.listType?.iconColor ?? Color.spotsTeal)
                 .frame(width: 20, height: 20)
+                // Bind the bounce only to the Top Spots row so unrelated
+                // toggles don't animate it. `topSpotsBouncePulse` only ever
+                // increments from `toggle(_:)` on a user-initiated add.
+                .symbolEffect(.bounce, value: isTopSpots ? topSpotsBouncePulse : 0)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(list.displayName)
@@ -165,6 +178,13 @@ struct ListPickerView: View {
             selectedListIds.remove(id)
         } else {
             selectedListIds.insert(id)
+            // Top Spots is the elite tier — celebrate user adds with a bounce
+            // + light haptic. Fires only here (user toggle-on), never on
+            // initial pre-selection from existing membership or on remove.
+            if viewModel.userLists.first(where: { $0.id == id })?.listType == .starred {
+                topSpotsBouncePulse &+= 1
+                lightHaptic.impactOccurred()
+            }
         }
     }
 

@@ -41,4 +41,4 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.create_default_lists_for_user IS 'Creates the 3 default lists (Starred, Favorites, Bucket List) for a user. Guarded so anon callers are blocked and authenticated callers can only act on their own user_id; trigger/service-role contexts are allowed.';
+COMMENT ON FUNCTION public.create_default_lists_for_user IS 'Creates the 3 default lists (Top Spots, Favorites, Want to Go) for a user. Guarded so anon callers are blocked and authenticated callers can only act on their own user_id; trigger/service-role contexts are allowed.';

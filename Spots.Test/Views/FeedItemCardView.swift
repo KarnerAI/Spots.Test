@@ -114,11 +114,14 @@ struct FeedItemCardView: View {
 
     // MARK: - Activity copy
 
+    /// Verb stands alone in the header (the spot name is rendered separately
+    /// over the hero image below). Each phrase must read as a complete clause
+    /// without an immediately following object.
     private func spotSaveVerb(payload: FeedItemPayload.SpotSavePayload) -> String {
         switch payload.listType {
         case .favorites:  return "favorited"
-        case .bucketList: return "added to bucket list"
-        case .starred:    return "starred"
+        case .bucketList: return "wants to go"
+        case .starred:    return "added to Top Spots"
         case .none:       return "saved to \(payload.listDisplayName)"
         }
     }

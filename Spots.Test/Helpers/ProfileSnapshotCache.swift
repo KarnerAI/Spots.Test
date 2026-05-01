@@ -71,10 +71,27 @@ final class ProfileSnapshotCache {
     /// ProfileView should do a background refresh on next appear.
     private(set) var isStale: Bool = false
 
+    /// Cache filename. Bump the version suffix when on-disk format or any
+    /// embedded display string in `CachedListTile.title` changes — the old
+    /// file is then ignored and best-effort deleted, so users never see
+    /// stale labels carry over across upgrades.
+    /// v2: list tile titles renamed (Starred → Top Spots, Bucket List → Want to Go).
+    private static let diskFilename = "ProfileSnapshot.v2.json"
+    private static let legacyFilenames = ["ProfileSnapshot.json"]
+
     private init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        diskURL = caches.appendingPathComponent("ProfileSnapshot.json")
+        diskURL = caches.appendingPathComponent(Self.diskFilename)
+        purgeLegacyCacheFiles(in: caches)
         loadFromDisk()
+    }
+
+    /// Best-effort delete of pre-rename cache files. Failures are silent —
+    /// stale files that linger get overwritten on the next save anyway.
+    private func purgeLegacyCacheFiles(in cachesDir: URL) {
+        for name in Self.legacyFilenames {
+            try? FileManager.default.removeItem(at: cachesDir.appendingPathComponent(name))
+        }
     }
 
     /// Returns the cached snapshot if it belongs to the given user, or nil on miss.
