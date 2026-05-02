@@ -328,7 +328,7 @@ struct FormField: View {
             .background(Color.white)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(error != nil ? Color.red : Color.gray200, lineWidth: 1)
+                    .stroke((error?.isEmpty == false) ? Color.red : Color.gray200, lineWidth: 1)
             )
             .cornerRadius(12)
             
@@ -385,7 +385,7 @@ struct PasswordField: View {
             .background(Color.white)
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(error != nil ? Color.red : Color.gray200, lineWidth: 1)
+                    .stroke((error?.isEmpty == false) ? Color.red : Color.gray200, lineWidth: 1)
             )
             .cornerRadius(12)
             
