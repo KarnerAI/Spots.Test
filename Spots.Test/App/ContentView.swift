@@ -13,7 +13,11 @@ struct ContentView: View {
     var body: some View {
         Group {
             if viewModel.isAuthenticated {
-                MainTabView().environmentObject(viewModel)
+                if viewModel.needsSocialOnboarding {
+                    SocialOnboardingView(viewModel: viewModel)
+                } else {
+                    MainTabView().environmentObject(viewModel)
+                }
             } else {
                 ZStack {
                     switch viewModel.currentScreen {

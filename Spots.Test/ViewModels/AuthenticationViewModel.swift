@@ -27,6 +27,9 @@ class AuthenticationViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var isAuthenticated: Bool = false
+    /// True when a social-signup user lands without a `username` in auth metadata —
+    /// they need to complete the one-time SocialOnboardingView before reaching the app.
+    @Published var needsSocialOnboarding: Bool = false
 
     /// Current user profile from auth metadata (for profile screen). Fallbacks: "First Name", "Last Name", "username".
     @Published var currentUserFirstName: String = "First Name"
@@ -278,6 +281,10 @@ class AuthenticationViewModel: ObservableObject {
         currentUserUsername = stringFromAnyJSON(meta["username"]) ?? "username"
         currentUserAvatarUrl = stringFromAnyJSON(meta["avatar_url"])
         currentUserCoverPhotoUrl = stringFromAnyJSON(meta["cover_photo_url"])
+        // Social signups never set `username` in auth metadata (the SQL trigger writes
+        // to public.profiles, not user_metadata). Email/password signup always sets it
+        // up front. So a missing username key is a reliable "needs onboarding" signal.
+        needsSocialOnboarding = stringFromAnyJSON(meta["username"]) == nil
     }
 
     /// Refresh profile fields from the current session (call after saving Edit Profile).
@@ -299,6 +306,7 @@ class AuthenticationViewModel: ObservableObject {
         currentUserUsername = "username"
         currentUserAvatarUrl = nil
         currentUserCoverPhotoUrl = nil
+        needsSocialOnboarding = false
         ProfileSnapshotCache.shared.clear()
     }
     
@@ -313,6 +321,62 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
+    // MARK: - Social Onboarding
+
+    /// Completes first-time onboarding for a social-signup user.
+    /// Uploads the optional avatar, then writes username/first_name/last_name/avatar_url
+    /// to both the `profiles` row (already pre-populated by the SQL trigger) and to
+    /// auth user_metadata, so the existing `loadProfileFromUser` read path picks them up.
+    @MainActor
+    func completeSocialOnboarding(
+        firstName: String,
+        lastName: String,
+        username: String,
+        avatarImage: UIImage?
+    ) async throws {
+        guard let uid = currentUserId else {
+            throw NSError(domain: "AuthenticationViewModel", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "No authenticated user"
+            ])
+        }
+
+        // 1. Upload avatar if provided. Soft-fail: if upload errors, save the rest
+        //    without an avatar so the user isn't blocked by a flaky network.
+        var finalAvatarUrl: String? = currentUserAvatarUrl
+        if let image = avatarImage {
+            do {
+                finalAvatarUrl = try await ProfileService.shared.uploadAvatar(userId: uid, image: image)
+            } catch {
+                print("AuthenticationViewModel: avatar upload failed (continuing): \(error)")
+            }
+        }
+
+        // 2. Update profiles row with the user-confirmed values.
+        try await ProfileService.shared.updateProfile(
+            userId: uid,
+            firstName: firstName,
+            lastName: lastName,
+            username: username,
+            avatarUrl: finalAvatarUrl
+        )
+
+        // 3. Sync to auth user_metadata so the in-memory ViewModel state stays in sync
+        //    on the next session refresh.
+        await ProfileService.shared.syncAuthMetadata(
+            firstName: firstName,
+            lastName: lastName,
+            username: username,
+            avatarUrl: finalAvatarUrl
+        )
+
+        // 4. Update local state directly — don't wait for the auth listener round-trip.
+        currentUserFirstName = firstName
+        currentUserLastName = lastName
+        currentUserUsername = username
+        currentUserAvatarUrl = finalAvatarUrl
+        needsSocialOnboarding = false
+    }
+
     // MARK: - Social Login
     func handleSocialLogin(provider: String, onSuccess: @escaping () -> Void) {
         switch provider {
