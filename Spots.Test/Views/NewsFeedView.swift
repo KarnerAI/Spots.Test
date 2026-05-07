@@ -45,10 +45,15 @@ struct NewsFeedView: View {
                         didLoadOnce = true
                         await viewModel.loadInitial()
                         await viewModel.refreshPendingRequestCount()
+                        // Populate the saved-places map so feed cards can
+                        // render the correct list-type icon on first paint.
+                        // Has its own staleness guard, cheap to call again.
+                        await locationSavingVM.loadSavedPlaces()
                     }
                     .refreshable {
                         await viewModel.refresh()
                         await viewModel.refreshPendingRequestCount()
+                        await locationSavingVM.loadSavedPlaces(forceRefresh: true)
                     }
                     .onChange(of: scenePhase) { _, newPhase in
                         // App came back to the foreground — refetch if our cache
@@ -57,6 +62,7 @@ struct NewsFeedView: View {
                             Task {
                                 await viewModel.refreshIfStale()
                                 await viewModel.refreshPendingRequestCount()
+                                await locationSavingVM.loadSavedPlaces()
                             }
                         }
                     }
@@ -276,10 +282,20 @@ struct NewsFeedView: View {
             return nil
         }()
 
+        // Saved-places state from the single-source-of-truth VM. The card
+        // shows whichever default list (Favorites / Top Spots / Want to Go)
+        // the viewer has the spot saved to, or a generic bookmark if none.
+        let listType: ListType? = {
+            guard let placeId = spot?.placeId else { return nil }
+            return locationSavingVM.spotListTypeMap[placeId]
+        }()
+
         return FeedItemCardView(
             item: item,
             actor: actor,
             spot: spot,
+            listType: listType,
+            hasLoadedSavedPlaces: locationSavingVM.hasLoadedSavedPlacesOnce,
             onTapActor: {
                 navigationPath.append(FeedRoute.user(item.actorId))
             },

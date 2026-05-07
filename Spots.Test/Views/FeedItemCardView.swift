@@ -14,6 +14,15 @@ struct FeedItemCardView: View {
     let item: FeedItem
     let actor: UserProfile?
     let spot: Spot?           // nil for list_created events
+    /// Which default list (Favorites / Top Spots / Want to Go) the *current
+    /// viewer* has saved this spot to, if any. Drives the SaveSpotButton's
+    /// icon so the user can tell at a glance whether they've already saved
+    /// the spot from the feed.
+    let listType: ListType?
+    /// True once `LocationSavingViewModel.loadSavedPlaces` has populated the
+    /// map at least once. While false, the button shows a generic bookmark
+    /// (no false negatives — we don't claim "not saved" until we know).
+    let hasLoadedSavedPlaces: Bool
     let onTapActor: () -> Void
     let onTap: () -> Void
     let onTapSpot: () -> Void
@@ -24,6 +33,8 @@ struct FeedItemCardView: View {
         item: FeedItem,
         actor: UserProfile?,
         spot: Spot?,
+        listType: ListType? = nil,
+        hasLoadedSavedPlaces: Bool = false,
         onTapActor: @escaping () -> Void,
         onTap: @escaping () -> Void,
         onTapSpot: @escaping () -> Void = {}
@@ -31,6 +42,8 @@ struct FeedItemCardView: View {
         self.item = item
         self.actor = actor
         self.spot = spot
+        self.listType = listType
+        self.hasLoadedSavedPlaces = hasLoadedSavedPlaces
         self.onTapActor = onTapActor
         self.onTap = onTap
         self.onTapSpot = onTapSpot
@@ -301,16 +314,17 @@ struct FeedItemCardView: View {
 
             Spacer(minLength: 8)
 
-            Button(action: onTapSpot) {
-                Text("Spot")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
-                    .background(Color.spotsTeal)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(PlainButtonStyle())
+            // Replaces the prior teal "Spot" capsule. Shows the matching
+            // ListIconView when the viewer has the spot saved (heart for
+            // Favorites, star for Top Spots, flag for Want to Go), so users
+            // can see at a glance whether they've already saved this from
+            // the feed. Tap still opens the same ListPickerSheet via onTapSpot.
+            SaveSpotButton(
+                placeId: spot?.placeId ?? "",
+                listType: listType,
+                hasLoadedSavedPlaces: hasLoadedSavedPlaces,
+                onTap: onTapSpot
+            )
         }
     }
 

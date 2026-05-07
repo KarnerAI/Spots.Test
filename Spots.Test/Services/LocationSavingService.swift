@@ -8,7 +8,34 @@
 import Foundation
 import Supabase
 
-class LocationSavingService {
+/// Surface area used by `LocationSavingViewModel`. Extracted as a protocol so
+/// the VM can be unit-tested with a mock without standing up a Supabase client.
+/// Production code uses the singleton (`LocationSavingService.shared`); tests
+/// inject a mock conforming to this protocol via `LocationSavingViewModel.init(service:)`.
+protocol LocationSavingServiceProtocol: AnyObject {
+    func getUserLists() async throws -> [UserList]
+    func getListByType(_ listType: ListType) async throws -> UserList?
+    func getSpotsInList(listId: UUID, listType: ListType) async throws -> [SpotWithMetadata]
+    func getSpotCount(listId: UUID) async throws -> Int
+    func getListsContainingSpot(placeId: String) async throws -> [UUID]
+    func saveSpotToList(placeId: String, listId: UUID) async throws
+    func removeSpotFromList(placeId: String, listId: UUID) async throws
+    func upsertSpot(
+        placeId: String,
+        name: String,
+        address: String?,
+        city: String?,
+        country: String?,
+        latitude: Double?,
+        longitude: Double?,
+        types: [String]?,
+        photoUrl: String?,
+        photoReference: String?,
+        rating: Double?
+    ) async throws
+}
+
+class LocationSavingService: LocationSavingServiceProtocol {
     static let shared = LocationSavingService()
 
     private let supabase = SupabaseManager.shared.client

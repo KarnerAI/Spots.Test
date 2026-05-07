@@ -13,7 +13,6 @@ import UIKit
 
 @MainActor
 class MapViewModel: ObservableObject {
-    @Published var savedPlaces: [SpotWithMetadata] = []
     @Published var currentLocation: CLLocation?
     @Published var cameraPosition: GMSCameraPosition?
     @Published var currentCameraPosition: GMSCameraPosition?
@@ -21,19 +20,26 @@ class MapViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var shouldCenterOnLocation: Bool = false
     @Published var forceCameraUpdate: Bool = false
-    
+
     // MARK: - Nearby Spots State
     @Published var nearbySpots: [NearbySpot] = []
     @Published var selectedSpot: NearbySpot? = nil
     @Published var isLoadingNearbySpots: Bool = false
     @Published var nearbyErrorMessage: String? = nil
     @Published var sheetState: BottomSheetState = .expanded
-    
-    // MARK: - Spot List Membership State
-    @Published var hasLoadedSavedPlacesOnce: Bool = false
-    @Published var spotListTypeMap: [String: ListType] = [:]
-    private var savedPlacesLastLoadedAt: Date?
-    private let savedPlacesStaleInterval: TimeInterval = 30
+
+    // MARK: - Saved-places state (lives on LocationSavingViewModel; MapViewModel passes through)
+    //
+    // Single source of truth — both Explore and Newsfeed read from
+    // `locationSavingVM.spotListTypeMap` so saving on either tab updates the
+    // bookmark icon on both without a round-trip. Existing call sites that
+    // still go through `viewModel.spotListTypeMap` etc. work unchanged via
+    // the computed-property passthroughs below.
+    private let locationSavingVM: LocationSavingViewModel
+
+    var savedPlaces: [SpotWithMetadata] { locationSavingVM.savedPlaces }
+    var spotListTypeMap: [String: ListType] { locationSavingVM.spotListTypeMap }
+    var hasLoadedSavedPlacesOnce: Bool { locationSavingVM.hasLoadedSavedPlacesOnce }
     
     // Pagination state
     private var nextPageToken: String? = nil
@@ -144,7 +150,8 @@ class MapViewModel: ObservableObject {
         lastNearbyFetchLocation = currentLocation
     }
     
-    init() {
+    init(locationSavingVM: LocationSavingViewModel) {
+        self.locationSavingVM = locationSavingVM
         setupLocationObserver()
     }
     
@@ -647,77 +654,14 @@ class MapViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Saved Places
-    
+    // MARK: - Saved Places (delegates to LocationSavingViewModel)
+    //
+    // Kept on MapViewModel for backwards compatibility — Explore's existing
+    // call sites (`.task { await viewModel.loadSavedPlaces() }`,
+    // `.listPickerSheet { ... await viewModel.loadSavedPlaces(forceRefresh: true) }`)
+    // continue to work. The actual fetch + state lives on LocationSavingViewModel.
     func loadSavedPlaces(forceRefresh: Bool = false) async {
-        if !forceRefresh, hasLoadedSavedPlacesOnce, let last = savedPlacesLastLoadedAt,
-           Date().timeIntervalSince(last) < savedPlacesStaleInterval {
-            return
-        }
-        isLoading = true
-        errorMessage = nil
-
-        do {
-            // Get all three lists
-            let starredList = try await locationSavingService.getListByType(.starred)
-            let favoritesList = try await locationSavingService.getListByType(.favorites)
-            let bucketList = try await locationSavingService.getListByType(.bucketList)
-            
-            var allPlaces: [SpotWithMetadata] = []
-            
-            // Fetch places from each list with their list type
-            if let starredId = starredList?.id {
-                let starredPlaces = try await locationSavingService.getSpotsInList(listId: starredId, listType: .starred)
-                allPlaces.append(contentsOf: starredPlaces)
-            }
-            
-            if let favoritesId = favoritesList?.id {
-                let favoritesPlaces = try await locationSavingService.getSpotsInList(listId: favoritesId, listType: .favorites)
-                allPlaces.append(contentsOf: favoritesPlaces)
-            }
-            
-            if let bucketId = bucketList?.id {
-                let bucketPlaces = try await locationSavingService.getSpotsInList(listId: bucketId, listType: .bucketList)
-                allPlaces.append(contentsOf: bucketPlaces)
-            }
-            
-            // Aggregate by placeId - merge listTypes sets and keep most recent savedAt
-            var uniquePlaces: [String: SpotWithMetadata] = [:]
-            for place in allPlaces {
-                if let existing = uniquePlaces[place.spot.placeId] {
-                    // Merge the listTypes sets
-                    let mergedListTypes = existing.listTypes.union(place.listTypes)
-                    // Keep the most recent savedAt
-                    let mostRecentSavedAt = max(existing.savedAt, place.savedAt)
-                    uniquePlaces[place.spot.placeId] = SpotWithMetadata(
-                        spot: existing.spot,
-                        savedAt: mostRecentSavedAt,
-                        listTypes: mergedListTypes
-                    )
-                } else {
-                    uniquePlaces[place.spot.placeId] = place
-                }
-            }
-            
-            savedPlaces = Array(uniquePlaces.values)
-            
-            // Precompute display list type map for efficient O(1) lookups in cards
-            spotListTypeMap = Dictionary(uniqueKeysWithValues:
-                savedPlaces.compactMap { spot in
-                    guard let listType = displayListType(for: spot.listTypes) else { return nil }
-                    return (spot.spot.placeId, listType)
-                }
-            )
-            
-            hasLoadedSavedPlacesOnce = true
-            savedPlacesLastLoadedAt = Date()
-            isLoading = false
-
-        } catch {
-            errorMessage = "Failed to load saved places: \(error.localizedDescription)"
-            isLoading = false
-            print("Error loading saved places: \(error)")
-        }
+        await locationSavingVM.loadSavedPlaces(forceRefresh: forceRefresh)
     }
     
     // MARK: - Map Markers
