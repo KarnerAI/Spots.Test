@@ -566,17 +566,12 @@ class PlacesAPIService {
         return (spots: spots, nextPageToken: nearbyResponse.nextPageToken)
     }
     
-    /// Fetches a photo for a place using the photo name
-    /// - Parameters:
-    ///   - photoName: The photo name from the Places API (format: "places/{placeId}/photos/{photoReference}")
-    ///   - maxWidth: Maximum width of the photo
-    /// - Returns: URL for the photo
-    func getPhotoURL(photoName: String, maxWidth: Int = 400) -> URL? {
-        // For Places API (New), we need to use the media endpoint
-        let urlString = "https://places.googleapis.com/v1/\(photoName)/media?maxWidthPx=\(maxWidth)&key=\(apiKey)"
-        return URL(string: urlString)
-    }
-    
+    // Note: previously had `getPhotoURL(photoName:maxWidth:)` here that built a
+    // Google Places Photo URL with the API key in the query string. Removed —
+    // it had zero callers, and putting the key in the URL leaks it to logs and
+    // referers. Use `GooglePlacesPhotoFetcher.fetch(...)` instead, which sends
+    // the key via the `X-Goog-Api-Key` header.
+
     /// In-memory cache for place details to avoid repeated API calls for the same POI.
     private var placeDetailsCache: [String: NearbySpot] = [:]
     private let placeDetailsCacheMaxEntries = 50
