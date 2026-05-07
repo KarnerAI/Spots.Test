@@ -206,6 +206,7 @@ struct SettingsView: View {
             }
             .padding(.horizontal, horizontalPadding)
             .frame(minHeight: rowHeight)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(backfillState == .running)
@@ -283,6 +284,7 @@ struct SettingsView: View {
         }
         .padding(.horizontal, horizontalPadding)
         .frame(height: rowHeight)
+        .contentShape(Rectangle())
     }
 
     private var footer: some View {

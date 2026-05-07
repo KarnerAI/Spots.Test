@@ -21,13 +21,17 @@ class FeedViewModel: ObservableObject {
     @Published var isLoadingMore = false
     @Published var errorMessage: String?
 
+    /// Bumped whenever the user re-taps the already-active Newsfeed tab.
+    /// `NewsFeedView` observes this to scroll to top and force a refresh.
+    @Published var scrollToTopToken = UUID()
+
     private let feedService = FeedService.shared
     private let followService = FollowService.shared
 
     private let pageSize = 20
     private var hasMore = true
     private var lastLoadedAt: Date?
-    private let staleInterval: TimeInterval = 60
+    private let staleInterval: TimeInterval = 30
 
     /// Place ids whose Places-details fetch is in flight or already merged this
     /// session. Prevents loadMore from re-issuing details for spots that an
@@ -55,11 +59,25 @@ class FeedViewModel: ObservableObject {
 
     // MARK: - Pull to refresh
 
+    /// Always hits the network. No client-side staleness gate may short-circuit
+    /// this — pull-to-refresh is the user's explicit "give me fresh data" lever.
     func refresh() async {
         isRefreshing = true
         errorMessage = nil
         await loadFirstPage()
         isRefreshing = false
+    }
+
+    // MARK: - Soft refresh (tab re-entry, foreground)
+
+    /// Refetches the first page only if our last successful load is older than
+    /// `staleInterval`. No skeleton, no spinner — meant for tab re-entry and
+    /// scenePhase wake. Cheap to call; bails out fast on the hot path.
+    func refreshIfStale() async {
+        if let last = lastLoadedAt, Date().timeIntervalSince(last) < staleInterval {
+            return
+        }
+        await loadFirstPage()
     }
 
     // MARK: - Pagination
@@ -93,6 +111,7 @@ class FeedViewModel: ObservableObject {
     private func loadFirstPage() async {
         do {
             let page = try await feedService.fetchFeed(cursor: nil, limit: pageSize)
+            print("FeedViewModel.loadFirstPage: fetched \(page.count) items, top id=\(page.first?.id ?? "nil")")
             try await hydrate(page, append: false)
             hasMore = page.count >= pageSize
             lastLoadedAt = Date()
