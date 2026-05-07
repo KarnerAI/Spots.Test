@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		25110DB02F0268C100D309C7 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 25110D6B2F02602D00D309C7 /* Supabase */; };
+		2528B39C2FA687FC00F11E0B /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 2528B39B2FA687FC00F11E0B /* GoogleSignIn */; };
+		2528B39E2FA687FC00F11E0B /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 2528B39D2FA687FC00F11E0B /* GoogleSignInSwift */; };
 		254268692F0777AD006A8A89 /* GoogleMaps in Frameworks */ = {isa = PBXBuildFile; productRef = 254268682F0777AD006A8A89 /* GoogleMaps */; };
 /* End PBXBuildFile section */
 
@@ -59,6 +61,8 @@
 			files = (
 				25110DB02F0268C100D309C7 /* Supabase in Frameworks */,
 				254268692F0777AD006A8A89 /* GoogleMaps in Frameworks */,
+				2528B39C2FA687FC00F11E0B /* GoogleSignIn in Frameworks */,
+				2528B39E2FA687FC00F11E0B /* GoogleSignInSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -122,6 +126,8 @@
 			packageProductDependencies = (
 				25110D6B2F02602D00D309C7 /* Supabase */,
 				254268682F0777AD006A8A89 /* GoogleMaps */,
+				2528B39B2FA687FC00F11E0B /* GoogleSignIn */,
+				2528B39D2FA687FC00F11E0B /* GoogleSignInSwift */,
 			);
 			productName = Spots.Test;
 			productReference = 25110D382F02560F00D309C7 /* Spots.Test.app */;
@@ -208,6 +214,7 @@
 			packageReferences = (
 				25110D6A2F02602D00D309C7 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 				254268672F0777AD006A8A89 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */,
+				2528B39A2FA687FC00F11E0B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 25110D392F02560F00D309C7 /* Products */;
@@ -624,6 +631,14 @@
 				minimumVersion = 2.5.1;
 			};
 		};
+		2528B39A2FA687FC00F11E0B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.1.0;
+			};
+		};
 		254268672F0777AD006A8A89 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/googlemaps/ios-maps-sdk.git";
@@ -639,6 +654,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 25110D6A2F02602D00D309C7 /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Supabase;
+		};
+		2528B39B2FA687FC00F11E0B /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2528B39A2FA687FC00F11E0B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		2528B39D2FA687FC00F11E0B /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2528B39A2FA687FC00F11E0B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
 		};
 		254268682F0777AD006A8A89 /* GoogleMaps */ = {
 			isa = XCSwiftPackageProductDependency;

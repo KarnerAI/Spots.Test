@@ -7,6 +7,8 @@
 
 import SwiftUI
 import Supabase
+import GoogleSignIn
+import CryptoKit
 
 enum AuthScreen {
     case welcome
@@ -25,6 +27,9 @@ class AuthenticationViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var isAuthenticated: Bool = false
+    /// True when a social-signup user lands without a `username` in auth metadata —
+    /// they need to complete the one-time SocialOnboardingView before reaching the app.
+    @Published var needsSocialOnboarding: Bool = false
 
     /// Current user profile from auth metadata (for profile screen). Fallbacks: "First Name", "Last Name", "username".
     @Published var currentUserFirstName: String = "First Name"
@@ -276,6 +281,10 @@ class AuthenticationViewModel: ObservableObject {
         currentUserUsername = stringFromAnyJSON(meta["username"]) ?? "username"
         currentUserAvatarUrl = stringFromAnyJSON(meta["avatar_url"])
         currentUserCoverPhotoUrl = stringFromAnyJSON(meta["cover_photo_url"])
+        // Social signups never set `username` in auth metadata (the SQL trigger writes
+        // to public.profiles, not user_metadata). Email/password signup always sets it
+        // up front. So a missing username key is a reliable "needs onboarding" signal.
+        needsSocialOnboarding = stringFromAnyJSON(meta["username"]) == nil
     }
 
     /// Refresh profile fields from the current session (call after saving Edit Profile).
@@ -297,6 +306,7 @@ class AuthenticationViewModel: ObservableObject {
         currentUserUsername = "username"
         currentUserAvatarUrl = nil
         currentUserCoverPhotoUrl = nil
+        needsSocialOnboarding = false
         ProfileSnapshotCache.shared.clear()
     }
     
@@ -311,16 +321,156 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Social Login (Placeholder for now)
+    // MARK: - Social Onboarding
+
+    /// Completes first-time onboarding for a social-signup user.
+    /// Uploads the optional avatar, then writes username/first_name/last_name/avatar_url
+    /// to both the `profiles` row (already pre-populated by the SQL trigger) and to
+    /// auth user_metadata, so the existing `loadProfileFromUser` read path picks them up.
+    @MainActor
+    func completeSocialOnboarding(
+        firstName: String,
+        lastName: String,
+        username: String,
+        avatarImage: UIImage?
+    ) async throws {
+        guard let uid = currentUserId else {
+            throw NSError(domain: "AuthenticationViewModel", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "No authenticated user"
+            ])
+        }
+
+        // 1. Upload avatar if provided. Soft-fail: if upload errors, save the rest
+        //    without an avatar so the user isn't blocked by a flaky network.
+        var finalAvatarUrl: String? = currentUserAvatarUrl
+        if let image = avatarImage {
+            do {
+                finalAvatarUrl = try await ProfileService.shared.uploadAvatar(userId: uid, image: image)
+            } catch {
+                print("AuthenticationViewModel: avatar upload failed (continuing): \(error)")
+            }
+        }
+
+        // 2. Update profiles row with the user-confirmed values.
+        try await ProfileService.shared.updateProfile(
+            userId: uid,
+            firstName: firstName,
+            lastName: lastName,
+            username: username,
+            avatarUrl: finalAvatarUrl
+        )
+
+        // 3. Sync to auth user_metadata so the in-memory ViewModel state stays in sync
+        //    on the next session refresh.
+        await ProfileService.shared.syncAuthMetadata(
+            firstName: firstName,
+            lastName: lastName,
+            username: username,
+            avatarUrl: finalAvatarUrl
+        )
+
+        // 4. Update local state directly — don't wait for the auth listener round-trip.
+        currentUserFirstName = firstName
+        currentUserLastName = lastName
+        currentUserUsername = username
+        currentUserAvatarUrl = finalAvatarUrl
+        needsSocialOnboarding = false
+    }
+
+    // MARK: - Social Login
     func handleSocialLogin(provider: String, onSuccess: @escaping () -> Void) {
-        // Mock social login - we'll implement Apple Sign In later
-        print("Login with \(provider)")
-        // For now, just show a message
-        Task {
-            await MainActor.run {
+        switch provider {
+        case "Google":
+            Task { @MainActor in
+                await performGoogleSignIn(onSuccess: onSuccess)
+            }
+        default:
+            Task { @MainActor in
                 errorMessage = "\(provider) sign in will be available soon"
             }
         }
+    }
+
+    @MainActor
+    private func performGoogleSignIn(onSuccess: @escaping () -> Void) async {
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        guard let presentingVC = Self.topViewController() else {
+            errorMessage = "Unable to present Google Sign-In"
+            return
+        }
+
+        do {
+            let rawNonce = Self.randomNonceString()
+            let hashedNonce = Self.sha256(rawNonce)
+
+            let result = try await GIDSignIn.sharedInstance.signIn(
+                withPresenting: presentingVC,
+                hint: nil,
+                additionalScopes: nil,
+                nonce: hashedNonce
+            )
+
+            guard let idToken = result.user.idToken?.tokenString else {
+                errorMessage = "Google did not return an ID token"
+                return
+            }
+            let accessToken = result.user.accessToken.tokenString
+
+            try await supabase.auth.signInWithIdToken(
+                credentials: OpenIDConnectCredentials(
+                    provider: .google,
+                    idToken: idToken,
+                    accessToken: accessToken,
+                    nonce: rawNonce
+                )
+            )
+            // Auth state listener handles isAuthenticated, profile loading, default lists.
+            onSuccess()
+        } catch {
+            // Suppress the user-canceled-the-sheet case — no error UI for that.
+            let nsError = error as NSError
+            if nsError.domain == "com.google.GIDSignIn" && nsError.code == -5 { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private static func topViewController() -> UIViewController? {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = scene.windows.first(where: { $0.isKeyWindow }),
+              var top = window.rootViewController else { return nil }
+        while let presented = top.presentedViewController { top = presented }
+        return top
+    }
+
+    private static func randomNonceString(length: Int = 32) -> String {
+        let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._")
+        var result = ""
+        var remaining = length
+        while remaining > 0 {
+            let randoms: [UInt8] = (0..<16).map { _ in
+                var byte: UInt8 = 0
+                let status = SecRandomCopyBytes(kSecRandomDefault, 1, &byte)
+                precondition(status == errSecSuccess, "Unable to generate nonce")
+                return byte
+            }
+            for byte in randoms {
+                if remaining == 0 { break }
+                if byte < charset.count {
+                    result.append(charset[Int(byte)])
+                    remaining -= 1
+                }
+            }
+        }
+        return result
+    }
+
+    private static func sha256(_ input: String) -> String {
+        SHA256.hash(data: Data(input.utf8))
+            .compactMap { String(format: "%02x", $0) }
+            .joined()
     }
     
     func resetForm() {
