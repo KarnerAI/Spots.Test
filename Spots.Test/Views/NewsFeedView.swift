@@ -11,8 +11,12 @@ import SwiftUI
 import CoreLocation
 
 struct NewsFeedView: View {
-    @StateObject private var viewModel = FeedViewModel()
+    // Owned by `MainTabView` so the VM survives any future un-mount of this
+    // view, and so the tab bar can poke `refreshIfStale` / `scrollToTopToken`
+    // without an extra coordination object.
+    @ObservedObject var viewModel: FeedViewModel
     @EnvironmentObject private var locationSavingVM: LocationSavingViewModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var navigationPath = NavigationPath()
     @State private var presentSearch = false
     @State private var spotForSaving: PlaceAutocompleteResult?
@@ -45,6 +49,16 @@ struct NewsFeedView: View {
                     .refreshable {
                         await viewModel.refresh()
                         await viewModel.refreshPendingRequestCount()
+                    }
+                    .onChange(of: scenePhase) { _, newPhase in
+                        // App came back to the foreground — refetch if our cache
+                        // is older than the staleness window.
+                        if newPhase == .active {
+                            Task {
+                                await viewModel.refreshIfStale()
+                                await viewModel.refreshPendingRequestCount()
+                            }
+                        }
                     }
                     .sheet(isPresented: $presentSearch) {
                         SearchView(
@@ -214,26 +228,42 @@ struct NewsFeedView: View {
     // MARK: - Feed list
 
     private var feedList: some View {
-        ScrollView {
-            LazyVStack(spacing: 8) {
-                ForEach(viewModel.items, id: \.id) { item in
-                    feedRow(item)
-                        .onAppear {
-                            if item.id == viewModel.items.last?.id {
-                                Task { await viewModel.loadMore() }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    // Anchor for "tap tab again → scroll to top".
+                    Color.clear
+                        .frame(height: 0)
+                        .id("feed-top")
+
+                    ForEach(viewModel.items, id: \.id) { item in
+                        feedRow(item)
+                            .onAppear {
+                                if item.id == viewModel.items.last?.id {
+                                    Task { await viewModel.loadMore() }
+                                }
                             }
-                        }
-                }
+                    }
 
-                if viewModel.isLoadingMore {
-                    ProgressView()
-                        .padding(.vertical, 16)
-                }
+                    if viewModel.isLoadingMore {
+                        ProgressView()
+                            .padding(.vertical, 16)
+                    }
 
-                // Bottom spacer so the last card clears the custom bottom nav.
-                Color.clear.frame(height: 88)
+                    // Bottom spacer so the last card clears the custom bottom nav.
+                    Color.clear.frame(height: 88)
+                }
+                .padding(.top, 8)
             }
-            .padding(.top, 8)
+            .onChange(of: viewModel.scrollToTopToken) { _, _ in
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    proxy.scrollTo("feed-top", anchor: .top)
+                }
+                Task {
+                    await viewModel.refresh()
+                    await viewModel.refreshPendingRequestCount()
+                }
+            }
         }
     }
 
@@ -345,5 +375,5 @@ private struct FeedListPlaceholderView: View {
 }
 
 #Preview {
-    NewsFeedView()
+    NewsFeedView(viewModel: FeedViewModel())
 }

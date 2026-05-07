@@ -17,6 +17,10 @@ struct MainTabView: View {
     @State private var mountedTabs: Set<Int> = [1]
     @StateObject private var mapViewModel = MapViewModel()
     @StateObject private var locationSavingVM = LocationSavingViewModel()
+    // Hoisted out of NewsFeedView so the tab bar can drive scroll-to-top and
+    // tab-return refresh without an extra coordination object, and so the
+    // feed's state survives any future un-mount.
+    @StateObject private var feedViewModel = FeedViewModel()
 
     // Force opaque white tab bar with a very subtle hairline (Instagram-style).
     init() {
@@ -30,10 +34,30 @@ struct MainTabView: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        // Custom binding so we can detect "tapped the already-active tab" and
+        // "switched into the Newsfeed tab" — SwiftUI's default selection
+        // binding fires only on actual changes.
+        let tabSelection = Binding<Int>(
+            get: { selectedTab },
+            set: { newValue in
+                if newValue == 0 {
+                    if selectedTab == 0 {
+                        // Re-tap on the already-active Newsfeed tab → scroll-to-top + refresh.
+                        feedViewModel.scrollToTopToken = UUID()
+                    } else {
+                        // Switching back into the Newsfeed tab → soft refresh if stale.
+                        Task { await feedViewModel.refreshIfStale() }
+                    }
+                }
+                selectedTab = newValue
+                mountedTabs.insert(newValue)
+            }
+        )
+
+        return TabView(selection: tabSelection) {
             Group {
                 if mountedTabs.contains(0) {
-                    NewsFeedView()
+                    NewsFeedView(viewModel: feedViewModel)
                 } else {
                     Color.clear
                 }

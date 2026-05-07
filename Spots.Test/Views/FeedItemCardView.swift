@@ -18,6 +18,8 @@ struct FeedItemCardView: View {
     let onTap: () -> Void
     let onTapSpot: () -> Void
 
+    @State private var showSpottedBy = false
+
     init(
         item: FeedItem,
         actor: UserProfile?,
@@ -72,6 +74,11 @@ struct FeedItemCardView: View {
                 .padding(.vertical, 10)
         }
         .background(Color.white)
+        .sheet(isPresented: $showSpottedBy) {
+            if let spot {
+                SpottedByView(spot: spot)
+            }
+        }
     }
 
     // MARK: - Compact card (list created)
@@ -273,12 +280,23 @@ struct FeedItemCardView: View {
             // co-saver count to surface. The Spot button below stays
             // unconditional so the affordance is always available.
             if payload.otherSaversCount > 0 || !payload.otherSavers.isEmpty {
-                stackedAvatars(savers: payload.otherSavers)
+                Button {
+                    if spot != nil { showSpottedBy = true }
+                } label: {
+                    stackedAvatars(savers: payload.otherSavers)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View people who spotted this")
 
-                Text(spottedByLabel(count: payload.otherSaversCount))
-                    .font(.system(size: 13))
-                    .foregroundColor(.gray600)
-                    .lineLimit(1)
+                Button {
+                    if spot != nil { showSpottedBy = true }
+                } label: {
+                    Text(spottedByLabel(count: payload.otherSaversCount))
+                        .font(.system(size: 13))
+                        .foregroundColor(.gray600)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
             }
 
             Spacer(minLength: 8)

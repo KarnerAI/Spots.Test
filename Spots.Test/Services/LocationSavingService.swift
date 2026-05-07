@@ -948,8 +948,25 @@ class LocationSavingService {
             .execute()
     }
     
+    // MARK: - Spotters
+
+    /// All users who have saved this place to a public list, ordered most-recent first.
+    /// Powers the "Spotted By" sheet opened from a feed card.
+    func fetchSpotters(spotId: String, limit: Int = 100, offset: Int = 0) async throws -> [Spotter] {
+        let params: [String: String] = [
+            "p_spot_id": spotId,
+            "p_limit": String(limit),
+            "p_offset": String(offset)
+        ]
+        let rows: [Spotter] = try await supabase
+            .rpc("get_spot_spotters", params: params)
+            .execute()
+            .value
+        return rows
+    }
+
     // MARK: - Helper
-    
+
     private func getCurrentUserId() async throws -> UUID {
         let session = try await supabase.auth.session
         return session.user.id
