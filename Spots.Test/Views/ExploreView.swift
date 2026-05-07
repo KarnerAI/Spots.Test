@@ -280,7 +280,8 @@ struct ExploreView: View {
 }
 
 #Preview {
-    ExploreView(viewModel: MapViewModel())
-        .environmentObject(LocationSavingViewModel())
+    let saving = LocationSavingViewModel()
+    return ExploreView(viewModel: MapViewModel(locationSavingVM: saving))
+        .environmentObject(saving)
 }
 

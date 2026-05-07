@@ -15,12 +15,20 @@ struct MainTabView: View {
     // feed scroll position, etc.). We start with only the default tab mounted so
     // cold start doesn't pay for the other tabs' .task / .onAppear work.
     @State private var mountedTabs: Set<Int> = [1]
-    @StateObject private var mapViewModel = MapViewModel()
-    @StateObject private var locationSavingVM = LocationSavingViewModel()
+    // Constructed together so MapViewModel can hold the same LocationSavingViewModel
+    // that's published as an @EnvironmentObject below — single source of truth for
+    // saved-places state across Explore + Newsfeed.
+    @StateObject private var locationSavingVM: LocationSavingViewModel
+    @StateObject private var mapViewModel: MapViewModel
     // Hoisted out of NewsFeedView so the tab bar can drive scroll-to-top and
     // tab-return refresh without an extra coordination object, and so the
     // feed's state survives any future un-mount.
     @StateObject private var feedViewModel = FeedViewModel()
+
+    /// Local copy of the toast message that drives the overlay's animation.
+    /// Read once from `locationSavingVM.lastSaveError`, displayed for ~2s,
+    /// then cleared (both locally and on the VM).
+    @State private var visibleSaveError: String?
 
     // Force opaque white tab bar with a very subtle hairline (Instagram-style).
     init() {
@@ -31,6 +39,15 @@ struct MainTabView: View {
         appearance.shadowColor = UIColor.black.withAlphaComponent(0.06)
         UITabBar.appearance().standardAppearance = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
+
+        // Build LocationSavingViewModel first; pass it into MapViewModel so
+        // both observe the same saved-places state. SwiftUI initializes
+        // @StateObject lazily — wrapping each in StateObject(wrappedValue:)
+        // here guarantees both are constructed exactly once per MainTabView
+        // instance with the cross-VM reference intact.
+        let saving = LocationSavingViewModel()
+        _locationSavingVM = StateObject(wrappedValue: saving)
+        _mapViewModel = StateObject(wrappedValue: MapViewModel(locationSavingVM: saving))
     }
 
     var body: some View {
@@ -89,6 +106,9 @@ struct MainTabView: View {
         }
         .symbolVariant(.none)
         .environmentObject(locationSavingVM)
+        .overlay(alignment: .top) {
+            saveErrorToast
+        }
         .onChange(of: selectedTab) { _, newTab in
             mountedTabs.insert(newTab)
         }
@@ -99,6 +119,38 @@ struct MainTabView: View {
             if newPhase == .background {
                 mapViewModel.resetExploreSession()
             }
+        }
+        .onChange(of: locationSavingVM.lastSaveError) { _, newError in
+            // VM publishes a fresh error → mirror to local @State so the toast
+            // animates in. Clear the VM side immediately so the same error
+            // message can re-fire if the user retries and fails again.
+            guard let newError else { return }
+            visibleSaveError = newError
+            locationSavingVM.lastSaveError = nil
+            Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if visibleSaveError == newError {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        visibleSaveError = nil
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var saveErrorToast: some View {
+        if let message = visibleSaveError {
+            Text(message)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.85))
+                .clipShape(Capsule())
+                .padding(.top, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeOut(duration: 0.2), value: visibleSaveError)
         }
     }
 }

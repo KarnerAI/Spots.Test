@@ -177,11 +177,26 @@ struct ListPickerView: View {
         if selectedListIds.contains(id) {
             selectedListIds.remove(id)
         } else {
+            // Radio behavior across the three default lists: selecting one
+            // (Favorites / Top Spots / Want to Go) deselects the other two.
+            // User-created lists keep checkbox semantics. Enforces the
+            // "one default list per spot" invariant at the UI layer; the
+            // VM also coerces in saveSpotToLists as belt-and-suspenders.
+            let toggledList = viewModel.userLists.first(where: { $0.id == id })
+            if toggledList?.listType != nil {
+                let otherDefaultIds = viewModel.userLists
+                    .filter { $0.listType != nil && $0.id != id }
+                    .map(\.id)
+                for otherId in otherDefaultIds {
+                    selectedListIds.remove(otherId)
+                }
+            }
+
             selectedListIds.insert(id)
             // Top Spots is the elite tier — celebrate user adds with a bounce
             // + light haptic. Fires only here (user toggle-on), never on
             // initial pre-selection from existing membership or on remove.
-            if viewModel.userLists.first(where: { $0.id == id })?.listType == .starred {
+            if toggledList?.listType == .starred {
                 topSpotsBouncePulse &+= 1
                 lightHaptic.impactOccurred()
             }
