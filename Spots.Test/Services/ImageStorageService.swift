@@ -56,12 +56,18 @@ class ImageStorageService {
         if let cachedBytes = SpotImageCache.shared.data(
             for: photoReference,
             maxWidth: PhotoQuality.maxWidthPx
-        ) {
-            // Cache hit at save resolution: reuse Google's bytes verbatim.
+        ),
+           // Defensive: validate the cached bytes still decode as a real image
+           // before we upload them as `image/jpeg` to Supabase. Disk cache files
+           // can be corrupted by partial writes (low-storage app kill, mid-write
+           // crash) and we'd otherwise upload garbage that the feed renders as
+           // a broken-image placeholder. Decode is ~few ms; cheap insurance.
+           UIImage(data: cachedBytes) != nil {
             imageData = cachedBytes
             print("✅ ImageStorageService: Reusing cached \(PhotoQuality.maxWidthPx)px image for \(placeId) — skipped Google download")
         } else {
-            // Cold path: fetch fresh at save resolution, then warm the cache.
+            // Cold path (also taken if the cached bytes failed validation above):
+            // fetch fresh at save resolution, then warm the cache.
             do {
                 imageData = try await GooglePlacesPhotoFetcher.fetch(
                     photoReference: photoReference,
