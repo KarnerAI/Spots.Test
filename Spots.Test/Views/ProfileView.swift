@@ -104,6 +104,14 @@ struct ProfileView: View {
 
         let cache = ProfileSnapshotCache.shared
 
+        // The Travel Map / "Your Footprint" section needs the user's full spot
+        // list to group by city/country, but ProfileSnapshot doesn't cache spots
+        // (only counts + list tiles). Fire it independently of the cache-staleness
+        // gate below so cold launches with a fresh cache still populate the
+        // footprint list. Without this, the section stays empty until something
+        // marks the snapshot stale (e.g. saving a new spot).
+        Task { await refreshAllSpotsForTravelMap() }
+
         // Apply cached snapshot instantly (synchronous, before any async work)
         if let snapshot = cache.snapshot(for: userId) {
             spotsCount = snapshot.spotsCount
@@ -120,7 +128,6 @@ struct ProfileView: View {
         Task { await refreshListTilesFromNetwork() }
         Task { await refreshCityAndCover() }
         Task { await refreshFollowCounts(userId: userId) }
-        Task { await refreshAllSpotsForTravelMap() }
     }
 
     /// Loads every spot the user has saved so the Travel Map section can group
@@ -571,14 +578,18 @@ struct ProfileView: View {
 
     private var travelMapSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Your Travel Map")
+            Text("Your Footprint")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
                 .padding(.horizontal, 20)
 
-            Picker("Map View", selection: $travelMapSegment) {
-                Text("Cities").tag(0)
-                Text("Countries").tag(1)
+            // Tag 0 = Countries (left, default selected). Iteration 3 swap:
+            // Countries reads as the "where in the world have you been" headline
+            // and Cities is the drill-down. The default `travelMapSegment: 0`
+            // declaration above puts the user on Countries on first appear.
+            Picker("Footprint View", selection: $travelMapSegment) {
+                Text("Countries").tag(0)
+                Text("Cities").tag(1)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
@@ -592,31 +603,31 @@ struct ProfileView: View {
     private var travelMapList: some View {
         let cities = cityRows
         let countries = countryRows
-        let isCitiesTab = travelMapSegment == 0
+        let isCountriesTab = travelMapSegment == 0
 
         if cities.isEmpty && countries.isEmpty {
             travelMapEmptyState
-        } else if isCitiesTab {
-            if cities.isEmpty {
-                travelMapTabEmpty(message: "No cities yet — save spots with city info to see them here.")
+        } else if isCountriesTab {
+            if countries.isEmpty {
+                travelMapTabEmpty(message: "No countries yet — save spots with country info.")
             } else {
                 travelMapRowGroup {
-                    ForEach(Array(cities.enumerated()), id: \.element.id) { index, city in
-                        NavigationLink(destination: ListDetailView(title: city.name, mode: .allSpotsInCity(city.name))) {
-                            cityRow(city, isLast: index == cities.count - 1)
+                    ForEach(Array(countries.enumerated()), id: \.element.id) { index, country in
+                        NavigationLink(destination: ListDetailView(title: country.displayName, mode: .allSpotsInCountry(country.displayName))) {
+                            countryRow(country, isLast: index == countries.count - 1)
                         }
                         .buttonStyle(.plain)
                     }
                 }
             }
         } else {
-            if countries.isEmpty {
-                travelMapTabEmpty(message: "No countries yet — save spots with country info to see them here.")
+            if cities.isEmpty {
+                travelMapTabEmpty(message: "No cities yet — save spots with city info.")
             } else {
                 travelMapRowGroup {
-                    ForEach(Array(countries.enumerated()), id: \.element.id) { index, country in
-                        NavigationLink(destination: ListDetailView(title: country.displayName, mode: .allSpotsInCountry(country.displayName))) {
-                            countryRow(country, isLast: index == countries.count - 1)
+                    ForEach(Array(cities.enumerated()), id: \.element.id) { index, city in
+                        NavigationLink(destination: ListDetailView(title: city.name, mode: .allSpotsInCity(city.name))) {
+                            cityRow(city, isLast: index == cities.count - 1)
                         }
                         .buttonStyle(.plain)
                     }
@@ -636,7 +647,7 @@ struct ProfileView: View {
     }
 
     private var travelMapEmptyState: some View {
-        Text("Save spots to see your travel map.")
+        Text("Save spots to see your footprint.")
             .font(.system(size: 14))
             .foregroundColor(.gray500)
             .frame(maxWidth: .infinity, alignment: .leading)
