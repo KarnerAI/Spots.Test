@@ -147,9 +147,11 @@ struct ListPickerView: View {
             )
     }
 
-    /// City and humanized category, joined by " · ". Mirrors the pattern in
-    /// FeedItemCardView.subtitleLine, scoped to the fields available on
-    /// PlaceAutocompleteResult (no country, no rating).
+    /// City and humanized category, joined by " • ". Pixel-matches the feed's
+    /// `FeedItemCardView.subtitleLine` separator for app-wide consistency,
+    /// scoped to the fields available on `PlaceAutocompleteResult` (no
+    /// country — see iter-3.1 D3 decision; not adding country to the model
+    /// just for save-sheet polish).
     private var placeSubtitle: String? {
         var parts: [String] = []
         if let city = spotData.city, !city.isEmpty {
@@ -163,7 +165,7 @@ struct ListPickerView: View {
         if parts.isEmpty, !spotData.address.isEmpty {
             parts.append(spotData.address)
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 
     /// First non-generic Google Places type, capitalized and underscores
