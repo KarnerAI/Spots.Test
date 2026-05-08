@@ -137,11 +137,15 @@ struct FeedItemCardView: View {
     /// Verb stands alone in the header (the spot name is rendered separately
     /// over the hero image below). Each phrase must read as a complete clause
     /// without an immediately following object.
+    /// Tier mapping (Iteration 2): .starred = elite "Favorites", .favorites =
+    /// mid "Liked", .bucketList = wishlist "Want to Go". Verbs follow tier
+    /// semantics — "favorited" reads as the strongest love verb, "liked" as
+    /// the lighter approval verb.
     private func spotSaveVerb(payload: FeedItemPayload.SpotSavePayload) -> String {
         switch payload.listType {
-        case .favorites:  return "favorited"
+        case .starred:    return "favorited"
+        case .favorites:  return "liked"
         case .bucketList: return "wants to go"
-        case .starred:    return "added to Top Spots"
         case .none:       return "saved to \(payload.listDisplayName)"
         }
     }

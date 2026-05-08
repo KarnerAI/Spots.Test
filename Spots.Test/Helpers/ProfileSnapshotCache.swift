@@ -76,8 +76,9 @@ final class ProfileSnapshotCache {
     /// file is then ignored and best-effort deleted, so users never see
     /// stale labels carry over across upgrades.
     /// v2: list tile titles renamed (Starred → Top Spots, Bucket List → Want to Go).
-    private static let diskFilename = "ProfileSnapshot.v2.json"
-    private static let legacyFilenames = ["ProfileSnapshot.json"]
+    /// v3: list tile titles renamed again (Top Spots → Favorites, Favorites → Liked).
+    private static let diskFilename = "ProfileSnapshot.v3.json"
+    private static let legacyFilenames = ["ProfileSnapshot.json", "ProfileSnapshot.v2.json"]
 
     private init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!

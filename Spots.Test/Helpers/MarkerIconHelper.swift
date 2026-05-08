@@ -17,9 +17,10 @@ enum MarkerIconHelper {
     /// Icons are looked up / stored in the provided cache to avoid repeated rendering.
     ///
     /// **Precedence (for All Spots / multi-list):** starred > favorites > bucketList.
-    /// (Internal enum names kept; user-facing labels are Top Spots / Favorites / Want to Go.)
-    /// Only spots that belong to at least one of these three list types get a custom icon;
-    /// spots in no list or in other list types use the default teal pin.
+    /// Internal enum names (and cache keys) kept stable across rename iterations;
+    /// user-facing labels are Favorites (heart) / Liked (thumbs-up) / Want to Go (flag).
+    /// Only spots that belong to at least one of these three list types get a custom
+    /// icon; spots in no list or in other list types use the default teal pin.
     static func iconForListTypes(
         _ listTypes: Set<ListType>,
         cache: inout [String: UIImage]
@@ -30,18 +31,18 @@ enum MarkerIconHelper {
 
         if listTypes.contains(.starred) {
             cacheKey = "starred"
-            systemName = "star.fill"
-            color = .listStarred
+            systemName = "heart.fill"          // elite tier, displayed as "Favorites"
+            color = .listStarred                // red
         } else if listTypes.contains(.favorites) {
             cacheKey = "favorites"
-            systemName = "heart.fill"
-            color = .listFavorites
+            systemName = "hand.thumbsup.fill"  // mid tier, displayed as "Liked"
+            color = .listFavorites              // blue
         } else if listTypes.contains(.bucketList) {
             cacheKey = "bucketList"
-            systemName = "flag.fill"
-            color = .listBucketList
+            systemName = "flag.fill"            // wishlist, displayed as "Want to Go"
+            color = .listBucketList             // emerald
         } else {
-            // Default marker: spot is not in Top Spots, Favorites, or Want to Go
+            // Default marker: spot is not in Favorites, Liked, or Want to Go.
             let tealColor = UIColor(red: 0.36, green: 0.69, blue: 0.72, alpha: 1.0)
             return GMSMarker.markerImage(with: tealColor)
         }

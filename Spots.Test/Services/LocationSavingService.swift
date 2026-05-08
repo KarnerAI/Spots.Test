@@ -100,8 +100,9 @@ class LocationSavingService: LocationSavingServiceProtocol {
         return response.first
     }
     
-    /// Creates the three default lists (Top Spots, Favorites, Want to Go) for the current user if they don't exist.
+    /// Creates the three default lists (Favorites, Liked, Want to Go) for the current user if they don't exist.
     /// DB enum values intentionally remain `starred` / `favorites` / `bucket_list` — only display labels were renamed.
+    /// Tier mapping: starred → "Favorites" (elite), favorites → "Liked" (mid), bucket_list → "Want to Go" (wishlist).
     /// Idempotent; safe to call after signup, login, or when lists are missing.
     func ensureDefaultListsForCurrentUser() async throws {
         let userId = try await getCurrentUserId()
@@ -471,15 +472,25 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
     /// Resolves a canonical ListType for a user list. Uses list_type when present;
     /// otherwise infers from list name so default lists always map to a type for
-    /// marker icon resolution in All Spots map. Accepts both current names
-    /// (Top Spots / Favorites / Want to Go) and legacy names (Starred / Bucket List)
-    /// so rows seeded under the old labels still resolve correctly.
+    /// marker icon resolution in All Spots map. Accepts current display names
+    /// (Iteration 2: Favorites / Liked / Want to Go) and legacy names from prior
+    /// iterations (Iter 1: Top Spots; v0: Starred / Bucket List) so rows seeded
+    /// under any past label still resolve correctly.
+    ///
+    /// Note on the "favorites" string: it now resolves to `.starred` (the elite
+    /// tier under Iteration 2 labels) rather than `.favorites` (which used to
+    /// be the elite tier label under v0/v1). Fresh data dominates legacy data
+    /// for this fallback path, which only fires for custom-named lists with
+    /// null `list_type` — narrow blast radius.
     private static func resolveListType(for list: UserList) -> ListType? {
         if let listType = list.listType { return listType }
         guard let name = list.name?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return nil }
         let lower = name.lowercased()
-        if lower == "top spots" || lower == "starred" { return .starred }
-        if lower == "favorites" { return .favorites }
+        // Elite tier (.starred case): current "Favorites", legacy "Top Spots"/"Starred"
+        if lower == "favorites" || lower == "top spots" || lower == "starred" { return .starred }
+        // Mid tier (.favorites case): current "Liked"
+        if lower == "liked" { return .favorites }
+        // Wishlist tier (.bucketList case): current "Want to Go", legacy "Bucket List"
         if lower == "want to go" || lower == "bucket list" { return .bucketList }
         return nil
     }

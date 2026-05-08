@@ -25,12 +25,14 @@ struct Spots_TestTests {
 // — only `displayName` should change here in future renames.
 struct ListTypeDisplayNameTests {
 
-    @Test func starredDisplaysAsTopSpots() {
-        #expect(ListType.starred.displayName == "Top Spots")
+    @Test func starredDisplaysAsFavorites() {
+        // Iteration 2: .starred enum case is the elite love tier.
+        #expect(ListType.starred.displayName == "Favorites")
     }
 
-    @Test func favoritesDisplaysAsFavorites() {
-        #expect(ListType.favorites.displayName == "Favorites")
+    @Test func favoritesDisplaysAsLiked() {
+        // Iteration 2: .favorites enum case is the mid love tier.
+        #expect(ListType.favorites.displayName == "Liked")
     }
 
     @Test func bucketListDisplaysAsWantToGo() {
