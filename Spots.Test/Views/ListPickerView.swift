@@ -108,7 +108,10 @@ struct ListPickerView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(minHeight: 80)
-        .background(Color.gray100)
+        // No background tint — Apple's Share Sheet pattern. The dividers above
+        // (from the header section) and below (in `body`) carry the visual
+        // separation. iter-3.1 dropped the gray100 background after it read
+        // as "form input field" against a live map view in TestFlight.
     }
 
     @ViewBuilder
