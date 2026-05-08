@@ -19,15 +19,24 @@ struct ListPickerSheetModifier: ViewModifier {
     @State private var dragOffset: CGFloat = 0
 
     /// Hug content height so the Save button sits right under the rows.
-    /// Drag handle (~17) + header (~62) + divider (1) + rows (60 each) + save bar (~74).
+    /// Drag handle (~17) + header (~62) + divider (1) + place context strip (~80)
+    /// + divider below it (1) + rows (60 each) + save bar (~74).
+    /// The place context strip was added in iter-3 (Variant B) — its 80pt
+    /// matches `ListPickerView.placeContextRow.minHeight`. Forgetting to bump
+    /// this constant when adding sections to the sheet is the bug that caused
+    /// iter-3.1: the sheet rendered 81pt short and clipped the bottom rows.
     private var contentHeight: CGFloat {
         let rowCount = max(locationSavingVM.userLists.count, 3)
         let dragHandle: CGFloat = 17
         let header: CGFloat = 62
         let divider: CGFloat = 1
+        let placeContextStrip: CGFloat = 80
+        let placeContextDivider: CGFloat = 1
         let rowsHeight = CGFloat(rowCount) * 60
         let saveBar: CGFloat = 74
-        return dragHandle + header + divider + rowsHeight + saveBar
+        return dragHandle + header + divider
+             + placeContextStrip + placeContextDivider
+             + rowsHeight + saveBar
     }
 
     func body(content: Content) -> some View {

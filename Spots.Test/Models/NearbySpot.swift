@@ -130,14 +130,18 @@ struct NearbySpot: Identifiable, Equatable {
         )
     }
 
-    /// Converts to PlaceAutocompleteResult for use with ListPickerView
+    /// Converts to PlaceAutocompleteResult for use with ListPickerView.
+    /// Passes `category` through as a single-element `types` array so the
+    /// save sheet's subtitle (`ListPickerView.placeSubtitle`) can render
+    /// "City • Category" for spots tapped from Explore — same trick used in
+    /// `toSpot()` above. Without this, Explore-tapped spots showed city only.
     func toPlaceAutocompleteResult() -> PlaceAutocompleteResult {
         PlaceAutocompleteResult(
             placeId: placeId,
             name: name,
             address: address,
             city: city,
-            types: nil,
+            types: category.isEmpty ? nil : [category.lowercased().replacingOccurrences(of: " ", with: "_")],
             coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
             photoUrl: photoUrl,
             photoReference: photoReference
