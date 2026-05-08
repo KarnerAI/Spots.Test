@@ -76,9 +76,113 @@ struct ListTileData {
     }
 }
 
-struct CityRowData {
+struct CityRowData: Identifiable, Hashable {
+    /// Normalized (trimmed + lowercased) name; serves as the filter key.
+    let id: String
+    /// Display casing for the row, taken from a representative spot.
     let name: String
     let count: Int
+
+    init(id: String, name: String, count: Int) {
+        self.id = id
+        self.name = name
+        self.count = count
+    }
+
+    /// Convenience used by UserProfileView's placeholder list — derives the
+    /// id from a normalized form of the display name.
+    init(name: String, count: Int) {
+        self.id = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.name = name
+        self.count = count
+    }
+}
+
+struct CountryRowData: Identifiable, Hashable {
+    /// Normalized (trimmed + lowercased) name; serves as the filter key.
+    let id: String
+    let displayName: String
+    /// Flag emoji, or `nil` when `CountryFlag` couldn't resolve the string.
+    let flag: String?
+    let count: Int
+}
+
+// MARK: - Location grouping (shared by Profile travel map + ListDetailView filter)
+
+/// Helpers for grouping spots by city/country with consistent normalization.
+/// The same `normalize` function powers both the count-by-city aggregation in
+/// ProfileView and the city/country filter in ListDetailView so a row's count
+/// always matches what the filtered map ends up showing.
+enum LocationGrouping {
+    /// Trim whitespace and lowercase; returns nil for empty/whitespace-only input.
+    static func normalize(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value.lowercased()
+    }
+
+    /// `spot.city` matches `query` after normalization.
+    static func matchesCity(_ spot: Spot, _ query: String) -> Bool {
+        guard let normSpot = normalize(spot.city), let normQuery = normalize(query) else { return false }
+        return normSpot == normQuery
+    }
+
+    /// `spot.country` matches `query` after normalization.
+    static func matchesCountry(_ spot: Spot, _ query: String) -> Bool {
+        guard let normSpot = normalize(spot.country), let normQuery = normalize(query) else { return false }
+        return normSpot == normQuery
+    }
+
+    /// Group spots by normalized city, dropping empties. Sorted by count desc, name asc.
+    static func cityRows(from spots: [Spot]) -> [CityRowData] {
+        var buckets: [String: (display: String, count: Int)] = [:]
+        for spot in spots {
+            guard let key = normalize(spot.city),
+                  let display = spot.city?.trimmingCharacters(in: .whitespacesAndNewlines), !display.isEmpty
+            else { continue }
+            if var existing = buckets[key] {
+                existing.count += 1
+                buckets[key] = existing
+            } else {
+                buckets[key] = (display, 1)
+            }
+        }
+        return buckets
+            .map { CityRowData(id: $0.key, name: $0.value.display, count: $0.value.count) }
+            .sorted {
+                if $0.count != $1.count { return $0.count > $1.count }
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+    }
+
+    /// Group spots by normalized country, dropping empties. Adds flag emoji.
+    /// Sorted by count desc, name asc.
+    static func countryRows(from spots: [Spot]) -> [CountryRowData] {
+        var buckets: [String: (display: String, count: Int)] = [:]
+        for spot in spots {
+            guard let key = normalize(spot.country),
+                  let display = spot.country?.trimmingCharacters(in: .whitespacesAndNewlines), !display.isEmpty
+            else { continue }
+            if var existing = buckets[key] {
+                existing.count += 1
+                buckets[key] = existing
+            } else {
+                buckets[key] = (display, 1)
+            }
+        }
+        return buckets
+            .map { CountryRowData(
+                id: $0.key,
+                displayName: $0.value.display,
+                flag: CountryFlag.emoji(for: $0.value.display),
+                count: $0.value.count
+            ) }
+            .sorted {
+                if $0.count != $1.count { return $0.count > $1.count }
+                return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+    }
 }
 
 // MARK: - List tile loading
