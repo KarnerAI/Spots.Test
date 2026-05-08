@@ -7,6 +7,11 @@ package-lock.json
 package.json
 node_modules/
 
+# Local secrets for one-off scripts in Scripts/ (e.g. the spots backfill).
+# Scripts/.env.example is committed as a template; .env itself never is.
+.env
+Scripts/.env
+
 ## User settings
 xcuserdata/
 

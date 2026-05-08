@@ -58,7 +58,11 @@ struct ProfileView: View {
             }
         }
         .ignoresSafeArea(edges: .top)
-        .background(Color.gray100)
+        // White (not gray100) so the area beneath the white sheet stays
+        // visually continuous when the Travel Map section is short
+        // (e.g. empty Countries tab). The cover image paints its own gradient
+        // on top, so nothing above the sheet is affected.
+        .background(Color.white)
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { loadProfileData() }
         .sheet(isPresented: $showCoverPicker) {
@@ -381,9 +385,14 @@ struct ProfileView: View {
             travelMapSection
                 .padding(.top, 28)
 
-            // Bottom padding so content clears the tab bar
+            // Small breathing room below the last row before the floating
+            // tab bar overlaps. Iteration 2: previously 100pt, but with the
+            // travel-map list now driving variable section heights, that
+            // produced an oversized empty strip after short tabs (e.g. an
+            // empty Countries tab). 32pt = clear of the tab bar safe-area
+            // inset while staying visually tight.
             Spacer()
-                .frame(height: 100)
+                .frame(height: 32)
         }
         .frame(maxWidth: .infinity)
         .background(RoundedTopCornersBackground(radius: sheetTopCornerRadius))
