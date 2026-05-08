@@ -53,9 +53,10 @@ actor PhotoBackfillService {
 
     // MARK: - DTOs
 
-    /// Row shape we read from the spots table.
+    /// Row shape we read from the spots table. `place_id` is the primary key
+    /// (Google Place ID — see `create_location_saving_schema.sql`); there is
+    /// no separate UUID `id` column.
     struct SpotRow: Codable {
-        let id: String
         let place_id: String
         let photo_url: String?
         let photo_reference: String?
@@ -111,9 +112,9 @@ actor PhotoBackfillService {
             case .staleReference(let stale):
                 report.staleReferences.append(stale)
             case .failedUpload:
-                report.failedUploads.append(spot.id)
+                report.failedUploads.append(spot.place_id)
             case .failedDBUpdate:
-                report.failedDBUpdates.append(spot.id)
+                report.failedDBUpdates.append(spot.place_id)
             }
             // Polite throttle — sleep once between iterations.
             try? await Task.sleep(nanoseconds: intervalNanos)
@@ -129,6 +130,47 @@ actor PhotoBackfillService {
         }
 
         printSummary(report, dryRun: dryRunSweep)
+        return report
+    }
+
+    /// User-facing upgrade entry point. Takes a caller-supplied list of spots
+    /// (so the caller can scope to e.g. just the current user's saves) and
+    /// runs the per-spot upgrade pipeline: fetch at 1200px, upload at a
+    /// versioned filename, rewrite `spots.photo_url`. Throttled identically
+    /// to `run(...)`.
+    ///
+    /// **Does NOT run `sweepOrphans()`.** Sweep is a global destructive op
+    /// that touches storage objects across all users; it stays gated to
+    /// `BackfillDebugView` (developer use only). If a per-spot UPDATE fails
+    /// here, the orphaned object is recoverable via the dev-only sweep.
+    ///
+    /// Wired to `LocationSavingService.backfillMissingImages()` for the
+    /// "Refresh Photos" button in Settings.
+    func upgradeSpots(_ spots: [SpotRow]) async -> BackfillReport {
+        var report = BackfillReport()
+        report.total = spots.count
+
+        guard !spots.isEmpty else { return report }
+
+        let intervalNanos = UInt64(1_000_000_000.0 / maxRequestsPerSecond)
+
+        for spot in spots {
+            let outcome = await backfillOne(spot: spot)
+            switch outcome {
+            case .succeeded:
+                report.succeeded += 1
+            case .skippedNoReference:
+                report.skippedNoReference += 1
+            case .staleReference(let stale):
+                report.staleReferences.append(stale)
+            case .failedUpload:
+                report.failedUploads.append(spot.place_id)
+            case .failedDBUpdate:
+                report.failedDBUpdates.append(spot.place_id)
+            }
+            try? await Task.sleep(nanoseconds: intervalNanos)
+        }
+
         return report
     }
 
@@ -199,7 +241,7 @@ actor PhotoBackfillService {
             )
         } catch GooglePlacesPhotoFetcher.FetchError.http(let status) where status == 404 {
             return .staleReference(StaleReference(
-                spotId: spot.id,
+                spotId: spot.place_id,
                 placeId: spot.place_id,
                 photoReference: photoReference
             ))
@@ -219,11 +261,11 @@ actor PhotoBackfillService {
             try await supabase
                 .from("spots")
                 .update(["photo_url": newURL])
-                .eq("id", value: spot.id)
+                .eq("place_id", value: spot.place_id)
                 .execute()
             return .succeeded
         } catch {
-            print("⚠️  PhotoBackfillService: DB update failed for \(spot.id): \(error)")
+            print("⚠️  PhotoBackfillService: DB update failed for \(spot.place_id): \(error)")
             return .failedDBUpdate
         }
     }
@@ -289,7 +331,7 @@ actor PhotoBackfillService {
             // enum's reserved-word `is` case.
             let baseQuery = supabase
                 .from("spots")
-                .select("id, place_id, photo_url, photo_reference")
+                .select("place_id, photo_url, photo_reference")
             if let limit = limit {
                 let rows: [SpotRow] = try await baseQuery.limit(limit).execute().value
                 return rows
