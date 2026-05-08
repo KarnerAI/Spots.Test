@@ -239,7 +239,10 @@ struct FeedItemCardView: View {
                 }
             }
         } else if let ref = spot?.photoReference {
-            GooglePlacesImageView(photoReference: ref, maxWidth: 800)
+            // Full-bleed feed card: request at save resolution so the on-screen
+            // image isn't a stretched thumbnail. Cache is width-keyed so this
+            // doesn't conflict with smaller-thumbnail call sites.
+            GooglePlacesImageView(photoReference: ref, maxWidth: PhotoQuality.maxWidthPx)
         } else {
             fallbackSpotImage
         }

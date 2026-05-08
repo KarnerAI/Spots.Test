@@ -897,73 +897,128 @@ class LocationSavingService: LocationSavingServiceProtocol {
         }
     }
 
-    /// Backfills photo_url for all of the current user's saved spots that are missing an image.
-    /// For spots with a stored photo_reference, uses it directly.
-    /// For spots with no photo_reference (saved before photo logic existed), fetches fresh
-    /// place details from Google Places API to obtain a photo_reference first.
-    /// Processes in batches of 3 to limit memory pressure.
-    /// - Returns: (succeeded, failed, noPhotoAvailable) counts.
-    func backfillMissingImages() async -> (succeeded: Int, failed: Int, skipped: Int) {
+    /// Refreshes spot photos for the current user's saved spots. Two paths:
+    ///
+    ///   1. **Repair missing** — spots where `photo_url == nil` (or their last
+    ///      fetch failed). Re-fetches via the original flow, uploads at the
+    ///      canonical filename `{placeId}.jpg`. Suitable for spots that never
+    ///      had a successful image upload.
+    ///
+    ///   2. **Upgrade low-res** — spots whose `photo_url` is set but points at
+    ///      an old un-versioned filename (`{placeId}.jpg`, the pre-1200px
+    ///      format). Routes through `PhotoBackfillService.upgradeSpots(...)`,
+    ///      which uploads at a versioned filename (`{placeId}_v{n}.jpg`) and
+    ///      rewrites `spots.photo_url`. The new URL forces `CachedAsyncImage`
+    ///      and the Supabase CDN to refetch — without that, the visible image
+    ///      stays stale even though Storage has the high-res copy.
+    ///
+    /// Spots already at a versioned URL are skipped — no API spend on photos
+    /// that are already at save resolution.
+    ///
+    /// - Returns: (succeeded, failed, skipped, upgraded) counts.
+    ///   `succeeded` and `failed` cover the missing-photo path; `upgraded`
+    ///   covers the low-res-rewrite path; `skipped` covers spots that have no
+    ///   `photo_reference` (saved before that column existed).
+    func backfillMissingImages() async -> (succeeded: Int, failed: Int, skipped: Int, upgraded: Int) {
         let allSpots: [SpotWithMetadata]
         do {
             allSpots = try await getAllSpots()
         } catch {
             print("❌ LocationSavingService: backfillMissingImages failed to fetch spots: \(error)")
-            return (0, 0, 0)
+            return (0, 0, 0, 0)
         }
 
-        let needsBackfill = allSpots.map(\.spot).filter { $0.photoUrl == nil || failedImageFetchPlaceIds.contains($0.placeId) }
-
-        guard !needsBackfill.isEmpty else {
-            print("✅ LocationSavingService: No spots need image backfill")
-            return (0, 0, 0)
+        // Partition: needs-fresh-fetch (no URL or last-fetch failed) vs
+        // needs-upgrade (URL set but un-versioned, so client/CDN caches won't
+        // pick up a re-upload at the same path).
+        let userSpots = allSpots.map(\.spot)
+        let needsFresh = userSpots.filter { spot in
+            spot.photoUrl == nil || failedImageFetchPlaceIds.contains(spot.placeId)
+        }
+        let needsUpgrade = userSpots.filter { spot in
+            guard let url = spot.photoUrl, !url.isEmpty else { return false }
+            // Already at a versioned filename → already at save resolution, skip.
+            let fileName = PhotoBackfillService.VersioningLogic.extractFileName(from: url)
+            let isVersioned = fileName.map { PhotoBackfillService.VersioningLogic.isVersionedFilename($0) } ?? false
+            return !isVersioned
         }
 
-        print("🔄 LocationSavingService: Backfilling images for \(needsBackfill.count) spots")
+        guard !needsFresh.isEmpty || !needsUpgrade.isEmpty else {
+            print("✅ LocationSavingService: No spots need refresh — all photos are at save resolution")
+            return (0, 0, 0, 0)
+        }
 
+        print("🔄 LocationSavingService: refreshing photos — fresh fetch: \(needsFresh.count), upgrade low-res: \(needsUpgrade.count)")
+
+        // ─── Path 1: fresh-fetch for missing photos ──────────────────────────
         var succeeded = 0
         var failed = 0
         var noPhotoAvailable = 0
-        let batchSize = 3
 
-        for batchStart in stride(from: 0, to: needsBackfill.count, by: batchSize) {
-            let batchEnd = min(batchStart + batchSize, needsBackfill.count)
-            let batch = Array(needsBackfill[batchStart..<batchEnd])
+        if !needsFresh.isEmpty {
+            let batchSize = 3
+            for batchStart in stride(from: 0, to: needsFresh.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, needsFresh.count)
+                let batch = Array(needsFresh[batchStart..<batchEnd])
 
-            // Each task returns: true = success, false = failed, nil = no photo available
-            let results: [Bool?] = await withTaskGroup(of: Bool?.self) { group in
-                for spot in batch {
-                    group.addTask {
-                        // Resolve photo reference: use stored one, or fetch fresh from Google
-                        let photoRef: String?
-                        if let stored = spot.photoReference {
-                            photoRef = stored
-                        } else {
-                            let freshSpot = try? await PlacesAPIService.shared.fetchPlaceDetails(placeId: spot.placeId)
-                            photoRef = freshSpot?.photoReference
+                // Each task returns: true = success, false = failed, nil = no photo available
+                let results: [Bool?] = await withTaskGroup(of: Bool?.self) { group in
+                    for spot in batch {
+                        group.addTask {
+                            // Resolve photo reference: use stored one, or fetch fresh from Google
+                            let photoRef: String?
+                            if let stored = spot.photoReference {
+                                photoRef = stored
+                            } else {
+                                let freshSpot = try? await PlacesAPIService.shared.fetchPlaceDetails(placeId: spot.placeId)
+                                photoRef = freshSpot?.photoReference
+                            }
+
+                            guard let ref = photoRef else {
+                                print("⚠️ LocationSavingService: No photo available for \(spot.name) (\(spot.placeId))")
+                                return nil
+                            }
+
+                            let ok = await self.fetchAndUpdateSpotImage(placeId: spot.placeId, photoReference: ref)
+                            return ok
                         }
-
-                        guard let ref = photoRef else {
-                            print("⚠️ LocationSavingService: No photo available for \(spot.name) (\(spot.placeId))")
-                            return nil
-                        }
-
-                        let ok = await self.fetchAndUpdateSpotImage(placeId: spot.placeId, photoReference: ref)
-                        return ok
                     }
+                    var collected: [Bool?] = []
+                    for await result in group { collected.append(result) }
+                    return collected
                 }
-                var collected: [Bool?] = []
-                for await result in group { collected.append(result) }
-                return collected
-            }
 
-            succeeded += results.compactMap { $0 }.filter { $0 }.count
-            failed += results.compactMap { $0 }.filter { !$0 }.count
-            noPhotoAvailable += results.filter { $0 == nil }.count
+                succeeded += results.compactMap { $0 }.filter { $0 }.count
+                failed += results.compactMap { $0 }.filter { !$0 }.count
+                noPhotoAvailable += results.filter { $0 == nil }.count
+            }
         }
 
-        print("✅ LocationSavingService: Backfill complete — succeeded: \(succeeded), failed: \(failed), no photo: \(noPhotoAvailable)")
-        return (succeeded, failed, noPhotoAvailable)
+        // ─── Path 2: versioned upgrade for low-res photos ────────────────────
+        // Map the user's Spot objects into the SpotRow shape PhotoBackfillService
+        // expects. Only spots with a photo_reference can be upgraded; the rest
+        // are reported as `skippedNoReference` in the upgrade report (we roll
+        // those into `noPhotoAvailable` for a single user-facing count).
+        var upgraded = 0
+        if !needsUpgrade.isEmpty {
+            let upgradeRows = needsUpgrade.map { spot in
+                PhotoBackfillService.SpotRow(
+                    place_id: spot.placeId,
+                    photo_url: spot.photoUrl,
+                    photo_reference: spot.photoReference
+                )
+            }
+            let report = await PhotoBackfillService.shared.upgradeSpots(upgradeRows)
+            upgraded = report.succeeded
+            failed += report.failedUploads.count + report.failedDBUpdates.count
+            noPhotoAvailable += report.skippedNoReference
+            // Stale references count as "failed" from the user's perspective —
+            // we couldn't upgrade them. They keep their existing 400px URL.
+            failed += report.staleReferences.count
+        }
+
+        print("✅ LocationSavingService: refresh complete — succeeded: \(succeeded), upgraded: \(upgraded), failed: \(failed), no photo: \(noPhotoAvailable)")
+        return (succeeded, failed, noPhotoAvailable, upgraded)
     }
     
     /// Updates a spot's latitude and longitude (e.g. to sync with Google's POI tap location).

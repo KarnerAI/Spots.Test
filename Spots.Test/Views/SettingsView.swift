@@ -35,7 +35,7 @@ private struct SettingsRowConfig {
 private enum BackfillState: Equatable {
     case idle
     case running
-    case done(succeeded: Int, failed: Int, skipped: Int)
+    case done(succeeded: Int, failed: Int, skipped: Int, upgraded: Int)
 }
 
 // MARK: - Settings View
@@ -174,7 +174,12 @@ struct SettingsView: View {
             Task {
                 let result = await LocationSavingService.shared.backfillMissingImages()
                 await MainActor.run {
-                    backfillState = .done(succeeded: result.succeeded, failed: result.failed, skipped: result.skipped)
+                    backfillState = .done(
+                        succeeded: result.succeeded,
+                        failed: result.failed,
+                        skipped: result.skipped,
+                        upgraded: result.upgraded
+                    )
                 }
             }
         } label: {
@@ -189,7 +194,7 @@ struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Repair Missing Images")
+                    Text("Refresh Photos")
                         .font(.system(size: 14))
                         .foregroundColor(SettingsColors.primaryText)
                     Text(backfillSubtitle)
@@ -216,17 +221,27 @@ struct SettingsView: View {
     private var backfillSubtitle: String {
         switch backfillState {
         case .idle:
-            return "Re-fetch photos for spots missing images"
+            return "Re-fetch missing photos and upgrade old low-res photos"
         case .running:
             return "Working…"
-        case .done(let succeeded, _, let skipped):
+        case .done(let succeeded, _, let skipped, let upgraded):
+            // Build a human-readable summary: surface whichever counts are
+            // non-zero, fall back to "all good" if everything was already at
+            // save resolution.
+            var parts: [String] = []
             if succeeded > 0 {
-                return "Repaired \(succeeded) image\(succeeded == 1 ? "" : "s")\(skipped > 0 ? " · \(skipped) have no photo" : "")"
-            } else if skipped > 0 {
-                return "\(skipped) spot\(skipped == 1 ? "" : "s") have no photo available"
-            } else {
-                return "All images are up to date"
+                parts.append("Repaired \(succeeded) image\(succeeded == 1 ? "" : "s")")
             }
+            if upgraded > 0 {
+                parts.append("Upgraded \(upgraded)")
+            }
+            if skipped > 0 {
+                parts.append("\(skipped) have no photo")
+            }
+            if parts.isEmpty {
+                return "All photos are up to date"
+            }
+            return parts.joined(separator: " · ")
         }
     }
 

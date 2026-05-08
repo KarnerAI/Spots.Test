@@ -2,7 +2,18 @@
 //  ImageStorageService.swift
 //  Spots.Test
 //
-//  Service for handling spot image uploads to Supabase Storage
+//  Service for handling spot image uploads to Supabase Storage.
+//
+//  Save path:
+//    1) Check SpotImageCache for raw JPEG bytes at PhotoQuality.maxWidthPx.
+//       Width-keyed cache means we never inherit a low-res thumbnail from
+//       another screen — only an entry already at save resolution counts as
+//       a hit.
+//    2) Otherwise, fetch from Google at PhotoQuality.maxWidthPx via the
+//       shared GooglePlacesPhotoFetcher.
+//    3) Upload Google's bytes to Supabase Storage VERBATIM (no UIImage round
+//       trip, no re-encode). Google already serves JPEG; re-encoding adds
+//       lossy compression for no benefit.
 //
 
 import Foundation
@@ -11,7 +22,7 @@ import Supabase
 
 class ImageStorageService {
     static let shared = ImageStorageService()
-    
+
     private let bucketName = "spot-images"
     private let supabaseClient = SupabaseManager.shared.client
     /// Base URL for the Supabase project. Used to build public Storage URLs.
@@ -24,98 +35,94 @@ class ImageStorageService {
     private let uploadedURLCache = NSCache<NSString, NSString>()
 
     private init() {}
-    
+
     // MARK: - Public Methods
-    
-    /// Downloads image from Google Places Photo API and uploads to Supabase Storage.
-    /// Checks SpotImageCache first to avoid a duplicate Google API call when
-    /// GooglePlacesImageView has already fetched the same photo.
+
+    /// Downloads image from Google Places Photo API (or reads from cache) and
+    /// uploads to Supabase Storage. Always uses `PhotoQuality.maxWidthPx` so
+    /// the saved image is sized for full-bleed feed cards regardless of what
+    /// resolution any preview view happened to fetch first.
     /// - Parameters:
     ///   - photoReference: The Google Places photo reference (from photos[].name)
     ///   - placeId: The Google Place ID (used as filename)
     /// - Returns: The public URL of the uploaded image in Supabase Storage, or nil if failed
     func uploadSpotImage(photoReference: String, placeId: String) async -> String? {
-        // Skip the entire download + upload pipeline if we already uploaded
-        // this place this session.
+        // Skip the entire pipeline if we already uploaded this place this session.
         if let cachedURL = uploadedURLCache.object(forKey: placeId as NSString) {
             return cachedURL as String
         }
 
         let imageData: Data
-
-        if let cached = SpotImageCache.shared.image(for: photoReference),
-           let jpegData = cached.jpegData(compressionQuality: 0.85) {
-            imageData = jpegData
-            print("✅ ImageStorageService: Reusing cached image for \(placeId) — skipped Google download")
+        if let cachedBytes = SpotImageCache.shared.data(
+            for: photoReference,
+            maxWidth: PhotoQuality.maxWidthPx
+        ),
+           // Defensive: validate the cached bytes still decode as a real image
+           // before we upload them as `image/jpeg` to Supabase. Disk cache files
+           // can be corrupted by partial writes (low-storage app kill, mid-write
+           // crash) and we'd otherwise upload garbage that the feed renders as
+           // a broken-image placeholder. Decode is ~few ms; cheap insurance.
+           UIImage(data: cachedBytes) != nil {
+            imageData = cachedBytes
+            print("✅ ImageStorageService: Reusing cached \(PhotoQuality.maxWidthPx)px image for \(placeId) — skipped Google download")
         } else {
-            guard let downloaded = await downloadImageFromGoogle(photoReference: photoReference) else {
-                print("❌ ImageStorageService: Failed to download image from Google")
+            // Cold path (also taken if the cached bytes failed validation above):
+            // fetch fresh at save resolution, then warm the cache.
+            do {
+                imageData = try await GooglePlacesPhotoFetcher.fetch(
+                    photoReference: photoReference,
+                    maxWidth: PhotoQuality.maxWidthPx
+                )
+                SpotImageCache.shared.store(
+                    imageData,
+                    for: photoReference,
+                    maxWidth: PhotoQuality.maxWidthPx
+                )
+            } catch {
+                print("❌ ImageStorageService: Failed to download image from Google: \(error)")
                 return nil
-            }
-            imageData = downloaded
-            if let uiImage = UIImage(data: imageData) {
-                SpotImageCache.shared.store(uiImage, for: photoReference)
             }
         }
 
-        let url = await uploadToSupabase(imageData: imageData, placeId: placeId)
+        let url = await uploadToSupabase(imageData: imageData, fileName: storageFileName(for: placeId))
         if let url {
             uploadedURLCache.setObject(url as NSString, forKey: placeId as NSString)
         }
         return url
     }
-    
-    /// Checks if an image already exists in Supabase Storage for a place
-    /// - Parameter placeId: The Google Place ID
-    /// - Returns: The public URL if image exists, nil otherwise
+
+    /// Returns the public URL for the cover image of a place if it has been
+    /// uploaded under the canonical (un-versioned) filename. Used by the save
+    /// path. Backfilled spots use versioned filenames and store the full URL
+    /// in `spots.photo_url` directly — see `PhotoBackfillService`.
     func getExistingImageUrl(placeId: String) -> String? {
-        let fileName = sanitizeFileName(placeId)
-        // Public URL format: https://{project-ref}.supabase.co/storage/v1/object/public/spot-images/{fileName}
+        let fileName = storageFileName(for: placeId)
+        return publicURL(forFileName: fileName)
+    }
+
+    // MARK: - Storage helpers (also used by PhotoBackfillService)
+
+    /// Canonical filename for a fresh upload (no version suffix).
+    func storageFileName(for placeId: String) -> String {
+        return "\(sanitize(placeId)).jpg"
+    }
+
+    /// Versioned filename used by backfill so changing image bytes also
+    /// changes the public URL — forces clients and CDN caches to refetch.
+    func versionedStorageFileName(for placeId: String, version: Int) -> String {
+        return "\(sanitize(placeId))_v\(version).jpg"
+    }
+
+    /// Builds the Supabase Storage public URL for a given filename in the
+    /// spot-images bucket. Pure string assembly — no network call.
+    func publicURL(forFileName fileName: String) -> String {
         return "\(supabaseBaseURLString)/storage/v1/object/public/\(bucketName)/\(fileName)"
     }
-    
-    // MARK: - Private Methods
-    
-    /// Downloads image data from Google Places Photo API
-    private func downloadImageFromGoogle(photoReference: String) async -> Data? {
-        // The photoReference from Places API (New) is in format: "places/{placeId}/photos/{photoRef}"
-        // We need to use the Place Photos API with the photo name
-        let photoName = photoReference // Already in correct format
-        let urlString = "https://places.googleapis.com/v1/\(photoName)/media?maxWidthPx=400&key=\(Config.googlePlacesAPIKey)"
-        
-        guard let url = URL(string: urlString) else {
-            print("❌ ImageStorageService: Invalid Google Places Photo URL")
-            return nil
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        
-        // Add bundle identifier header for iOS app restrictions
-        if let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty {
-            request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
-        }
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                print("❌ ImageStorageService: Google API returned error status")
-                return nil
-            }
-            
-            return data
-        } catch {
-            print("❌ ImageStorageService: Error downloading from Google: \(error.localizedDescription)")
-            return nil
-        }
-    }
-    
-    /// Uploads image data to Supabase Storage using the Supabase client (sends session JWT so RLS allows authenticated uploads).
-    private func uploadToSupabase(imageData: Data, placeId: String) async -> String? {
-        let fileName = sanitizeFileName(placeId)
-        
+
+    /// Uploads raw image bytes to Supabase Storage at `fileName`. Sends the
+    /// session JWT so RLS allows authenticated uploads. Idempotent via upsert.
+    /// Used by both the live save path and the backfill service.
+    func uploadToSupabase(imageData: Data, fileName: String) async -> String? {
         do {
             _ = try await supabaseClient.storage
                 .from(bucketName)
@@ -127,25 +134,55 @@ class ImageStorageService {
                         upsert: true
                     )
                 )
-            
-            let publicUrl = getExistingImageUrl(placeId: placeId)
-            print("✅ ImageStorageService: Successfully uploaded image for \(placeId)")
-            return publicUrl
+            print("✅ ImageStorageService: Uploaded \(fileName) (\(imageData.count) bytes)")
+            return publicURL(forFileName: fileName)
         } catch {
-            print("❌ ImageStorageService: Error uploading to Supabase: \(error.localizedDescription)")
+            print("❌ ImageStorageService: Error uploading \(fileName): \(error.localizedDescription)")
             if let storageError = error as? StorageError {
                 print("❌ ImageStorageService: Storage error details: \(storageError)")
             }
             return nil
         }
     }
-    
-    /// Sanitizes place ID to create a valid filename
-    /// Google Place IDs can contain characters that need to be URL-safe
-    private func sanitizeFileName(_ placeId: String) -> String {
-        // Replace any non-alphanumeric characters with underscores
-        let sanitized = placeId.replacingOccurrences(of: "[^a-zA-Z0-9]", with: "_", options: .regularExpression)
-        return "\(sanitized).jpg"
+
+    /// Deletes a single object from the bucket. Used by `PhotoBackfillService.sweepOrphans()`.
+    /// Returns true on success. **Destructive** — callers must use a dry-run
+    /// flag for the first prod sweep.
+    func deleteObject(fileName: String) async -> Bool {
+        do {
+            _ = try await supabaseClient.storage
+                .from(bucketName)
+                .remove(paths: [fileName])
+            return true
+        } catch {
+            print("❌ ImageStorageService: deleteObject(\(fileName)) failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Lists all object names in the bucket. Used by `PhotoBackfillService.sweepOrphans()`.
+    func listAllObjects() async -> [String] {
+        do {
+            let objects = try await supabaseClient.storage
+                .from(bucketName)
+                .list()
+            return objects.map { $0.name }
+        } catch {
+            print("❌ ImageStorageService: listAllObjects failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    // MARK: - Private Methods
+
+    /// Sanitizes place ID to create a valid filename. Google Place IDs can
+    /// contain characters that need to be URL-safe.
+    private func sanitize(_ placeId: String) -> String {
+        return placeId.replacingOccurrences(
+            of: "[^a-zA-Z0-9]",
+            with: "_",
+            options: .regularExpression
+        )
     }
 }
 
@@ -155,7 +192,7 @@ enum ImageStorageError: LocalizedError {
     case downloadFailed
     case uploadFailed
     case invalidPlaceId
-    
+
     var errorDescription: String? {
         switch self {
         case .downloadFailed:
