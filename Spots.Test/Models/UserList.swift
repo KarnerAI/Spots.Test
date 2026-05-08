@@ -15,28 +15,34 @@ enum ListType: String, Codable, CaseIterable {
     
     /// User-facing label. Internal enum cases and DB enum values intentionally
     /// keep their original spellings (`starred`, `favorites`, `bucket_list`) —
-    /// only the display strings change.
+    /// they're stable identifiers, only display strings change.
+    /// Tier mapping: starred = elite (Favorites), favorites = mid (Liked),
+    /// bucketList = wishlist (Want to Go).
     var displayName: String {
         switch self {
-        case .starred: return "Top Spots"
-        case .favorites: return "Favorites"
+        case .starred: return "Favorites"
+        case .favorites: return "Liked"
         case .bucketList: return "Want to Go"
         }
     }
-    
+
+    /// SF Symbol icon. Heart for the elite love tier, thumbs-up for the mid
+    /// tier (LinkedIn-coded), flag for the wishlist.
     var iconName: String {
         switch self {
-        case .starred: return "star.fill"
-        case .favorites: return "heart.fill"
+        case .starred: return "heart.fill"
+        case .favorites: return "hand.thumbsup.fill"
         case .bucketList: return "flag.fill"
         }
     }
-    
+
+    /// Tint color for the icon. Matches the iconName semantically:
+    /// red heart = passion/love, blue thumb = approval, green flag = "go".
     var iconColor: Color {
         switch self {
-        case .starred: return Color(red: 0.92, green: 0.70, blue: 0.03) // #EAB308
-        case .favorites: return Color(red: 0.94, green: 0.27, blue: 0.27) // #EF4444
-        case .bucketList: return Color(red: 0.23, green: 0.51, blue: 0.96) // #3B82F6
+        case .starred: return Color(red: 0.94, green: 0.27, blue: 0.27) // #EF4444 red
+        case .favorites: return Color(red: 0.23, green: 0.51, blue: 0.96) // #3B82F6 blue
+        case .bucketList: return Color(red: 0.06, green: 0.73, blue: 0.51) // #10B981 emerald
         }
     }
 }

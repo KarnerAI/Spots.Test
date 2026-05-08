@@ -18,15 +18,33 @@ struct ListTileData {
     let isAllSpots: Bool
 
     /// Deterministic fallback color based on tile title.
-    /// Accepts both current titles (Top Spots / Want to Go) and legacy titles
-    /// (Starred / Bucket List) so cached `CachedListTile` rows from before the
-    /// rename still resolve to the correct color instead of the gray default.
+    /// Tile backgrounds are muted variants of the tier's icon color. Switch
+    /// arms accept legacy titles (v1: Starred/Bucket List, v2: Top Spots) so
+    /// stale `CachedListTile` rows from before each rename still resolve to
+    /// the right color instead of the gray default. The cache version bump
+    /// in `ProfileSnapshotCache` invalidates these on next launch, but legacy
+    /// matches keep the experience clean if anything slips through.
+    ///
+    /// Tier mapping for current display labels (Iteration 2):
+    ///   "Favorites" (elite, red heart)  → muted red
+    ///   "Liked"     (mid, blue thumb)   → muted blue
+    ///   "Want to Go" (wishlist, emerald flag) → muted emerald
     static func color(forTitle title: String) -> Color {
         switch title {
-        case "Top Spots", "Starred":     return Color(red: 0.60, green: 0.50, blue: 0.30)
-        case "Favorites":                return Color(red: 0.55, green: 0.30, blue: 0.30)
-        case "Want to Go", "Bucket List": return Color(red: 0.28, green: 0.45, blue: 0.60)
-        default:                         return Color.gray400
+        // Elite tier: current "Favorites", legacy "Top Spots"/"Starred"
+        case "Favorites", "Top Spots", "Starred":
+            return Color(red: 0.55, green: 0.30, blue: 0.30)
+        // Mid tier: current "Liked", legacy "Favorites" handled above (resolves
+        // to elite-red since "Favorites" now means elite). Pre-v3 caches with
+        // mid-tier titles can't be reliably distinguished from elite — they
+        // get invalidated by the cache version bump.
+        case "Liked":
+            return Color(red: 0.28, green: 0.45, blue: 0.60)
+        // Wishlist tier: current "Want to Go", legacy "Bucket List"
+        case "Want to Go", "Bucket List":
+            return Color(red: 0.20, green: 0.45, blue: 0.35)
+        default:
+            return Color.gray400
         }
     }
 

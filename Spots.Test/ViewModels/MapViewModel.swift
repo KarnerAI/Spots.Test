@@ -747,14 +747,23 @@ class MapViewModel: ObservableObject {
 }
 
 // MARK: - UIColor Extension for List Colors
+//
+// Constant names are tier-stable INTERNAL identifiers tied to the underlying
+// `ListType` enum case, NOT to the current display label or icon. They keep
+// their original names across UI rename iterations so callsites never churn.
+//
+// Current tier mapping (Iteration 2 — Favorites/Liked/Want to Go):
+//   ListType.starred    → "Favorites"  → red heart
+//   ListType.favorites  → "Liked"      → blue thumbs-up
+//   ListType.bucketList → "Want to Go" → emerald flag
 extension UIColor {
-    /// Yellow color for starred list (matches the star icon)
-    static let listStarred = UIColor(red: 0.95, green: 0.77, blue: 0.06, alpha: 1.0)  // Gold/Yellow
-    
-    /// Red color for favorites list (matches the heart icon)
-    static let listFavorites = UIColor(red: 0.90, green: 0.30, blue: 0.30, alpha: 1.0)  // Red
-    
-    /// Blue color for bucket list (matches the flag icon)
-    static let listBucketList = UIColor(red: 0.29, green: 0.56, blue: 0.89, alpha: 1.0)  // Blue
+    /// Tint for the elite love tier (`ListType.starred` / "Favorites" / heart).
+    static let listStarred = UIColor(red: 0.94, green: 0.27, blue: 0.27, alpha: 1.0)  // #EF4444 red
+
+    /// Tint for the mid love tier (`ListType.favorites` / "Liked" / thumbs-up).
+    static let listFavorites = UIColor(red: 0.23, green: 0.51, blue: 0.96, alpha: 1.0)  // #3B82F6 blue
+
+    /// Tint for the wishlist tier (`ListType.bucketList` / "Want to Go" / flag).
+    static let listBucketList = UIColor(red: 0.06, green: 0.73, blue: 0.51, alpha: 1.0)  // #10B981 emerald
 }
 

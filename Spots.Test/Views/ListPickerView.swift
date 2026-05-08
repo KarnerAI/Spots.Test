@@ -23,11 +23,12 @@ struct ListPickerView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    /// Bumped each time the user toggles Top Spots ON via `toggle(_:)`.
-    /// Bound to `.symbolEffect(.bounce, value:)` on the Top Spots row's star
-    /// icon so only user-initiated additions fire the celebration — initial
-    /// pre-selection from existing membership and toggle-OFF do not animate.
-    @State private var topSpotsBouncePulse: Int = 0
+    /// Bumped each time the user toggles the elite love tier (`.starred` /
+    /// "Favorites") ON via `toggle(_:)`. Bound to `.symbolEffect(.bounce, value:)`
+    /// on the Favorites row's heart icon so only user-initiated additions fire
+    /// the celebration — initial pre-selection from existing membership and
+    /// toggle-OFF do not animate.
+    @State private var favoritesBouncePulse: Int = 0
     private let lightHaptic = UIImpactFeedbackGenerator(style: .light)
 
     var body: some View {
@@ -79,16 +80,16 @@ struct ListPickerView: View {
     private func listRow(_ list: UserList) -> some View {
         let isSelected = selectedListIds.contains(list.id)
         let count = listCounts[list.id] ?? 0
-        let isTopSpots = list.listType == .starred
+        let isFavorites = list.listType == .starred  // .starred enum case = "Favorites" display label
 
         return HStack(spacing: 12) {
             Image(systemName: list.listType?.iconName ?? "list.bullet")
                 .foregroundColor(list.listType?.iconColor ?? Color.spotsTeal)
                 .frame(width: 20, height: 20)
-                // Bind the bounce only to the Top Spots row so unrelated
-                // toggles don't animate it. `topSpotsBouncePulse` only ever
+                // Bind the bounce only to the Favorites row so unrelated
+                // toggles don't animate it. `favoritesBouncePulse` only ever
                 // increments from `toggle(_:)` on a user-initiated add.
-                .symbolEffect(.bounce, value: isTopSpots ? topSpotsBouncePulse : 0)
+                .symbolEffect(.bounce, value: isFavorites ? favoritesBouncePulse : 0)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(list.displayName)
@@ -178,7 +179,7 @@ struct ListPickerView: View {
             selectedListIds.remove(id)
         } else {
             // Radio behavior across the three default lists: selecting one
-            // (Favorites / Top Spots / Want to Go) deselects the other two.
+            // (Favorites / Liked / Want to Go) deselects the other two.
             // User-created lists keep checkbox semantics. Enforces the
             // "one default list per spot" invariant at the UI layer; the
             // VM also coerces in saveSpotToLists as belt-and-suspenders.
@@ -193,11 +194,12 @@ struct ListPickerView: View {
             }
 
             selectedListIds.insert(id)
-            // Top Spots is the elite tier — celebrate user adds with a bounce
+            // Favorites is the elite tier — celebrate user adds with a bounce
             // + light haptic. Fires only here (user toggle-on), never on
             // initial pre-selection from existing membership or on remove.
+            // The .starred enum case maps to the "Favorites" display label.
             if toggledList?.listType == .starred {
-                topSpotsBouncePulse &+= 1
+                favoritesBouncePulse &+= 1
                 lightHaptic.impactOccurred()
             }
         }
