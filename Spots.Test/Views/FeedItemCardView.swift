@@ -295,7 +295,7 @@ struct FeedItemCardView: View {
             // Stacked avatars + label only render when there's actually a
             // co-saver count to surface. The Spot button below stays
             // unconditional so the affordance is always available.
-            if payload.otherSaversCount > 0 || !payload.otherSavers.isEmpty {
+            if payload.otherSaversCount > 0, let label = spottedByLabel(payload: payload) {
                 Button {
                     if spot != nil { showSpottedBy = true }
                 } label: {
@@ -307,7 +307,7 @@ struct FeedItemCardView: View {
                 Button {
                     if spot != nil { showSpottedBy = true }
                 } label: {
-                    Text(spottedByLabel(count: payload.otherSaversCount))
+                    Text(label)
                         .font(.system(size: 13))
                         .foregroundColor(.gray600)
                         .lineLimit(1)
@@ -341,10 +341,22 @@ struct FeedItemCardView: View {
         }
     }
 
-    private func spottedByLabel(count: Int) -> String {
-        if count <= 0 { return "Spotted by others" }
-        if count == 1 { return "Spotted by 1 other" }
-        return "Spotted by \(count) others"
+    private func spottedByLabel(payload: FeedItemPayload.SpotSavePayload) -> String? {
+        let count = payload.otherSaversCount
+        guard count > 0 else { return nil }
+
+        // Surface the most-recent saver's username for personality
+        // ("Spotted by hereiszahir and 2 others"). If username is missing
+        // for any reason (older payload, deleted profile), fall back to
+        // the count-only string so we never render a blank name.
+        guard let username = payload.otherSavers.first?.username, !username.isEmpty else {
+            if count == 1 { return "Spotted by 1 other" }
+            return "Spotted by \(count) others"
+        }
+
+        if count == 1 { return "Spotted by \(username)" }
+        if count == 2 { return "Spotted by \(username) and 1 other" }
+        return "Spotted by \(username) and \(count - 1) others"
     }
 
     // MARK: - List preview (unchanged compact layout)
