@@ -6,9 +6,9 @@
 --
 -- This schema enables users to save Google Places to personal lists:
 -- - 3 default lists (DB enum -> display label):
---     starred     -> Top Spots
---     favorites   -> Favorites
---     bucket_list -> Want to Go
+--     starred     -> Favorites   (elite love tier, red heart)
+--     favorites   -> Liked       (mid love tier, blue thumbs-up)
+--     bucket_list -> Want to Go  (wishlist, emerald flag)
 --   Enum values intentionally kept stable; display labels live in iOS code.
 -- - All lists are private by default
 -- - Users can add the same spot to multiple lists
@@ -40,7 +40,7 @@ CREATE TYPE public.list_type_enum AS ENUM (
   'bucket_list'
 );
 
-COMMENT ON TYPE public.list_type_enum IS 'Identifies the 3 default system lists. Enum values are internal identifiers; user-facing display labels live in iOS code (starred -> Top Spots, favorites -> Favorites, bucket_list -> Want to Go). NULL list_type indicates a custom user-created list.';
+COMMENT ON TYPE public.list_type_enum IS 'Identifies the 3 default system lists. Enum values are internal identifiers; user-facing display labels live in iOS code (starred -> Favorites, favorites -> Liked, bucket_list -> Want to Go). NULL list_type indicates a custom user-created list.';
 
 -- ============================================
 -- Step 2: Create Spots Table
@@ -100,7 +100,7 @@ CREATE INDEX user_lists_user_id_idx ON public.user_lists(user_id);
 CREATE INDEX user_lists_user_type_idx ON public.user_lists(user_id, list_type) 
 WHERE list_type IS NOT NULL;
 
-COMMENT ON TABLE public.user_lists IS 'Stores user''s lists. Each user has exactly 3 default lists (Top Spots, Favorites, Want to Go — keyed internally by list_type starred/favorites/bucket_list) created automatically, plus any custom lists they create.';
+COMMENT ON TABLE public.user_lists IS 'Stores user''s lists. Each user has exactly 3 default lists (Favorites, Liked, Want to Go — keyed internally by list_type starred/favorites/bucket_list) created automatically, plus any custom lists they create.';
 COMMENT ON COLUMN public.user_lists.list_type IS 'Identifies system lists (starred, favorites, bucket_list). NULL indicates a custom user-created list.';
 COMMENT ON COLUMN public.user_lists.name IS 'Display name for the list. NULL for system lists (they use list_type for display), required for custom lists.';
 
@@ -252,7 +252,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.create_default_lists_for_user IS 'Creates the 3 default lists (Top Spots, Favorites, Want to Go) for a new user. Called automatically via trigger on user signup.';
+COMMENT ON FUNCTION public.create_default_lists_for_user IS 'Creates the 3 default lists (Favorites, Liked, Want to Go) for a new user. Called automatically via trigger on user signup.';
 
 -- Function: Get spot count for a list
 -- Used for displaying "5 places" badges
