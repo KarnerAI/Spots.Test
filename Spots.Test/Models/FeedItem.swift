@@ -35,6 +35,7 @@ enum FeedItemPayload: Equatable, Hashable {
 
     struct OtherSaver: Equatable, Hashable {
         let userId: UUID
+        let username: String?
         let avatarUrl: String?
     }
 
@@ -95,7 +96,11 @@ extension FeedItem: Decodable {
                 spotId: raw.spot_id,
                 otherSaversCount: raw.other_savers_count ?? 0,
                 otherSavers: (raw.other_savers ?? []).map {
-                    FeedItemPayload.OtherSaver(userId: $0.user_id, avatarUrl: $0.avatar_url)
+                    FeedItemPayload.OtherSaver(
+                        userId: $0.user_id,
+                        username: $0.username,
+                        avatarUrl: $0.avatar_url
+                    )
                 }
             ))
         case .listCreated:
@@ -118,6 +123,7 @@ extension FeedItem: Decodable {
 
     private struct OtherSaverRaw: Decodable {
         let user_id: UUID
+        let username: String?
         let avatar_url: String?
     }
 
