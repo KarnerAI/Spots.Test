@@ -36,14 +36,13 @@ struct ProfileView: View {
         coverHeight - cardOverlap - photoSize / 2
     }
 
-    private let placeholderCities: [CityRowData] = [
-        CityRowData(name: "New York",      count: 0),
-        CityRowData(name: "Los Angeles",   count: 0),
-        CityRowData(name: "San Francisco", count: 0),
-        CityRowData(name: "Chicago",       count: 0),
-        CityRowData(name: "Miami",         count: 0),
-        CityRowData(name: "Boston",        count: 0),
-    ]
+    /// All of the user's saved spots, deduped across system lists. Drives the
+    /// Cities/Countries lists in the Travel Map section. Loaded once on appear
+    /// and refreshed when the profile data refreshes from network.
+    @State private var allSpots: [Spot] = []
+
+    private var cityRows: [CityRowData] { LocationGrouping.cityRows(from: allSpots) }
+    private var countryRows: [CountryRowData] { LocationGrouping.countryRows(from: allSpots) }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -59,7 +58,11 @@ struct ProfileView: View {
             }
         }
         .ignoresSafeArea(edges: .top)
-        .background(Color.gray100)
+        // White (not gray100) so the area beneath the white sheet stays
+        // visually continuous when the Travel Map section is short
+        // (e.g. empty Countries tab). The cover image paints its own gradient
+        // on top, so nothing above the sheet is affected.
+        .background(Color.white)
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { loadProfileData() }
         .sheet(isPresented: $showCoverPicker) {
@@ -101,6 +104,14 @@ struct ProfileView: View {
 
         let cache = ProfileSnapshotCache.shared
 
+        // The Travel Map / "Your Footprint" section needs the user's full spot
+        // list to group by city/country, but ProfileSnapshot doesn't cache spots
+        // (only counts + list tiles). Fire it independently of the cache-staleness
+        // gate below so cold launches with a fresh cache still populate the
+        // footprint list. Without this, the section stays empty until something
+        // marks the snapshot stale (e.g. saving a new spot).
+        Task { await refreshAllSpotsForTravelMap() }
+
         // Apply cached snapshot instantly (synchronous, before any async work)
         if let snapshot = cache.snapshot(for: userId) {
             spotsCount = snapshot.spotsCount
@@ -117,6 +128,34 @@ struct ProfileView: View {
         Task { await refreshListTilesFromNetwork() }
         Task { await refreshCityAndCover() }
         Task { await refreshFollowCounts(userId: userId) }
+    }
+
+    /// Loads every spot the user has saved so the Travel Map section can group
+    /// them by city/country. Pulls across the three system lists (mirrors what
+    /// `ListDetailView.allSpots` does), dedupes by placeId.
+    private func refreshAllSpotsForTravelMap() async {
+        do {
+            let service = LocationSavingService.shared
+            let starred = try await service.getListByType(.starred)
+            let favorites = try await service.getListByType(.favorites)
+            let bucket = try await service.getListByType(.bucketList)
+
+            var collected: [SpotWithMetadata] = []
+            if let id = starred?.id { collected += try await service.getSpotsInList(listId: id, listType: .starred) }
+            if let id = favorites?.id { collected += try await service.getSpotsInList(listId: id, listType: .favorites) }
+            if let id = bucket?.id { collected += try await service.getSpotsInList(listId: id, listType: .bucketList) }
+
+            // Dedupe by placeId — a spot in two lists must only count once.
+            var unique: [String: Spot] = [:]
+            for entry in collected { unique[entry.spot.placeId] = entry.spot }
+            let deduped = Array(unique.values)
+
+            await MainActor.run {
+                withTransaction(Transaction(animation: nil)) { allSpots = deduped }
+            }
+        } catch {
+            print("⚠️ ProfileView: Could not load spots for travel map: \(error.localizedDescription)")
+        }
     }
 
     private func refreshFollowCounts(userId: UUID) async {
@@ -353,9 +392,14 @@ struct ProfileView: View {
             travelMapSection
                 .padding(.top, 28)
 
-            // Bottom padding so content clears the tab bar
+            // Small breathing room below the last row before the floating
+            // tab bar overlaps. Iteration 2: previously 100pt, but with the
+            // travel-map list now driving variable section heights, that
+            // produced an oversized empty strip after short tabs (e.g. an
+            // empty Countries tab). 32pt = clear of the tab bar safe-area
+            // inset while staying visually tight.
             Spacer()
-                .frame(height: 100)
+                .frame(height: 32)
         }
         .frame(maxWidth: .infinity)
         .background(RoundedTopCornersBackground(radius: sheetTopCornerRadius))
@@ -534,71 +578,143 @@ struct ProfileView: View {
 
     private var travelMapSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Your Travel Map")
+            Text("Your Footprint")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
                 .padding(.horizontal, 20)
 
-            Picker("Map View", selection: $travelMapSegment) {
-                Text("Cities").tag(0)
-                Text("Countries").tag(1)
+            // Tag 0 = Countries (left, default selected). Iteration 3 swap:
+            // Countries reads as the "where in the world have you been" headline
+            // and Cities is the drill-down. The default `travelMapSegment: 0`
+            // declaration above puts the user on Countries on first appear.
+            Picker("Footprint View", selection: $travelMapSegment) {
+                Text("Countries").tag(0)
+                Text("Cities").tag(1)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
 
-            // World map placeholder
-            RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
-                .fill(Color.gray100)
-                .frame(height: 230)
-                .overlay(
-                    Image(systemName: "map")
-                        .font(.system(size: 48))
-                        .foregroundColor(.gray300)
-                )
+            travelMapList
                 .padding(.horizontal, 20)
+        }
+    }
 
-            // City list
-            VStack(spacing: 0) {
-                ForEach(Array(placeholderCities.enumerated()), id: \.offset) { index, city in
-                    cityRow(city, isLast: index == placeholderCities.count - 1)
+    @ViewBuilder
+    private var travelMapList: some View {
+        let cities = cityRows
+        let countries = countryRows
+        let isCountriesTab = travelMapSegment == 0
+
+        if cities.isEmpty && countries.isEmpty {
+            travelMapEmptyState
+        } else if isCountriesTab {
+            if countries.isEmpty {
+                travelMapTabEmpty(message: "No countries yet — save spots with country info.")
+            } else {
+                travelMapRowGroup {
+                    ForEach(Array(countries.enumerated()), id: \.element.id) { index, country in
+                        NavigationLink(destination: ListDetailView(title: country.displayName, mode: .allSpotsInCountry(country.displayName))) {
+                            countryRow(country, isLast: index == countries.count - 1)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
+        } else {
+            if cities.isEmpty {
+                travelMapTabEmpty(message: "No cities yet — save spots with city info.")
+            } else {
+                travelMapRowGroup {
+                    ForEach(Array(cities.enumerated()), id: \.element.id) { index, city in
+                        NavigationLink(destination: ListDetailView(title: city.name, mode: .allSpotsInCity(city.name))) {
+                            cityRow(city, isLast: index == cities.count - 1)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func travelMapRowGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) { content() }
             .background(Color.white)
             .overlay(
                 RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
                     .stroke(Color.gray200, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
-            .padding(.horizontal, 20)
-        }
+    }
+
+    private var travelMapEmptyState: some View {
+        Text("Save spots to see your footprint.")
+            .font(.system(size: 14))
+            .foregroundColor(.gray500)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 16)
+    }
+
+    private func travelMapTabEmpty(message: String) -> some View {
+        Text(message)
+            .font(.system(size: 14))
+            .foregroundColor(.gray500)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 16)
     }
 
     private func cityRow(_ city: CityRowData, isLast: Bool) -> some View {
         HStack {
+            Text(city.name)
+                .font(.system(size: 14))
+                .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
+
+            Spacer()
+
+            Text("\(city.count) \(city.count == 1 ? "spot" : "spots")")
+                .font(.system(size: 12))
+                .foregroundColor(.gray500)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 56)
+        .contentShape(Rectangle())
+        .overlay(alignment: .bottom) {
+            if !isLast {
+                Divider()
+                    .background(Color.gray100)
+            }
+        }
+    }
+
+    private func countryRow(_ country: CountryRowData, isLast: Bool) -> some View {
+        HStack {
             HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color.spotsTeal.opacity(0.1))
-                        .frame(width: 32, height: 32)
-
-                    Image(systemName: "mappin")
-                        .font(.system(size: 13))
-                        .foregroundColor(.spotsTeal)
+                Group {
+                    if let flag = country.flag {
+                        Text(flag)
+                            .font(.system(size: 22))
+                    } else {
+                        Image(systemName: "globe")
+                            .font(.system(size: 16))
+                            .foregroundColor(.gray500)
+                            .frame(width: 24, height: 24)
+                    }
                 }
+                .frame(width: 28, alignment: .center)
 
-                Text(city.name)
+                Text(country.displayName)
                     .font(.system(size: 14))
                     .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
             }
 
             Spacer()
 
-            Text("\(city.count) spots")
+            Text("\(country.count) \(country.count == 1 ? "spot" : "spots")")
                 .font(.system(size: 12))
                 .foregroundColor(.gray500)
         }
         .padding(.horizontal, 16)
-        .frame(height: 64)
+        .frame(height: 56)
+        .contentShape(Rectangle())
         .overlay(alignment: .bottom) {
             if !isLast {
                 Divider()

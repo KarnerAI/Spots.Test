@@ -18,6 +18,11 @@ enum ListDetailMode {
     /// when viewing another user's profile so we don't fall back to the current
     /// user's lists via `getListByType`.
     case allSpotsForLists([UserList])
+    /// All of the current user's saved spots, filtered to a single city by name.
+    /// Comparison is trimmed + case-insensitive (see `LocationGrouping.matchesCity`).
+    case allSpotsInCity(String)
+    /// All of the current user's saved spots, filtered to a single country by name.
+    case allSpotsInCountry(String)
 }
 
 enum SpotSortOrder: String, CaseIterable {
@@ -463,6 +468,18 @@ struct ListDetailView: View {
                     allPlaces += try await service.getSpotsInList(listId: list.id, listType: type)
                 }
                 spots = Self.dedupedAndSorted(allPlaces)
+
+            case .allSpotsInCity(let city):
+                spots = Self.applyLocationFilter(
+                    to: try await Self.loadAllOwnedSpots(),
+                    matching: { LocationGrouping.matchesCity($0, city) }
+                )
+
+            case .allSpotsInCountry(let country):
+                spots = Self.applyLocationFilter(
+                    to: try await Self.loadAllOwnedSpots(),
+                    matching: { LocationGrouping.matchesCountry($0, country) }
+                )
             }
             buildMarkers()
         } catch {
@@ -471,6 +488,29 @@ struct ListDetailView: View {
         }
 
         isLoading = false
+    }
+
+    /// Fetch all of the current user's saved spots across the three system lists,
+    /// matching the dedupe rules used by `.allSpots`. Returns deduped metadata.
+    private static func loadAllOwnedSpots() async throws -> [SpotWithMetadata] {
+        let service = LocationSavingService.shared
+        let starred = try await service.getListByType(.starred)
+        let favorites = try await service.getListByType(.favorites)
+        let bucket = try await service.getListByType(.bucketList)
+
+        var all: [SpotWithMetadata] = []
+        if let id = starred?.id { all += try await service.getSpotsInList(listId: id, listType: .starred) }
+        if let id = favorites?.id { all += try await service.getSpotsInList(listId: id, listType: .favorites) }
+        if let id = bucket?.id { all += try await service.getSpotsInList(listId: id, listType: .bucketList) }
+        return dedupedAndSorted(all)
+    }
+
+    /// Apply a location predicate against `SpotWithMetadata.spot`, preserving order.
+    private static func applyLocationFilter(
+        to source: [SpotWithMetadata],
+        matching predicate: (Spot) -> Bool
+    ) -> [SpotWithMetadata] {
+        source.filter { predicate($0.spot) }
     }
 
     /// Dedupe by placeId, union listTypes, keep the most recent savedAt; sort newest first.

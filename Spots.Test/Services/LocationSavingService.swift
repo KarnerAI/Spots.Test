@@ -288,18 +288,20 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let country: String?
             let latitude: Double?
             let longitude: Double?
             let types: [String]?
             let photo_url: String?
             let photo_reference: String?
+            let rating: Double?
         }
 
         // created_at/updated_at intentionally omitted from the SELECT — list
         // UI uses SpotWithMetadata.savedAt, not Spot.createdAt/updatedAt.
         let batchResponse: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference")
+            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating")
             .in("place_id", values: placeIds)
             .execute()
             .value
@@ -311,11 +313,13 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 name: spotData.name,
                 address: spotData.address,
                 city: spotData.city,
+                country: spotData.country,
                 latitude: spotData.latitude,
                 longitude: spotData.longitude,
                 types: spotData.types,
                 photoUrl: spotData.photo_url,
                 photoReference: spotData.photo_reference,
+                rating: spotData.rating,
                 createdAt: nil,
                 updatedAt: nil
             )
@@ -408,18 +412,20 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let country: String?
             let latitude: Double?
             let longitude: Double?
             let types: [String]?
             let photo_url: String?
             let photo_reference: String?
+            let rating: Double?
             let created_at: String?
             let updated_at: String?
         }
 
         let batchResponse: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
             .in("place_id", values: uniquePlaceIds)
             .execute()
             .value
@@ -433,11 +439,13 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 name: spotData.name,
                 address: spotData.address,
                 city: spotData.city,
+                country: spotData.country,
                 latitude: spotData.latitude,
                 longitude: spotData.longitude,
                 types: spotData.types,
                 photoUrl: spotData.photo_url,
                 photoReference: spotData.photo_reference,
+                rating: spotData.rating,
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
@@ -502,18 +510,20 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let country: String?
             let latitude: Double?
             let longitude: Double?
             let types: [String]?
             let photo_url: String?
             let photo_reference: String?
+            let rating: Double?
             let created_at: String?
             let updated_at: String?
         }
 
         let response: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference, created_at, updated_at")
+            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
             .eq("place_id", value: placeId)
             .limit(1)
             .execute()
@@ -531,11 +541,13 @@ class LocationSavingService: LocationSavingServiceProtocol {
             name: spotData.name,
             address: spotData.address,
             city: spotData.city,
+            country: spotData.country,
             latitude: spotData.latitude,
             longitude: spotData.longitude,
             types: spotData.types,
             photoUrl: spotData.photo_url,
             photoReference: spotData.photo_reference,
+            rating: spotData.rating,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -627,16 +639,18 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let country: String?
             let latitude: Double?
             let longitude: Double?
             let types: [String]?
             let photo_url: String?
             let photo_reference: String?
+            let rating: Double?
         }
 
         let response: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, latitude, longitude, types, photo_url, photo_reference")
+            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating")
             .in("place_id", values: unique)
             .execute()
             .value
@@ -647,11 +661,13 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 name: row.name,
                 address: row.address,
                 city: row.city,
+                country: row.country,
                 latitude: row.latitude,
                 longitude: row.longitude,
                 types: row.types,
                 photoUrl: row.photo_url,
                 photoReference: row.photo_reference,
+                rating: row.rating,
                 createdAt: nil,
                 updatedAt: nil
             )
