@@ -5,13 +5,21 @@ build — most engineers never touch these.
 
 ## `backfill-spots-city-country.mjs`
 
-Fills in `city`, `country`, and `rating` on `public.spots` rows that have NULL
-values, using each row's stored `place_id` against the Google Places API.
+Fills in `city`, `country`, `rating`, `types`, and `photo_reference` on
+`public.spots` rows that have NULL/empty values, using each row's stored
+`place_id` against the Google Places API. (Filename hasn't been renamed
+to keep the git history clean — scope expanded over time.)
 
 Why: older saves wrote spots without those columns, so the Profile "Your
-Travel Map" Countries tab was empty even after the iOS-side fetch bug was
-fixed. This script gets historical data caught up. Idempotent — only writes
-columns that are currently NULL.
+Footprint" Countries tab was empty and Explore cards lacked categories /
+photo refs even after the iOS-side fetch bug was fixed. This script gets
+historical data caught up. Idempotent — only writes columns that are
+currently NULL/empty.
+
+`photo_url` (the Supabase-Storage-cached image) is **out of scope** here.
+Once `photo_reference` is filled, the existing `PhotoBackfillService` flow
+in the iOS app has what it needs to upload the image to Storage and write
+`photo_url` back.
 
 ### One-time setup
 
