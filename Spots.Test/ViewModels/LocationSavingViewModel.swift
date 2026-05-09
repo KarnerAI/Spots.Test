@@ -196,7 +196,16 @@ class LocationSavingViewModel: ObservableObject {
             || (resolvedCity?.isEmpty ?? true)
             || (resolvedTypes?.isEmpty ?? true)
         if needsDetails {
-            if let details = try? await PlacesAPIService.shared.fetchPlaceDetails(placeId: placeId) {
+            // Previously this used `try?`, which silently swallowed every
+            // Place Details failure — the save still proceeded but the row
+            // landed with NULL country/rating/types. The backfill script
+            // (Scripts/backfill-spots-city-country.mjs) cleans those up
+            // periodically, but we want to know when enrichment fails at
+            // save time so we can spot patterns (quota exhaustion, network
+            // outages, retired place_ids) instead of finding them weeks
+            // later in the table.
+            do {
+                let details = try await PlacesAPIService.shared.fetchPlaceDetails(placeId: placeId)
                 if (resolvedCity?.isEmpty ?? true) { resolvedCity = details.city }
                 if (resolvedCountry?.isEmpty ?? true) { resolvedCountry = details.country }
                 if (resolvedTypes?.isEmpty ?? true), !details.category.isEmpty {
@@ -205,6 +214,25 @@ class LocationSavingViewModel: ObservableObject {
                 if (resolvedPhotoUrl?.isEmpty ?? true) { resolvedPhotoUrl = details.photoUrl }
                 if (resolvedPhotoReference?.isEmpty ?? true) { resolvedPhotoReference = details.photoReference }
                 if resolvedRating == nil { resolvedRating = details.rating }
+            } catch {
+                print("⚠️ LocationSavingViewModel.saveSpot: Place Details enrichment failed for \(placeId): \(error.localizedDescription). Proceeding with shallow save; row will be backfilled later.")
+                DebugLogger.log(
+                    runId: "pre-fix",
+                    hypothesisId: "H2",
+                    location: "LocationSavingViewModel.saveSpot:enrichmentFailed",
+                    message: "Place Details enrichment failed; saving with caller-provided fields only",
+                    data: [
+                        "placeId": placeId,
+                        "error": error.localizedDescription,
+                        "missingCity": (resolvedCity?.isEmpty ?? true),
+                        "missingCountry": (resolvedCountry?.isEmpty ?? true),
+                        "missingRating": (resolvedRating == nil),
+                        "missingTypes": (resolvedTypes?.isEmpty ?? true)
+                    ]
+                )
+                // Intentionally do NOT rethrow — the save itself should still
+                // succeed even if enrichment fails. The user gets their spot
+                // saved; the data quality issue is recoverable via backfill.
             }
         }
 
