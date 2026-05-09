@@ -88,10 +88,5 @@ struct Config {
         }
         fatalError("Supabase anon key not configured. Add 'SupabaseAnonKey' to Info.plist or set the SUPABASE_ANON_KEY environment variable.")
     }()
-
-    // MARK: - App Group Configuration
-    // App Group identifier for sharing data between main app and share extension
-    // This must match the App Group identifier configured in Xcode project settings
-    static let appGroupIdentifier = "group.com.karnerblu.Spots-Test"
 }
 
