@@ -205,15 +205,34 @@ class LocationSavingViewModel: ObservableObject {
             // outages, retired place_ids) instead of finding them weeks
             // later in the table.
             do {
-                let details = try await PlacesAPIService.shared.fetchPlaceDetails(placeId: placeId)
-                if (resolvedCity?.isEmpty ?? true) { resolvedCity = details.city }
-                if (resolvedCountry?.isEmpty ?? true) { resolvedCountry = details.country }
-                if (resolvedTypes?.isEmpty ?? true), !details.category.isEmpty {
-                    resolvedTypes = [details.category.lowercased().replacingOccurrences(of: " ", with: "_")]
+                if let details = try await PlacesAPIService.shared.fetchPlaceDetails(placeId: placeId) {
+                    if (resolvedCity?.isEmpty ?? true) { resolvedCity = details.city }
+                    if (resolvedCountry?.isEmpty ?? true) { resolvedCountry = details.country }
+                    if (resolvedTypes?.isEmpty ?? true), !details.category.isEmpty {
+                        resolvedTypes = [details.category.lowercased().replacingOccurrences(of: " ", with: "_")]
+                    }
+                    if (resolvedPhotoUrl?.isEmpty ?? true) { resolvedPhotoUrl = details.photoUrl }
+                    if (resolvedPhotoReference?.isEmpty ?? true) { resolvedPhotoReference = details.photoReference }
+                    if resolvedRating == nil { resolvedRating = details.rating }
+                } else {
+                    // nil return = Google had no record for this place_id (retired,
+                    // removed, or never indexed). Same operational signal as the
+                    // catch block — surface it through DebugLogger so we can spot
+                    // patterns instead of finding them weeks later in NULL columns.
+                    DebugLogger.log(
+                        runId: "pre-fix",
+                        hypothesisId: "H2",
+                        location: "LocationSavingViewModel.saveSpot:enrichmentNilResult",
+                        message: "Place Details returned nil; saving with caller-provided fields only",
+                        data: [
+                            "placeId": placeId,
+                            "missingCity": (resolvedCity?.isEmpty ?? true),
+                            "missingCountry": (resolvedCountry?.isEmpty ?? true),
+                            "missingRating": (resolvedRating == nil),
+                            "missingTypes": (resolvedTypes?.isEmpty ?? true)
+                        ]
+                    )
                 }
-                if (resolvedPhotoUrl?.isEmpty ?? true) { resolvedPhotoUrl = details.photoUrl }
-                if (resolvedPhotoReference?.isEmpty ?? true) { resolvedPhotoReference = details.photoReference }
-                if resolvedRating == nil { resolvedRating = details.rating }
             } catch {
                 print("⚠️ LocationSavingViewModel.saveSpot: Place Details enrichment failed for \(placeId): \(error.localizedDescription). Proceeding with shallow save; row will be backfilled later.")
                 DebugLogger.log(
