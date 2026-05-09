@@ -17,19 +17,25 @@ struct UserListRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarView(urlString: profile.avatarUrl, size: 48)
+            Button(action: onViewProfile) {
+                HStack(spacing: 12) {
+                    AvatarView(urlString: profile.avatarUrl, size: 48)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(profile.username)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.gray900)
-                    .lineLimit(1)
-                Text(profile.displayName)
-                    .font(.system(size: 12))
-                    .foregroundColor(.gray500)
-                    .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile.username)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.gray900)
+                            .lineLimit(1)
+                        Text(profile.displayName)
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray500)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
 
             Button(action: onViewProfile) {
                 Text("View Profile")
