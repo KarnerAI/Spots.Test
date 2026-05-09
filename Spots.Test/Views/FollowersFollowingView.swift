@@ -16,6 +16,8 @@ struct FollowersFollowingView: View {
     @StateObject private var vm: FollowersFollowingViewModel
     @State private var searchInput: String = ""
     @State private var profileToOpen: UUID?
+    @State private var pendingRemoval: UserProfile?
+    @State private var pendingRemovalTab: FollowersFollowingTab?
 
     init(
         userId: UUID,
@@ -75,6 +77,47 @@ struct FollowersFollowingView: View {
             actions: { Button("OK", role: .cancel) {} },
             message: { Text(vm.errorMessage ?? "") }
         )
+        .confirmationDialog(
+            removalDialogTitle,
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil; pendingRemovalTab = nil } }
+            ),
+            titleVisibility: .visible,
+            actions: {
+                Button(removalConfirmLabel, role: .destructive) {
+                    guard let profile = pendingRemoval, let tab = pendingRemovalTab else { return }
+                    Task {
+                        switch tab {
+                        case .followers: await vm.removeFollower(profile)
+                        case .following: await vm.unfollow(profile)
+                        }
+                    }
+                    pendingRemoval = nil
+                    pendingRemovalTab = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingRemoval = nil
+                    pendingRemovalTab = nil
+                }
+            }
+        )
+    }
+
+    private var removalDialogTitle: String {
+        guard let profile = pendingRemoval, let tab = pendingRemovalTab else { return "" }
+        switch tab {
+        case .followers: return "Remove @\(profile.username) as a follower?"
+        case .following: return "Unfollow @\(profile.username)?"
+        }
+    }
+
+    private var removalConfirmLabel: String {
+        switch pendingRemovalTab {
+        case .followers: return "Remove"
+        case .following: return "Unfollow"
+        case .none: return "Remove"
+        }
     }
 
     // MARK: - Tab bar
@@ -218,16 +261,14 @@ struct FollowersFollowingView: View {
                 items: vm.followers,
                 isLoading: vm.isLoadingFollowers,
                 isLoadingMore: vm.isLoadingMoreFollowers,
-                emptyTitle: "No followers yet",
-                onRemove: { profile in Task { await vm.removeFollower(profile) } }
+                emptyTitle: "No followers yet"
             )
         case .following:
             renderList(
                 items: vm.following,
                 isLoading: vm.isLoadingFollowing,
                 isLoadingMore: vm.isLoadingMoreFollowing,
-                emptyTitle: "Not following anyone yet",
-                onRemove: { profile in Task { await vm.unfollow(profile) } }
+                emptyTitle: "Not following anyone yet"
             )
         }
     }
@@ -237,8 +278,7 @@ struct FollowersFollowingView: View {
         items: [UserProfile],
         isLoading: Bool,
         isLoadingMore: Bool,
-        emptyTitle: String,
-        onRemove: @escaping (UserProfile) -> Void
+        emptyTitle: String
     ) -> some View {
         if isLoading && items.isEmpty {
             ProgressView()
@@ -260,7 +300,10 @@ struct FollowersFollowingView: View {
                 UserListRowView(
                     profile: profile,
                     onViewProfile: { profileToOpen = profile.id },
-                    onRemove: { onRemove(profile) },
+                    onRemove: {
+                        pendingRemovalTab = vm.selectedTab
+                        pendingRemoval = profile
+                    },
                     isRemoving: vm.isMutating.contains(profile.id)
                 )
                 .task { await vm.loadMoreIfNeeded(currentItem: profile) }
