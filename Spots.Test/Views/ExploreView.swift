@@ -114,15 +114,14 @@ struct ExploreView: View {
                 Spacer()
             }
             
-            // Locate Me Button and location status - positioned above the bottom sheet
+            // Locate Me Button — sits just above whichever bottom UI is showing
+            // (place card if a spot is selected, otherwise the bottom sheet).
+            // Status text dropped: the crosshair icon implies the function and
+            // "Located/Locating..." was only meaningful for the first ~second.
             VStack {
                 Spacer()
                 HStack {
                     Spacer()
-                    // Location status: show instantly whether user is located
-                    Text(viewModel.currentLocation != nil ? "Located" : "Locating...")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(viewModel.currentLocation != nil ? .secondary : .orange)
                     Button(action: {
                         viewModel.centerOnCurrentLocation()
                     }) {
@@ -134,9 +133,9 @@ struct ExploreView: View {
                             .clipShape(Circle())
                             .shadow(color: Color.black.opacity(0.15), radius: 4, x: 0, y: 2)
                     }
-                    .padding(.trailing, 16)
+                    .padding(.trailing, locateButtonTrailingPadding)
                 }
-                .padding(.bottom, viewModel.selectedSpot != nil ? bottomSheetHeight + 152 : bottomSheetHeight + 16)
+                .padding(.bottom, locateButtonBottomPadding)
             }
             
             // Bottom sheet only when no spot selected
@@ -218,8 +217,13 @@ struct ExploreView: View {
         }
         .fullScreenCover(isPresented: $showSearchView) {
             SearchView(
-                onSelectSpot: { spotName in
-                    print("Selected spot: \(spotName)")
+                onSelectSpot: { result in
+                    // Google-Maps-style: dismiss search, pan to the place, and
+                    // show its place card. Save flow happens from the card.
+                    showSearchView = false
+                    Task {
+                        await viewModel.selectPlaceFromSearch(result: result)
+                    }
                 },
                 onFiltersClick: {
                     print("Filters clicked")
@@ -255,12 +259,46 @@ struct ExploreView: View {
     private var bottomSheetHeight: CGFloat {
         viewModel.sheetState.height
     }
+
+    /// Trailing inset for the Locate Me button. When a place card is showing,
+    /// match the card's right edge (the card is centered at ~94% of screen
+    /// width, capped at 370pt) so the button sits on the same vertical line
+    /// as the card. Otherwise fall back to a flat 16pt screen-edge inset.
+    /// `max(16, …)` prevents narrow screens from pulling the button past the
+    /// safe edge.
+    private var locateButtonTrailingPadding: CGFloat {
+        if viewModel.selectedSpot != nil {
+            let screenWidth = UIScreen.main.bounds.width
+            let cardWidth = SpotCardView.cardWidth(for: screenWidth)
+            return max(16, (screenWidth - cardWidth) / 2)
+        }
+        return 16
+    }
+
+    /// Bottom inset for the Locate Me button so it sits ~12pt above whichever
+    /// bottom UI is currently rendered. Place card replaces the sheet when a
+    /// spot is selected — its height is 120pt + 16pt bottom padding (see
+    /// `SpotCardView.cardHeight` and the `.padding(.bottom, 16)` on line 190).
+    private var locateButtonBottomPadding: CGFloat {
+        if viewModel.selectedSpot != nil {
+            let cardHeight: CGFloat = 120
+            let cardBottomPadding: CGFloat = 16
+            let gap: CGFloat = 12
+            return cardHeight + cardBottomPadding + gap
+        }
+        return bottomSheetHeight + 16
+    }
     
     // MARK: - Helper Methods
     
     private func updateMarkers() {
-        // Only show saved places markers (no nearby spot markers)
-        markers = viewModel.createMarkers()
+        var next = viewModel.createMarkers()
+        // Add a prominent teardrop for an unsaved selected place so the user
+        // can actually see *where* their searched/tapped POI is on the map.
+        if let pin = viewModel.createSelectedSpotMarker() {
+            next.append(pin)
+        }
+        markers = next
     }
     
     private func handleMarkerTap(_ marker: GMSMarker) {
