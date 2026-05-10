@@ -71,6 +71,7 @@ struct NewsFeedView: View {
                             onSelectSpot: { _ in presentSearch = false },
                             initialSearchMode: .users
                         )
+                        .environmentObject(locationSavingVM)
                     }
 
                 googleMapsPromptOverlay

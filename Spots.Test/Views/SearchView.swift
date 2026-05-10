@@ -38,7 +38,11 @@ enum ProfileRoute: Hashable {
 struct SearchView: View {
     @Environment(\.dismiss) var dismiss
 
-    let onSelectSpot: (String) -> Void
+    /// Fires when a Spots-tab result is tapped. Caller is expected to dismiss
+    /// the search view, pan the map to the place, and present the place card.
+    /// Mirrors Google Maps' "search → drop into context" behavior; save flow
+    /// is reached from the place card, not from the search row.
+    let onSelectSpot: (PlaceAutocompleteResult) -> Void
     let onFiltersClick: (() -> Void)?
 
     var recentSpots: [SpotResult] = []
@@ -52,7 +56,6 @@ struct SearchView: View {
     @State private var autocompleteResults: [PlaceAutocompleteResult] = []
     @State private var isLoadingPlaces: Bool = false
     @State private var placesError: String?
-    @State private var selectedSpotForSaving: PlaceAutocompleteResult?
 
     // User search state (backed by ProfileService.searchUsers + FollowService).
     @State private var userResults: [UserProfile] = []
@@ -62,7 +65,7 @@ struct SearchView: View {
     @State private var followActionInFlight: Set<UUID> = []
 
     init(
-        onSelectSpot: @escaping (String) -> Void,
+        onSelectSpot: @escaping (PlaceAutocompleteResult) -> Void,
         onFiltersClick: (() -> Void)? = nil,
         recentSpots: [SpotResult] = [],
         initialSearchMode: SearchMode = .spots
@@ -228,9 +231,6 @@ struct SearchView: View {
             }
             
         }
-        .listPickerSheet(spot: $selectedSpotForSaving) {
-            dismiss()
-        }
         .transition(.move(edge: .trailing))
         .onAppear {
             locationManager.requestLocationPermission()
@@ -274,7 +274,16 @@ struct SearchView: View {
     
     private func recentSpotRow(spot: SpotResult) -> some View {
         Button(action: {
-            onSelectSpot(spot.name)
+            // Recent entries may pre-date the place-card flow (no placeId stored).
+            // Fall through to dismiss without a selection in that case.
+            if let placeId = spot.placeId {
+                let result = PlaceAutocompleteResult(
+                    placeId: placeId,
+                    name: spot.name,
+                    address: spot.address
+                )
+                onSelectSpot(result)
+            }
             dismiss()
         }) {
             HStack(spacing: 12) {
@@ -638,10 +647,10 @@ struct SearchView: View {
     
     private func autocompleteResultRow(result: PlaceAutocompleteResult) -> some View {
         Button(action: {
-            // Dismiss keyboard so the Save to Spots sheet is fully visible (matches bookmark flow)
+            // Dismiss keyboard before transitioning back to the map.
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            // Show save sheet when tapping on the place
-            selectedSpotForSaving = result
+            onSelectSpot(result)
+            dismiss()
         }) {
             HStack(spacing: 12) {
                 // Category emoji (or fallback pin)
@@ -661,7 +670,7 @@ struct SearchView: View {
                             .clipShape(Circle())
                     }
                 }
-                
+
                 // Text Content
                 VStack(alignment: .leading, spacing: 4) {
                     Text(result.name)
@@ -669,7 +678,7 @@ struct SearchView: View {
                         .foregroundColor(.gray900)
                         .lineLimit(1)
                         .multilineTextAlignment(.leading)
-                    
+
                     Text(result.address)
                         .font(.system(size: 13))
                         .foregroundColor(.gray500)
@@ -677,14 +686,8 @@ struct SearchView: View {
                         .multilineTextAlignment(.leading)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                
+
                 Spacer()
-                
-                // Bookmark icon indicator
-                Image(systemName: "bookmark")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(Color(red: 0.36, green: 0.69, blue: 0.72))
-                    .frame(width: 44, height: 44)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
@@ -696,8 +699,8 @@ struct SearchView: View {
 
 #Preview {
     SearchView(
-        onSelectSpot: { spotName in
-            print("Selected: \(spotName)")
+        onSelectSpot: { result in
+            print("Selected: \(result.name) (\(result.placeId))")
         },
         recentSpots: [
             SpotResult(

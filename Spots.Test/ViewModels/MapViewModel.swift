@@ -644,13 +644,104 @@ class MapViewModel: ObservableObject {
                 }
                 
                 selectedSpot = spot
-                
+
                 // 4) Save the result to Supabase so future taps use the cache
                 await placesAPIService.bulkUpsertSpots([spot])
+
+                // 5) If we still don't have a Supabase photoUrl, upload the
+                //    Google photo bytes once. Fire-and-forget; ImageStorageService
+                //    is idempotent and uploadSpotImages writes photo_url back to
+                //    the DB, so the next viewer (any user, any session) hits the
+                //    Supabase cache instead of paying the Google Photo API.
+                persistPhotoToSupabaseIfNeeded(for: spot)
             }
         } catch {
             print("Failed to fetch POI details: \(error)")
             // Keep showing basic info
+        }
+    }
+
+    /// Entry point for the search → map flow. Resolves the place's coordinates
+    /// (cache first, Google fallback), pans the map to it, and presents it as
+    /// the selected spot — mirroring `fetchAndSelectPOI` but without an initial
+    /// tap location (autocomplete results don't carry coordinates).
+    @MainActor
+    func selectPlaceFromSearch(result: PlaceAutocompleteResult) async {
+        let placeId = result.placeId
+
+        // 1) Show a loading placeholder so the card animates in immediately.
+        let placeholderCoord = result.coordinate ?? currentLocation?.coordinate
+            ?? CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        selectedSpot = NearbySpot(
+            placeId: placeId,
+            name: result.name,
+            address: result.address,
+            city: result.city,
+            category: "Place",
+            rating: nil,
+            photoReference: result.photoReference,
+            photoUrl: result.photoUrl,
+            latitude: placeholderCoord.latitude,
+            longitude: placeholderCoord.longitude,
+            distanceMeters: calculateDistanceToCoordinate(placeholderCoord)
+        )
+
+        // 2) Resolve the real spot (cache first, then Google).
+        var resolved: NearbySpot?
+        if let cached = await placesAPIService.getCachedSpot(placeId: placeId) {
+            resolved = cached
+        } else {
+            do {
+                resolved = try await placesAPIService.fetchPlaceDetails(placeId: placeId)
+            } catch {
+                print("⚠️ selectPlaceFromSearch: fetchPlaceDetails failed for \(placeId): \(error)")
+            }
+        }
+
+        guard var spot = resolved else {
+            // Couldn't resolve — clear the placeholder rather than leave a 0,0 card.
+            selectedSpot = nil
+            return
+        }
+
+        // Prefer a known Supabase photoUrl before paying for a fresh upload.
+        if (spot.photoUrl ?? "").isEmpty,
+           let dbUrl = await placesAPIService.getCachedPhotoUrl(placeId: placeId) {
+            spot.photoUrl = dbUrl
+        }
+
+        spot.distanceMeters = calculateDistanceToCoordinate(
+            CLLocationCoordinate2D(latitude: spot.latitude, longitude: spot.longitude)
+        )
+
+        // 3) Pan the map to the place and present the card.
+        centerOnLocation(CLLocation(latitude: spot.latitude, longitude: spot.longitude))
+        selectedSpot = spot
+
+        // 4) Persist the spot row + photo for downstream users/sessions.
+        await placesAPIService.bulkUpsertSpots([spot])
+        persistPhotoToSupabaseIfNeeded(for: spot)
+    }
+
+    /// Fire-and-forget photo upload. Skips when there's already a Supabase URL
+    /// or no Google photoReference to fetch from. `uploadSpotImages` is
+    /// idempotent (in-process cache + Supabase upsert) and writes photo_url
+    /// back to the `spots` row, so the next visitor skips Google entirely.
+    private func persistPhotoToSupabaseIfNeeded(for spot: NearbySpot) {
+        guard (spot.photoUrl ?? "").isEmpty,
+              let ref = spot.photoReference, !ref.isEmpty else {
+            return
+        }
+        let placeId = spot.placeId
+        Task.detached { [placesAPIService] in
+            let uploaded = await placesAPIService.uploadSpotImages(spots: [spot])
+            guard let url = uploaded[placeId] else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if self.selectedSpot?.placeId == placeId {
+                    self.selectedSpot?.photoUrl = url
+                }
+            }
         }
     }
     
@@ -705,6 +796,29 @@ class MapViewModel: ObservableObject {
         }
     }
     
+    /// A standalone marker for the currently-selected unsaved place (search
+    /// result or POI tap). Returns nil if there's no selection, or if the
+    /// selection is already a saved place — in that case `createMarkers()`
+    /// already renders the list-type icon with a 1.3× selection scale, and
+    /// stacking a teardrop on top would just clutter the same pixel.
+    func createSelectedSpotMarker() -> GMSMarker? {
+        guard let selected = selectedSpot else { return nil }
+        if savedPlaces.contains(where: { $0.spot.placeId == selected.placeId }) {
+            return nil
+        }
+        let marker = GMSMarker()
+        marker.position = CLLocationCoordinate2D(
+            latitude: selected.latitude,
+            longitude: selected.longitude
+        )
+        // Leave .icon unset so GoogleMaps draws its standard red teardrop at
+        // its native size — matches Google Maps' search-result pin exactly.
+        marker.zIndex = 30 // Above saved-place markers (zIndex 10/20).
+        // No userData: tapping the teardrop while its card is already on
+        // screen is a no-op (matches Google Maps' search-pin behavior).
+        return marker
+    }
+
     /// Returns the appropriate icon based on list membership. Delegates to MarkerIconHelper.
     private func iconForListTypes(_ listTypes: Set<ListType>) -> UIImage? {
         MarkerIconHelper.iconForListTypes(listTypes, cache: &cachedMarkerIcons)
