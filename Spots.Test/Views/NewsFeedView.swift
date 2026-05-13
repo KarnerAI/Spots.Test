@@ -25,130 +25,55 @@ struct NewsFeedView: View {
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            ZStack {
-                content
-                    .background(Color.gray100.ignoresSafeArea())
-                    .navigationTitle("Feed")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar { toolbarContent }
-                    .toolbarBackground(Color.white, for: .navigationBar)
-                    .toolbarBackground(.visible, for: .navigationBar)
-                    .navigationDestination(for: FeedRoute.self) { route in
-                        destination(for: route)
-                    }
-                    .task {
-                        // Run once per view lifetime — sheet dismissal and nav-pop
-                        // re-fire .task by default, but FeedViewModel.loadInitial
-                        // already has its own staleness guard so re-running here
-                        // is just Combine churn we don't need.
-                        guard !didLoadOnce else { return }
-                        didLoadOnce = true
-                        await viewModel.loadInitial()
-                        await viewModel.refreshPendingRequestCount()
-                        // Populate the saved-places map so feed cards can
-                        // render the correct list-type icon on first paint.
-                        // Has its own staleness guard, cheap to call again.
-                        await locationSavingVM.loadSavedPlaces()
-                    }
-                    .refreshable {
-                        await viewModel.refresh()
-                        await viewModel.refreshPendingRequestCount()
-                        await locationSavingVM.loadSavedPlaces(forceRefresh: true)
-                    }
-                    .onChange(of: scenePhase) { _, newPhase in
-                        // App came back to the foreground — refetch if our cache
-                        // is older than the staleness window.
-                        if newPhase == .active {
-                            Task {
-                                await viewModel.refreshIfStale()
-                                await viewModel.refreshPendingRequestCount()
-                                await locationSavingVM.loadSavedPlaces()
-                            }
-                        }
-                    }
-                    .sheet(isPresented: $presentSearch) {
-                        SearchView(
-                            onSelectSpot: { _ in presentSearch = false },
-                            initialSearchMode: .users
-                        )
-                        .environmentObject(locationSavingVM)
-                    }
-
-                googleMapsPromptOverlay
-            }
-            .listPickerSheet(spot: $spotForSaving)
-            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotToOpenInMaps != nil)
-        }
-    }
-
-    // MARK: - Open in Google Maps Overlay
-
-    @ViewBuilder
-    private var googleMapsPromptOverlay: some View {
-        if let spot = spotToOpenInMaps {
-            ZStack {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .onTapGesture { spotToOpenInMaps = nil }
-                    .transition(.opacity)
-
-                VStack(spacing: 8) {
-                    Spacer()
-
-                    VStack(spacing: 0) {
-                        VStack(spacing: 2) {
-                            Text("Open in Google Maps?")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                            Text(spot.name)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                        .frame(maxWidth: .infinity)
-
-                        Divider()
-
-                        Button {
-                            openInGoogleMaps(spot: spot)
-                            spotToOpenInMaps = nil
-                        } label: {
-                            Text("Open")
-                                .font(.system(size: 20))
-                                .foregroundStyle(Color.accentColor)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 57)
-                        }
-                    }
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                    Button {
-                        spotToOpenInMaps = nil
-                    } label: {
-                        Text("Cancel")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(Color.accentColor)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 57)
-                    }
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            content
+                .background(Color.gray100.ignoresSafeArea())
+                .navigationTitle("Feed")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbarContent }
+                .toolbarBackground(Color.white, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+                .navigationDestination(for: FeedRoute.self) { route in
+                    destination(for: route)
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 110)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-    }
-
-    private func openInGoogleMaps(spot: Spot) {
-        let urlString = "https://www.google.com/maps/search/?api=1&query=\(spot.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&query_place_id=\(spot.placeId)"
-        if let url = URL(string: urlString) {
-            UIApplication.shared.open(url)
+                .task {
+                    // Run once per view lifetime — sheet dismissal and nav-pop
+                    // re-fire .task by default, but FeedViewModel.loadInitial
+                    // already has its own staleness guard so re-running here
+                    // is just Combine churn we don't need.
+                    guard !didLoadOnce else { return }
+                    didLoadOnce = true
+                    await viewModel.loadInitial()
+                    await viewModel.refreshPendingRequestCount()
+                    // Populate the saved-places map so feed cards can
+                    // render the correct list-type icon on first paint.
+                    // Has its own staleness guard, cheap to call again.
+                    await locationSavingVM.loadSavedPlaces()
+                }
+                .refreshable {
+                    await viewModel.refresh()
+                    await viewModel.refreshPendingRequestCount()
+                    await locationSavingVM.loadSavedPlaces(forceRefresh: true)
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    // App came back to the foreground — refetch if our cache
+                    // is older than the staleness window.
+                    if newPhase == .active {
+                        Task {
+                            await viewModel.refreshIfStale()
+                            await viewModel.refreshPendingRequestCount()
+                            await locationSavingVM.loadSavedPlaces()
+                        }
+                    }
+                }
+                .sheet(isPresented: $presentSearch) {
+                    SearchView(
+                        onSelectSpot: { _ in presentSearch = false },
+                        initialSearchMode: .users
+                    )
+                    .environmentObject(locationSavingVM)
+                }
+                .listPickerSheet(spot: $spotForSaving)
+                .openInGoogleMapsConfirmation(place: $spotToOpenInMaps)
         }
     }
 

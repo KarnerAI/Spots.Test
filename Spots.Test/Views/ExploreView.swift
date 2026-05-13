@@ -231,22 +231,7 @@ struct ExploreView: View {
             )
             .environmentObject(locationSavingVM)
         }
-        .confirmationDialog(
-            "Open in Google Maps?",
-            isPresented: Binding(
-                get: { spotToOpenInMaps != nil },
-                set: { if !$0 { spotToOpenInMaps = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: spotToOpenInMaps
-        ) { spot in
-            Button("Open") {
-                openInGoogleMaps(spot: spot)
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: { spot in
-            Text(spot.name)
-        }
+        .openInGoogleMapsConfirmation(place: $spotToOpenInMaps)
         .alert("Filters Coming Soon", isPresented: $showFiltersPlaceholder) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -309,12 +294,6 @@ struct ExploreView: View {
         }
     }
     
-    private func openInGoogleMaps(spot: NearbySpot) {
-        let urlString = "https://www.google.com/maps/search/?api=1&query=\(spot.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&query_place_id=\(spot.placeId)"
-        if let url = URL(string: urlString) {
-            UIApplication.shared.open(url)
-        }
-    }
 }
 
 #Preview {
