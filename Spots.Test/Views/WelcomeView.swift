@@ -97,7 +97,14 @@ extension Color {
     static let gray200 = Color(red: 0.88, green: 0.88, blue: 0.88)  // #E0E0E0
     static let gray100 = Color(red: 0.95, green: 0.95, blue: 0.95)  // #F3F4F6
     static let gray50 = Color(red: 0.98, green: 0.98, blue: 0.98)   // #FAFAFA
-    static let spotsTeal = Color(red: 0.36, green: 0.69, blue: 0.72) // #5DB0B8
-    static let spotsTealActive = Color(red: 0.29, green: 0.61, blue: 0.64) // #4A9BA2 (pressed)
+    // Brand palette (2026-05-12 rebrand: navy is primary, teal + coral are accents).
+    // Changing spotsTeal from the previous #5DB0B8 to #1AA6B7 is an app-wide
+    // shift — every screen that referenced the old teal now reads the new
+    // brand teal. Intentional, not a regression.
+    static let spotsNavy = Color(red: 0.03, green: 0.18, blue: 0.27)      // #072E44 — primary
+    static let spotsNavyActive = Color(red: 0.02, green: 0.15, blue: 0.23) // #04253A — pressed
+    static let spotsTeal = Color(red: 0.10, green: 0.65, blue: 0.72)      // #1AA6B7 — accent
+    static let spotsTealActive = Color(red: 0.08, green: 0.54, blue: 0.60) // #148A98 — pressed
+    static let spotsCoral = Color(red: 0.95, green: 0.28, blue: 0.31)     // #F14750 — accent
 }
 
