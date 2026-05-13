@@ -74,7 +74,12 @@ struct SpotsCarouselView: View {
     private func spotsCarousel(cardWidth: CGFloat) -> some View {
         ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: cardSpacing) {
+                // LazyHStack so off-screen cards don't fire `.onAppear` at
+                // mount time. The non-lazy variant fired `onCardVisible`
+                // for every card simultaneously when Explore first mounted
+                // after onboarding, triggering a parallel-Task storm
+                // through `resolvePhotoReferenceIfNeeded`.
+                LazyHStack(spacing: cardSpacing) {
                     ForEach(Array(spots.enumerated()), id: \.element.id) { index, spot in
                         SpotCardView(
                             spot: spot,

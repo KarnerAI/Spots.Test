@@ -75,6 +75,21 @@ class MapViewModel: ObservableObject {
     /// Tracks place IDs with in-flight photo resolution to avoid duplicate requests
     private var photoResolutionInFlight: Set<String> = []
 
+    /// Max parallel photo resolutions. Bounded so the storm of `onCardVisible`
+    /// callbacks fired by the carousel right after Explore mounts can't spawn
+    /// N concurrent Tasks that each hit Google Places + Supabase auth +
+    /// keychain. Above this cap, requests are dropped — LazyHStack will
+    /// re-fire `.onAppear` on subsequent scrolls so nothing is lost.
+    private static let maxConcurrentPhotoResolutions = 3
+
+    /// Spots whose `photoReference` was just resolved and need a DB upsert.
+    /// Flushed in a single `bulkUpsertSpots` call by `upsertFlushTask` so we
+    /// don't make N round-trips (with N sync-keychain auth fetches) when N
+    /// cards resolve at once.
+    private var pendingUpsertSpots: [String: NearbySpot] = [:]
+    private var upsertFlushTask: Task<Void, Never>?
+    private static let upsertFlushDelayNanos: UInt64 = 250_000_000  // 250ms
+
     /// Place IDs whose photo reference has already been resolved (prefetch path).
     /// Persists across `fetchNearbySpots` calls so panning back over the same
     /// region doesn't re-issue Places-detail lookups whose results are already
@@ -493,12 +508,15 @@ class MapViewModel: ObservableObject {
     }
     
     /// Resolves photo reference for a single spot on-demand (called when a carousel card scrolls into view).
-    /// Skips if the spot already has photo data or if a resolution is already in-flight.
+    /// Skips if the spot already has photo data, if a resolution is already in-flight,
+    /// or if we're at the concurrency cap (LazyHStack will re-fire `.onAppear`
+    /// when the user scrolls past, so dropped requests are recovered naturally).
     func resolvePhotoReferenceIfNeeded(for placeId: String) {
         guard let idx = nearbySpots.firstIndex(where: { $0.placeId == placeId }),
               nearbySpots[idx].photoReference == nil,
               nearbySpots[idx].photoUrl == nil,
-              !photoResolutionInFlight.contains(placeId) else { return }
+              !photoResolutionInFlight.contains(placeId),
+              photoResolutionInFlight.count < Self.maxConcurrentPhotoResolutions else { return }
 
         photoResolutionInFlight.insert(placeId)
 
@@ -514,9 +532,12 @@ class MapViewModel: ObservableObject {
                 nearbySpots[liveIdx].photoReference = ref
             }
 
-            // Persist to Supabase so future sessions don't re-fetch
+            // Queue a coalesced Supabase upsert so a burst of resolutions
+            // collapses into one network round-trip instead of N (each of
+            // which would trigger a sync keychain read on the Supabase
+            // auth path).
             if let spot = nearbySpots.first(where: { $0.placeId == placeId }) {
-                await placesAPIService.bulkUpsertSpots([spot])
+                self.enqueueUpsert(spot)
             }
 
             // Upload the image and update the photo URL
@@ -527,6 +548,22 @@ class MapViewModel: ObservableObject {
                     nearbySpots[finalIdx].photoUrl = url
                 }
             }
+        }
+    }
+
+    /// Buffers a spot for the next coalesced `bulkUpsertSpots` flush and
+    /// (re)schedules the debounced flush task. All access is main-actor
+    /// isolated by virtue of the surrounding `@MainActor` class.
+    private func enqueueUpsert(_ spot: NearbySpot) {
+        pendingUpsertSpots[spot.placeId] = spot
+        upsertFlushTask?.cancel()
+        upsertFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.upsertFlushDelayNanos)
+            guard !Task.isCancelled, let self else { return }
+            let batch = Array(self.pendingUpsertSpots.values)
+            self.pendingUpsertSpots.removeAll()
+            guard !batch.isEmpty else { return }
+            await self.placesAPIService.bulkUpsertSpots(batch)
         }
     }
 
