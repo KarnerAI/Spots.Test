@@ -101,6 +101,14 @@ final class OnboardingViewModel: ObservableObject {
     @Published var isShowingCelebration: Bool = false
     @Published var isCompletingOnboarding: Bool = false
 
+    /// Set to true once the profile write in `completeOnboarding` succeeds.
+    /// `dismissCelebration` reads this to decide whether to flip the
+    /// auth-VM handoff flag. Keeping the handoff out of `completeOnboarding`
+    /// avoids tearing down `PostSignupOnboardingFlow` while the celebration
+    /// overlay is still on screen — that race surfaced as a SwiftUI
+    /// layout crash in TestFlight build 8.
+    private var onboardingHandoffPending: Bool = false
+
     // MARK: - Dependencies
 
     private let profileService: ProfileService
@@ -554,9 +562,11 @@ final class OnboardingViewModel: ObservableObject {
         guard let uid = authVM?.currentUserId else { return }
         do {
             try await profileService.updateOnboardingStep(userId: uid, step: nil)
-            // Clear the in-memory flag on AuthVM — ContentView observes
-            // this to swap from PostSignupOnboardingFlow to MainTabView.
-            authVM?.needsPostSignupOnboarding = false
+            // Mark the handoff as ready; the actual flip happens in
+            // `dismissCelebration` so ContentView doesn't swap
+            // PostSignupOnboardingFlow → MainTabView while the celebration
+            // overlay is still animating.
+            onboardingHandoffPending = true
         } catch {
             print("OnboardingViewModel: completeOnboarding write failed: \(error)")
             // Even on failure, we move on — the user finished onboarding
@@ -567,10 +577,19 @@ final class OnboardingViewModel: ObservableObject {
     }
 
     /// Called by the celebration overlay after its 1.5s hold completes.
-    /// Clears the overlay so the underlying ContentView transition shows.
+    /// Clears the overlay AND performs the auth-VM handoff that swaps
+    /// ContentView from PostSignupOnboardingFlow to MainTabView. Doing the
+    /// handoff here (instead of inside `completeOnboarding`) keeps the
+    /// parent view alive for the duration of the celebration, which
+    /// prevents a SwiftUI layout crash observed when MainTabView mounted
+    /// mid-overlay.
     func dismissCelebration() {
         isShowingCelebration = false
         isCompletingOnboarding = false
+        if onboardingHandoffPending {
+            onboardingHandoffPending = false
+            authVM?.needsPostSignupOnboarding = false
+        }
     }
 
     // MARK: - Telemetry
