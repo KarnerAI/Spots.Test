@@ -48,6 +48,17 @@ COMMENT ON COLUMN public.profiles.onboarding_step IS
 -- ============================================
 -- CREATE OR REPLACE preserves the trigger binding on auth.users
 -- without needing to drop/recreate it.
+--
+-- Google sign-in (id_token grant) does NOT include a `username` key in
+-- raw_user_meta_data — Google's identity model has email/given_name/
+-- family_name but no concept of username. Since profiles.username is
+-- NOT NULL, an unconditional INSERT NULL fails the entire auth.users
+-- insert with "Database error saving new user". COALESCE falls back to
+-- a uniqueness-safe UUID-derived placeholder ("u_<uuid_without_dashes>")
+-- for social signups; the onboarding flow's screen 1 overwrites it
+-- with a real user-chosen username on first run. Email/password
+-- signups always provide username in raw_user_meta_data so they hit
+-- the first COALESCE branch unchanged.
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -61,7 +72,10 @@ BEGIN
   )
   VALUES (
     NEW.id,
-    NEW.raw_user_meta_data->>'username',
+    COALESCE(
+      NEW.raw_user_meta_data->>'username',
+      'u_' || replace(NEW.id::text, '-', '')
+    ),
     NEW.raw_user_meta_data->>'first_name',
     NEW.raw_user_meta_data->>'last_name',
     NEW.email,
