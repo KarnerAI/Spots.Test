@@ -154,6 +154,7 @@ struct ListDetailView: View {
         .listPickerSheet(spot: $spotForSaving) {
             Task { await loadSpots() }
         }
+        .openInGoogleMapsConfirmation(place: $spotToOpenInMaps)
     }
 
     // MARK: - Search Bar
@@ -318,79 +319,8 @@ struct ListDetailView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-            googleMapsPromptOverlay
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: spotToOpenInMaps != nil)
-    }
-
-    // MARK: - Open in Google Maps Overlay
-
-    @ViewBuilder
-    private var googleMapsPromptOverlay: some View {
-        if let spot = spotToOpenInMaps {
-            ZStack {
-                // Blurred backdrop matching native action sheet scrim
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .onTapGesture { spotToOpenInMaps = nil }
-                    .transition(.opacity)
-
-                VStack(spacing: 8) {
-                    Spacer()
-
-                    // Main action card (header + Open button)
-                    VStack(spacing: 0) {
-                        // Header: title + message
-                        VStack(spacing: 2) {
-                            Text("Open in Google Maps?")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                            Text(spot.name)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                        .frame(maxWidth: .infinity)
-
-                        Divider()
-
-                        // Open button
-                        Button {
-                            openInGoogleMaps(spot: spot)
-                            spotToOpenInMaps = nil
-                        } label: {
-                            Text("Open")
-                                .font(.system(size: 20))
-                                .foregroundStyle(Color.accentColor)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 57)
-                        }
-                    }
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                    // Cancel card (visually separate like native)
-                    Button {
-                        spotToOpenInMaps = nil
-                    } label: {
-                        Text("Cancel")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(Color.accentColor)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 57)
-                    }
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 70 + 8)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
     }
 
     // MARK: - Empty State
@@ -602,12 +532,6 @@ struct ListDetailView: View {
         }
     }
 
-    private func openInGoogleMaps(spot: NearbySpot) {
-        let urlString = "https://www.google.com/maps/search/?api=1&query=\(spot.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")&query_place_id=\(spot.placeId)"
-        if let url = URL(string: urlString) {
-            UIApplication.shared.open(url)
-        }
-    }
 }
 
 // MARK: - SpotSortOrder short label
