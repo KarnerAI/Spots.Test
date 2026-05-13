@@ -43,9 +43,11 @@ struct SpotCardView: View {
     
     private var spotImage: some View {
         Group {
-            // Try Supabase cached URL first (works with AsyncImage)
+            // Try Supabase cached URL first (works with AsyncImage).
+            // The 400px variant URL is preferred; the canonical full-size URL
+            // is passed as fallback so old/un-backfilled spots still render.
             if let photoURL = spot.photoURL(maxWidth: 400) {
-                CachedAsyncImage(url: photoURL) { phase in
+                CachedAsyncImage(url: photoURL, fallbackURL: spot.photoFallbackURL()) { phase in
                     switch phase {
                     case .empty:
                         imagePlaceholder

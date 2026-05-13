@@ -116,8 +116,16 @@ struct ListPickerView: View {
 
     @ViewBuilder
     private var placeThumbnail: some View {
-        if let urlString = spotData.photoUrl, let url = URL(string: urlString) {
-            CachedAsyncImage(url: url) { phase in
+        if let urlString = spotData.photoUrl, let fallback = URL(string: urlString) {
+            // 56pt thumbnail: request the 400px variant; on a cold-spot whose
+            // variants haven't been generated yet, CachedAsyncImage falls back
+            // to the canonical full-size URL so we never render a broken image.
+            let variantString = ImageStorageService.deriveVariantURLString(
+                baseURL: urlString,
+                variant: .thumb
+            )
+            let variantURL = URL(string: variantString) ?? fallback
+            CachedAsyncImage(url: variantURL, fallbackURL: fallback) { phase in
                 switch phase {
                 case .success(let image):
                     image.resizable().aspectRatio(contentMode: .fill)

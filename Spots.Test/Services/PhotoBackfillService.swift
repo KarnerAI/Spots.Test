@@ -255,6 +255,13 @@ actor PhotoBackfillService {
             return .failedUpload
         }
 
+        // Best-effort: upload the sized variants (thumb 400px, avatar 96px)
+        // alongside the canonical file so callers requesting a variant URL
+        // hit a small object instead of falling back to the 1200px original.
+        // A failure here is "missed egress savings", not a broken spot — the
+        // canonical URL we just wrote remains the fallback in views.
+        await storage.uploadVariants(fullImageData: imageData, canonicalFileName: newFileName)
+
         // Update the DB row to point at the new URL. If this fails, the storage
         // object is orphaned — sweepOrphans() at end of run cleans it up.
         do {
