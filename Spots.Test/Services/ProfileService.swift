@@ -20,6 +20,11 @@ struct UserProfile: Codable, Identifiable, Equatable, Hashable {
     var avatarUrl: String?
     var coverPhotoUrl: String?
     var isPrivate: Bool
+    /// Post-signup onboarding flow state. NULL = completed/legacy user (skip
+    /// onboarding entirely). 1..4 = furthest step the user has reached.
+    /// Cleared back to NULL on completion. Back-navigation does NOT
+    /// decrement this column — see plan Design D6 and OnboardingViewModel.
+    var onboardingStep: Int?
 
     /// First + last name when both present, else whichever is non-empty, else username.
     var displayName: String {
@@ -38,6 +43,7 @@ struct UserProfile: Codable, Identifiable, Equatable, Hashable {
         case avatarUrl = "avatar_url"
         case coverPhotoUrl = "cover_photo_url"
         case isPrivate = "is_private"
+        case onboardingStep = "onboarding_step"
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +57,11 @@ struct UserProfile: Codable, Identifiable, Equatable, Hashable {
         coverPhotoUrl = try c.decodeIfPresent(String.self, forKey: .coverPhotoUrl)
         // is_private was added in the social schema migration; tolerate older rows.
         isPrivate = try c.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
+        // onboarding_step was added by the add_onboarding_step_to_profiles
+        // migration. Tolerate older rows (and the column being absent on
+        // accounts older than the migration) — they decode as nil and the
+        // routing layer treats nil as "skip onboarding".
+        onboardingStep = try c.decodeIfPresent(Int.self, forKey: .onboardingStep)
     }
 }
 
@@ -333,5 +344,106 @@ class ProfileService {
         } catch {
             print("ProfileService: Auth metadata sync failed (non-fatal): \(error)")
         }
+    }
+
+    // MARK: - Onboarding state
+
+    /// Onboarding telemetry event types. String values match the
+    /// CHECK constraint on `public.onboarding_events.event_type`.
+    enum OnboardingEventType: String {
+        /// User tapped Continue on screen N.
+        case stepCompleted = "step_completed"
+        /// User tapped Skip on screen N.
+        case stepSkipped = "step_skipped"
+        /// User back-navigated to screen N (DOES NOT decrement onboarding_step).
+        case stepRevisited = "step_revisited"
+        /// User reached Done on screen 4 (or skipped through to Done).
+        case onboardingCompleted = "onboarding_completed"
+    }
+
+    /// Persist the user's furthest-reached onboarding step.
+    ///
+    /// Pass `nil` to mark onboarding complete (the AuthenticationViewModel
+    /// reads this column on auth-state load to decide routing — NULL means
+    /// MainTabView, 1..4 means push the user back into the flow at that
+    /// step).
+    ///
+    /// Evicts the profile cache entry so the next fetchProfile call sees
+    /// the fresh value rather than the stale step.
+    func updateOnboardingStep(userId: UUID, step: Int?) async throws {
+        struct UpdateRow: Encodable {
+            let onboarding_step: Int?
+            let updated_at: String
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(updated_at, forKey: .updated_at)
+                if let step = onboarding_step {
+                    try c.encode(step, forKey: .onboarding_step)
+                } else {
+                    try c.encodeNil(forKey: .onboarding_step)
+                }
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case onboarding_step, updated_at
+            }
+        }
+
+        let row = UpdateRow(
+            onboarding_step: step,
+            updated_at: ISO8601DateFormatter.fractionalSeconds.string(from: Date())
+        )
+        try await supabase
+            .from("profiles")
+            .update(row)
+            .eq("id", value: userId.uuidString)
+            .execute()
+
+        // Invalidate cache so AuthenticationViewModel + ContentView see
+        // the new state on the next fetch.
+        profileCache.removeValue(forKey: userId)
+    }
+
+    /// Fire-and-log an onboarding telemetry event. Writes one row to
+    /// `public.onboarding_events`. Failures are surfaced via `throws`
+    /// but callers typically log-and-ignore (the user-facing state
+    /// machine is in `profiles.onboarding_step`, not here).
+    ///
+    /// `step` must be 1..4 for all event types EXCEPT
+    /// `.onboardingCompleted`, which must pass nil. The SQL CHECK
+    /// constraint will reject mismatches.
+    func logOnboardingEvent(_ eventType: OnboardingEventType, step: Int?) async throws {
+        struct InsertRow: Encodable {
+            let user_id: String
+            let event_type: String
+            let step: Int?
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(user_id, forKey: .user_id)
+                try c.encode(event_type, forKey: .event_type)
+                if let s = step {
+                    try c.encode(s, forKey: .step)
+                } else {
+                    try c.encodeNil(forKey: .step)
+                }
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case user_id, event_type, step
+            }
+        }
+
+        let userId = try await supabase.auth.session.user.id
+        let row = InsertRow(
+            user_id: userId.uuidString,
+            event_type: eventType.rawValue,
+            step: step
+        )
+        try await supabase
+            .from("onboarding_events")
+            .insert(row)
+            .execute()
     }
 }
