@@ -13,8 +13,13 @@ struct ContentView: View {
     var body: some View {
         Group {
             if viewModel.isAuthenticated {
-                if viewModel.needsSocialOnboarding {
-                    SocialOnboardingView(viewModel: viewModel)
+                if viewModel.needsPostSignupOnboarding {
+                    // Post-signup flow: 4-step container that the user
+                    // completes (or skips through). When done, the VM
+                    // clears profiles.onboarding_step and AuthVM flips
+                    // `needsPostSignupOnboarding` back to false — this
+                    // branch then yields to MainTabView reactively.
+                    PostSignupOnboardingFlow(authVM: viewModel)
                 } else {
                     MainTabView().environmentObject(viewModel)
                 }

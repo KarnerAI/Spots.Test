@@ -27,9 +27,24 @@ class AuthenticationViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var isAuthenticated: Bool = false
-    /// True when a social-signup user lands without a `username` in auth metadata —
-    /// they need to complete the one-time SocialOnboardingView before reaching the app.
-    @Published var needsSocialOnboarding: Bool = false
+
+    /// True when the user signed up via a social provider (no `username` in
+    /// auth metadata at signup time). Drives the conditional fields on
+    /// onboarding screen 1: Google-path users see first/last/username
+    /// fields; email-path users see only the photo picker.
+    @Published var isSocialSignup: Bool = false
+
+    /// True when the user is mid-onboarding (`profiles.onboarding_step`
+    /// is non-null). ContentView observes this to swap from MainTabView
+    /// to the PostSignupOnboardingFlow container until the user finishes
+    /// or skips through the flow.
+    @Published var needsPostSignupOnboarding: Bool = false
+
+    /// The user's furthest reached onboarding step (1..4) or nil if
+    /// onboarding is complete or never started. Read once from the
+    /// `profiles` row after auth state load and used by
+    /// OnboardingViewModel to resume mid-flow.
+    @Published var currentOnboardingStep: Int? = nil
 
     /// Current user profile from auth metadata (for profile screen). Fallbacks: "First Name", "Last Name", "username".
     @Published var currentUserFirstName: String = "First Name"
@@ -283,8 +298,41 @@ class AuthenticationViewModel: ObservableObject {
         currentUserCoverPhotoUrl = stringFromAnyJSON(meta["cover_photo_url"])
         // Social signups never set `username` in auth metadata (the SQL trigger writes
         // to public.profiles, not user_metadata). Email/password signup always sets it
-        // up front. So a missing username key is a reliable "needs onboarding" signal.
-        needsSocialOnboarding = stringFromAnyJSON(meta["username"]) == nil
+        // up front. So a missing username key is a reliable social-vs-email signal —
+        // used by onboarding screen 1 to decide whether to render name/username fields.
+        isSocialSignup = stringFromAnyJSON(meta["username"]) == nil
+
+        // Async-fetch the profiles row to discover the user's onboarding state.
+        // We don't block auth on this; the routing flag flips to true the moment
+        // we read a non-null onboarding_step, and ContentView re-routes reactively.
+        Task { @MainActor [weak self] in
+            await self?.refreshOnboardingState()
+        }
+    }
+
+    /// Reads `profiles.onboarding_step` for the current user and updates
+    /// `currentOnboardingStep` + `needsPostSignupOnboarding`. Safe to call
+    /// multiple times (idempotent) — used after sign-in and on demand
+    /// after OnboardingViewModel writes a new step.
+    @MainActor
+    func refreshOnboardingState() async {
+        guard let uid = currentUserId else {
+            currentOnboardingStep = nil
+            needsPostSignupOnboarding = false
+            return
+        }
+        do {
+            let profile = try await ProfileService.shared.fetchProfile(userId: uid)
+            let step = profile?.onboardingStep
+            currentOnboardingStep = step
+            needsPostSignupOnboarding = (step != nil)
+        } catch {
+            print("AuthenticationViewModel: refreshOnboardingState failed: \(error)")
+            // On failure assume already-onboarded so we don't trap a real user
+            // behind the flow when their network is flaky.
+            currentOnboardingStep = nil
+            needsPostSignupOnboarding = false
+        }
     }
 
     /// Refresh profile fields from the current session (call after saving Edit Profile).
@@ -306,7 +354,9 @@ class AuthenticationViewModel: ObservableObject {
         currentUserUsername = "username"
         currentUserAvatarUrl = nil
         currentUserCoverPhotoUrl = nil
-        needsSocialOnboarding = false
+        isSocialSignup = false
+        needsPostSignupOnboarding = false
+        currentOnboardingStep = nil
         ProfileSnapshotCache.shared.clear()
     }
     
@@ -321,61 +371,10 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Social Onboarding
-
-    /// Completes first-time onboarding for a social-signup user.
-    /// Uploads the optional avatar, then writes username/first_name/last_name/avatar_url
-    /// to both the `profiles` row (already pre-populated by the SQL trigger) and to
-    /// auth user_metadata, so the existing `loadProfileFromUser` read path picks them up.
-    @MainActor
-    func completeSocialOnboarding(
-        firstName: String,
-        lastName: String,
-        username: String,
-        avatarImage: UIImage?
-    ) async throws {
-        guard let uid = currentUserId else {
-            throw NSError(domain: "AuthenticationViewModel", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "No authenticated user"
-            ])
-        }
-
-        // 1. Upload avatar if provided. Soft-fail: if upload errors, save the rest
-        //    without an avatar so the user isn't blocked by a flaky network.
-        var finalAvatarUrl: String? = currentUserAvatarUrl
-        if let image = avatarImage {
-            do {
-                finalAvatarUrl = try await ProfileService.shared.uploadAvatar(userId: uid, image: image)
-            } catch {
-                print("AuthenticationViewModel: avatar upload failed (continuing): \(error)")
-            }
-        }
-
-        // 2. Update profiles row with the user-confirmed values.
-        try await ProfileService.shared.updateProfile(
-            userId: uid,
-            firstName: firstName,
-            lastName: lastName,
-            username: username,
-            avatarUrl: finalAvatarUrl
-        )
-
-        // 3. Sync to auth user_metadata so the in-memory ViewModel state stays in sync
-        //    on the next session refresh.
-        await ProfileService.shared.syncAuthMetadata(
-            firstName: firstName,
-            lastName: lastName,
-            username: username,
-            avatarUrl: finalAvatarUrl
-        )
-
-        // 4. Update local state directly — don't wait for the auth listener round-trip.
-        currentUserFirstName = firstName
-        currentUserLastName = lastName
-        currentUserUsername = username
-        currentUserAvatarUrl = finalAvatarUrl
-        needsSocialOnboarding = false
-    }
+    // `completeSocialOnboarding` was deleted on 2026-05-12 — its work
+    // is now performed by `OnboardingViewModel.saveProfileAndAdvance()`
+    // as part of the unified post-signup onboarding flow. See
+    // ViewModels/OnboardingViewModel.swift.
 
     // MARK: - Social Login
     func handleSocialLogin(provider: String, onSuccess: @escaping () -> Void) {
