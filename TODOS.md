@@ -93,3 +93,57 @@ Deferred work items captured during planning + reviews. Each item is self-contai
 ## Future / forward concerns
 
 - **v2 onboarding migration policy** — when v2 onboarding ships with restructured screens, users mid-flow on v1 (`onboarding_step ∈ {1,2,3,4}`) need a defined policy: snap forward to completed, restart, or interpolate. Not blocking v1.
+
+---
+
+## P2 — Unify image disk caches
+
+**What:** Migrate `GooglePlacesImageView` (currently uses `SpotImageCache`, disk-keyed by `(photoReference, width)`) to load through `ImageHTTPSession.shared` and retire (or repurpose) `SpotImageCache`. Goal: one disk cache for image bytes, one budget to tune.
+
+**Why:** After the cached-egress PR (PR #23), two parallel disk caches exist — `SpotImageCache` (Google Places) and `URLCache` inside `ImageHTTPSession.shared` (Supabase + Unsplash). They don't share storage budgets; a user scrolling between feed (Supabase URLs) and a Nearby search (Google Places) is double-counting image bytes toward the OS's low-storage attack surface. Eviction logic lives in two places. DRY violation.
+
+**Pros:** One place to reason about image bytes, one budget. Removes ~200 lines of bespoke cache code (`SpotImageCache.swift`). Reduces "Other Documents" footprint visible to users in iOS Settings.
+
+**Cons:** `GooglePlacesImageView` uses custom headers (`X-Goog-Api-Key`, `X-Goog-FieldMask`) on requests — those need to flow through `URLSession.dataTask` rather than `URL`-only convenience APIs. `SpotImageCache` is also keyed by photo reference + width, which doesn't map 1:1 to URL — the migration may need a normalization shim.
+
+**Context:** Flagged in `/plan-eng-review` Issue 5 (5A) for the cached-egress PR. Deferred to keep that PR's diff right-sized.
+
+**Effort:** Human ~half-day / CC ~1hr. Touch points: `Components/GooglePlacesImageView.swift`, `Helpers/SpotImageCache.swift`, `Services/GooglePlacesPhotoFetcher.swift`.
+
+**Priority:** P2.
+
+---
+
+## P2 — Avatars bucket variants
+
+**What:** Apply the same sized-variant scheme (thumb `_w400`, avatar `_w96`) to the `avatars` Storage bucket so avatar URLs serve a 96px-wide variant by default. Currently the bucket only stores `avatar.jpg` at upload resolution.
+
+**Why:** `AvatarView` is rendered at 48pt by default (~96px on 2× Retina). Today it pulls the full upload-size image. Compared to spot cards this is small bytes per render, but the pattern is identical and the egress adds up across feed rendering (every feed card has ≥1 avatar).
+
+**Pros:** Extends the same pattern that worked for spot images. Independent of the spot-images variant flow; can ship without touching `ImageStorageService.uploadSpotImage`.
+
+**Cons:** Avatar uploads go through `ProfileService` (separate code path from spot uploads); the variant-upload + fallback-URL plumbing has to be re-wired there. Avatars also support upload from the user (vs Google Places source), so the resize step happens on user-provided bytes.
+
+**Context:** Flagged in `/plan-eng-review` "NOT in scope" for the cached-egress PR.
+
+**Effort:** Human ~half-day / CC ~1hr. Touch points: `Services/ProfileService.swift` (or wherever avatar upload lives), `Components/AvatarView.swift`.
+
+**Priority:** P2.
+
+---
+
+## P3 — Unsplash profile cover egress
+
+**What:** Audit profile cover image loads from Unsplash. Either pass Unsplash's `?w=<px>` resize query param when constructing URLs, or migrate profile covers to Supabase Storage with the same variant scheme as spot images.
+
+**Why:** `ProfileView.coverSection` renders a 260pt tall full-width image. Today it loads the raw Unsplash URL at whatever resolution Unsplash returned, often 2000+ px wide. Unsplash supports `?w=800&fit=crop` for cheap server-side resizing. Not Supabase egress, but it does hit user bandwidth + memory + render time.
+
+**Pros:** Two-line fix if we just append `?w=800&fit=crop` to existing Unsplash URLs. Lighter memory footprint per profile view.
+
+**Cons:** `CoverPhotoPickerView` stores the raw Unsplash URL in the user's `profile.cover_photo_url` — appending the param at construction time means every read site has to apply it (or we migrate the DB column to store the param-bearing URL).
+
+**Context:** Flagged in `/plan-eng-review` "NOT in scope" for the cached-egress PR.
+
+**Effort:** Human ~1hr / CC ~15min. Touch points: `Views/ProfileView.swift`, `Views/CoverPhotoPickerView.swift`.
+
+**Priority:** P3.

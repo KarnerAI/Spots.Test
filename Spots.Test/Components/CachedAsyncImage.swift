@@ -35,8 +35,16 @@ final class AsyncImageCache {
     }
 
     func set(_ image: UIImage, for url: URL) {
-        // Approximate bytes: w * h * 4 (RGBA). Drives NSCache eviction order.
-        let cost = Int(image.size.width * image.size.height * 4)
+        // Approximate in-memory pixel bytes: (w_pt * scale) * (h_pt * scale) * 4
+        // (RGBA). UIImage.size is in POINTS, not pixels — a 400pt image on a
+        // 3× Retina device occupies 9× the memory implied by size alone. Cost
+        // is the signal NSCache uses to decide when to evict; under-counting
+        // by 9× meant our 50MB budget was effectively ~5.5MB on Pro Max
+        // devices. Issue 7 (7A): account for scale so eviction matches the
+        // configured budget.
+        let scaledWidth = image.size.width * image.scale
+        let scaledHeight = image.size.height * image.scale
+        let cost = Int(scaledWidth * scaledHeight * 4)
         cache.setObject(image, forKey: url as NSURL, cost: cost)
     }
 }
@@ -134,10 +142,10 @@ struct CachedAsyncImage<Content: View>: View {
         // fallback. This is what makes "variant URL + canonical URL"
         // transparent for callers — we never show a broken image just
         // because a variant hasn't been backfilled yet.
-        if let url, await tryLoad(url) {
+        if let url, await tryLoadAndApply(url) {
             return
         }
-        if let fb = fallbackURL, await tryLoad(fb) {
+        if let fb = fallbackURL, await tryLoadAndApply(fb) {
             return
         }
         // Both attempts failed (or primary URL was nil and there was no
@@ -149,24 +157,12 @@ struct CachedAsyncImage<Content: View>: View {
         }
     }
 
-    /// Attempts to load and render `url`. Returns true on success. On any
-    /// failure (network, non-2xx, decode), returns false so the caller can
-    /// try the fallback URL.
-    private func tryLoad(_ url: URL) async -> Bool {
-        if let cached = AsyncImageCache.shared.image(for: url) {
-            await MainActor.run { phase = .success(Image(uiImage: cached)) }
-            return true
-        }
-
+    /// Loads `url` via `AsyncImageLoader.load` (the testable seam) and applies
+    /// the result to `@State phase`. Returns true if loading succeeded.
+    private func tryLoadAndApply(_ url: URL) async -> Bool {
         do {
-            let (data, response) = try await ImageHTTPSession.shared.data(from: url)
-            try Task.checkCancellation()
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                return false
-            }
-            guard let ui = UIImage(data: data) else {
-                return false
-            }
+            let result = try await AsyncImageLoader.load(url: url, session: ImageHTTPSession.shared)
+            guard let ui = result else { return false }
             AsyncImageCache.shared.set(ui, for: url)
             await MainActor.run { phase = .success(Image(uiImage: ui)) }
             return true
@@ -176,5 +172,36 @@ struct CachedAsyncImage<Content: View>: View {
         } catch {
             return false
         }
+    }
+}
+
+/// Pure-async loader that fetches an image by URL through any URLSession,
+/// returning the decoded UIImage or nil on any non-success outcome. Lifted
+/// out of `CachedAsyncImage.tryLoad` so unit tests can drive it with a stub
+/// `URLProtocol` without instantiating a SwiftUI view.
+///
+/// The in-memory `AsyncImageCache` lookup is intentionally OUTSIDE this
+/// loader so tests can exercise the network path deterministically; the
+/// view's `tryLoadAndApply` consults the cache before calling here.
+enum AsyncImageLoader {
+    /// - Returns: decoded `UIImage` on 2xx + decodable bytes; nil on non-2xx
+    ///   or decode failure. Throws `CancellationError` if the task was
+    ///   cancelled mid-flight.
+    static func load(url: URL, session: URLSession) async throws -> UIImage? {
+        // Consult the process-wide decoded-image cache first. A hit is
+        // synchronous and avoids the network round-trip.
+        if let cached = AsyncImageCache.shared.image(for: url) {
+            return cached
+        }
+        let request = URLRequest(url: url)
+        let (data, response) = try await session.data(for: request)
+        try Task.checkCancellation()
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            // Issue 3 (3A) — evict non-2xx so a 404 doesn't stick for the
+            // Cache-Control TTL after the variant later becomes available.
+            session.configuration.urlCache?.removeCachedResponse(for: request)
+            return nil
+        }
+        return UIImage(data: data)
     }
 }

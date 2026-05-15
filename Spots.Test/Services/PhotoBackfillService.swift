@@ -174,23 +174,39 @@ actor PhotoBackfillService {
         return report
     }
 
-    /// Lists every `_v*.jpg` object in the bucket and deletes any whose public
-    /// URL is not referenced by any `spots.photo_url`. **Destructive** when
-    /// `dryRun == false`. Use `dryRun: true` for the first prod sweep.
+    /// Lists every versioned object in the bucket — canonical `_v*.jpg` AND
+    /// sized variants `_v*_w*.jpg` — and deletes any whose canonical
+    /// sibling is not referenced by any `spots.photo_url`. **Destructive**
+    /// when `dryRun == false`. Use `dryRun: true` for the first prod sweep.
+    ///
+    /// Issue 2 (2A): variants are deleted when their canonical sibling is
+    /// unreferenced, so re-backfilling a spot from `_v2` → `_v3` no longer
+    /// leaves `_v2_w400.jpg` / `_v2_w96.jpg` as silent orphans.
     /// - Returns: filenames that were (or would be) deleted.
     func sweepOrphans(dryRun: Bool) async -> [String] {
         let allObjects = await storage.listAllObjects()
 
-        // Only consider versioned objects; un-versioned `{placeId}.jpg` files
-        // belong to fresh saves and must never be touched here.
-        let versioned = allObjects.filter { isVersionedFilename($0) }
+        // Consider both canonical versioned files (`_v{n}.jpg`) AND their
+        // sized variants (`_v{n}_w{N}.jpg`). Un-versioned `{placeId}.jpg`
+        // files (and their variants) belong to fresh saves and must never
+        // be touched here.
+        let versioned = allObjects.filter {
+            VersioningLogic.isVersionedFilename($0)
+            || VersioningLogic.isVersionedVariantFilename($0)
+        }
         guard !versioned.isEmpty else { return [] }
 
         // Build the set of every photo_url currently referenced by spots.
+        // Index by canonical-equivalent filename so a variant is orphaned
+        // iff its canonical sibling is unreferenced.
         let referencedURLs = await fetchAllReferencedPhotoURLs()
-        let referencedFilenames = Set(referencedURLs.compactMap { extractFileName(from: $0) })
+        let referencedCanonicals = Set(referencedURLs.compactMap { extractFileName(from: $0) })
 
-        let orphans = versioned.filter { !referencedFilenames.contains($0) }
+        let orphans = versioned.filter { fileName in
+            // For variants, check whether the canonical sibling is referenced.
+            let canonical = VersioningLogic.canonicalFilename(forVariantFilename: fileName) ?? fileName
+            return !referencedCanonicals.contains(canonical)
+        }
 
         if dryRun {
             print("🔍 PhotoBackfillService: sweep dry-run found \(orphans.count) orphan(s):")
@@ -320,6 +336,42 @@ actor PhotoBackfillService {
             guard let url = URL(string: urlString) else { return nil }
             let last = url.lastPathComponent
             return last.isEmpty ? nil : last
+        }
+
+        /// Returns true if the filename matches the versioned variant pattern
+        /// `{placeId}_v{digits}_w{digits}.jpg`. Variants are the sized siblings
+        /// of canonical versioned files; see ImageVariant in PhotoQuality.swift.
+        static func isVersionedVariantFilename(_ fileName: String) -> Bool {
+            return canonicalFilename(forVariantFilename: fileName) != nil
+        }
+
+        /// For a versioned variant filename like `foo_v2_w400.jpg`, returns the
+        /// canonical sibling filename `foo_v2.jpg`. Returns nil if `fileName`
+        /// is not a versioned variant (either un-versioned or already canonical).
+        ///
+        /// Used by `sweepOrphans` to map a variant to the photo_url it should
+        /// be referenced by — a variant is orphaned iff its canonical is.
+        static func canonicalFilename(forVariantFilename fileName: String) -> String? {
+            // Find the `.jpg` / `.jpeg` extension.
+            let lower = fileName.lowercased()
+            let ext: String
+            if lower.hasSuffix(".jpeg") { ext = ".jpeg" }
+            else if lower.hasSuffix(".jpg") { ext = ".jpg" }
+            else { return nil }
+
+            let stem = String(fileName.dropLast(ext.count))
+
+            // Stem must end in `_w{digits}`.
+            guard let underscoreW = stem.range(of: "_w", options: .backwards) else { return nil }
+            let widthPart = stem[underscoreW.upperBound...]
+            guard !widthPart.isEmpty, widthPart.allSatisfy({ $0.isNumber }) else { return nil }
+
+            // The remainder before `_w{digits}` must itself be a versioned canonical
+            // (i.e. end in `_v{digits}`). Otherwise this is an un-versioned variant
+            // (e.g. `{placeId}_w400.jpg` from a fresh save) — those are NOT swept.
+            let canonicalStem = String(stem[..<underscoreW.lowerBound])
+            let canonicalFile = canonicalStem + ext
+            return isVersionedFilename(canonicalFile) ? canonicalFile : nil
         }
     }
 

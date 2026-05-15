@@ -84,46 +84,67 @@ class ImageStorageService {
             }
         }
 
-        let url = await uploadToSupabase(imageData: imageData, fileName: storageFileName(for: placeId))
+        let canonicalName = storageFileName(for: placeId)
+        let url = await uploadToSupabase(imageData: imageData, fileName: canonicalName)
         if let url {
             uploadedURLCache.setObject(url as NSString, forKey: placeId as NSString)
-            // Fire-and-forget variant uploads. Best-effort — a failure here is
-            // a missed-egress-savings opportunity, not a broken spot. The card
-            // view's fallback URL keeps rendering correctly either way.
-            Task.detached { [imageData] in
-                await ImageStorageService.shared.uploadVariants(
+            // Issue 1 (1A) — await the .thumb variant before returning so the
+            // caller's first render of this spot hits a live variant URL
+            // instead of caching a 404 in URLCache. .avatar is tiny (~5KB) and
+            // rarely viewed by the saver themself; detach it for save-flow
+            // latency. Both are best-effort: a failure means missed egress
+            // savings, never a broken spot (fallback URL handles that).
+            _ = await uploadVariant(.thumb, fullImageData: imageData, canonicalFileName: canonicalName)
+            Task.detached { [imageData, canonicalName] in
+                _ = await ImageStorageService.shared.uploadVariant(
+                    .avatar,
                     fullImageData: imageData,
-                    canonicalFileName: ImageStorageService.shared.storageFileName(for: placeId)
+                    canonicalFileName: canonicalName
                 )
             }
         }
         return url
     }
 
-    /// Best-effort uploads of every sized variant (thumb, avatar) alongside
-    /// the canonical full-size object. Called by both the live save path
-    /// (`uploadSpotImage`) and the backfill pipeline.
+    /// Best-effort upload of a single sized variant alongside the canonical
+    /// full-size object. Returns true on success.
     ///
     /// `canonicalFileName` is the FULL-variant filename (e.g. `foo.jpg` or
-    /// `foo_v2.jpg`). Variant filenames are derived by `variantFileName(...)`.
+    /// `foo_v2.jpg`). The variant filename is derived by `variantFileName(...)`.
+    /// `.full` is a no-op — variants are sized siblings only.
     @discardableResult
-    func uploadVariants(fullImageData: Data, canonicalFileName: String) async -> Int {
+    func uploadVariant(
+        _ variant: ImageVariant,
+        fullImageData: Data,
+        canonicalFileName: String
+    ) async -> Bool {
+        guard variant != .full else { return false }
         guard let fullImage = UIImage(data: fullImageData) else {
             print("⚠️  ImageStorageService: variant upload skipped — full image failed to decode")
-            return 0
+            return false
         }
+        guard let resized = Self.resizedJPEGData(
+            from: fullImage,
+            maxWidthPx: variant.maxWidthPx,
+            quality: PhotoQuality.jpegQuality
+        ) else {
+            print("⚠️  ImageStorageService: failed to resize \(canonicalFileName) for \(variant.rawValue)")
+            return false
+        }
+        let fileName = Self.variantFileName(canonical: canonicalFileName, variant: variant)
+        return await uploadToSupabase(imageData: resized, fileName: fileName) != nil
+    }
+
+    /// Best-effort uploads of every sized variant (thumb, avatar) alongside
+    /// the canonical full-size object. Used by the backfill pipeline, which
+    /// runs server-style (no UI waiting), so blocking on both is fine.
+    /// For the live save path, prefer `uploadVariant(_:fullImageData:canonicalFileName:)`
+    /// so .thumb can be awaited and .avatar detached.
+    @discardableResult
+    func uploadVariants(fullImageData: Data, canonicalFileName: String) async -> Int {
         var uploaded = 0
         for variant in ImageVariant.sized {
-            guard let resized = Self.resizedJPEGData(
-                from: fullImage,
-                maxWidthPx: variant.maxWidthPx,
-                quality: PhotoQuality.jpegQuality
-            ) else {
-                print("⚠️  ImageStorageService: failed to resize \(canonicalFileName) for \(variant.rawValue)")
-                continue
-            }
-            let fileName = Self.variantFileName(canonical: canonicalFileName, variant: variant)
-            if await uploadToSupabase(imageData: resized, fileName: fileName) != nil {
+            if await uploadVariant(variant, fullImageData: fullImageData, canonicalFileName: canonicalFileName) {
                 uploaded += 1
             }
         }
@@ -173,15 +194,27 @@ class ImageStorageService {
 
     /// Pure-logic variant of `variantURL(fromBaseURL:variant:)` — exposed at
     /// type level so it can be unit-tested without instantiating the service.
+    ///
+    /// Parses via `URLComponents` so the derivation survives query strings
+    /// (future signed URLs), fragments, and percent-encoded path components.
+    /// Falls back to returning the input unchanged for malformed URLs or
+    /// `.full` — callers can pass the result through unconditionally.
     static func deriveVariantURLString(baseURL: String, variant: ImageVariant) -> String {
-        guard variant != .full,
-              let lastSlash = baseURL.lastIndex(of: "/") else {
-            return baseURL
-        }
-        let prefix = baseURL[..<baseURL.index(after: lastSlash)]
-        let fileName = String(baseURL[baseURL.index(after: lastSlash)...])
-        let variantFile = variantFileName(canonical: fileName, variant: variant)
-        return String(prefix) + variantFile
+        guard variant != .full else { return baseURL }
+        guard var components = URLComponents(string: baseURL) else { return baseURL }
+
+        // Split the path on `/`, take the last segment as the filename, apply
+        // the variant suffix, rebuild. We work on `path` (already percent-
+        // decoded) so a percent-encoded filename like `abc%20.jpg` is treated
+        // correctly. URLComponents.path setter re-encodes on assignment.
+        let pathSegments = components.path.split(separator: "/", omittingEmptySubsequences: false)
+        guard let last = pathSegments.last, !last.isEmpty else { return baseURL }
+
+        let variantLast = variantFileName(canonical: String(last), variant: variant)
+        let newSegments = pathSegments.dropLast() + [Substring(variantLast)]
+        components.path = newSegments.joined(separator: "/")
+
+        return components.string ?? baseURL
     }
 
     /// Inserts a variant's `_w{N}` suffix between the filename stem and `.jpg`.
