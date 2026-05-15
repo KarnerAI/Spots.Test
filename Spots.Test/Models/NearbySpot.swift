@@ -74,20 +74,37 @@ struct NearbySpot: Identifiable, Equatable {
         return hasPhoto && hasCity && hasCountry && hasRating
     }
 
-    /// Returns the best available photo URL (prefers Supabase cached URL)
-    /// Returns nil if only Google API is available (requires custom loader with headers)
+    /// Returns the best available photo URL (prefers Supabase cached URL),
+    /// downscaled to the variant whose `maxWidthPx` is closest to `maxWidth`.
+    /// Returns nil if only Google API is available (requires custom loader with headers).
+    ///
+    /// Pair with `photoFallbackURL()` when used in `CachedAsyncImage` so the
+    /// view transparently falls back to the canonical full-size object for
+    /// cold spots whose variants haven't been generated yet.
     func photoURL(maxWidth: Int = 400) -> URL? {
-        // Prefer Supabase Storage URL if available (faster, cached, no API cost)
-        if let photoUrl = photoUrl, !photoUrl.isEmpty {
-            #if DEBUG
-            print("🖼️ NearbySpot: Using Supabase cached URL for \(name): \(photoUrl)")
-            #endif
-            return URL(string: photoUrl)
+        guard let photoUrl = photoUrl, !photoUrl.isEmpty else {
+            // Return nil for Google API — we'll use GooglePlacesImageView instead
+            // (Google Places API requires headers, not query params)
+            return nil
         }
-        
-        // Return nil for Google API - we'll use GooglePlacesImageView instead
-        // (Google Places API requires headers, not query params)
-        return nil
+        let variant = NearbySpot.variant(forMaxWidth: maxWidth)
+        let derived = ImageStorageService.deriveVariantURLString(baseURL: photoUrl, variant: variant)
+        return URL(string: derived)
+    }
+
+    /// Canonical full-size URL — used as the `fallbackURL:` on `CachedAsyncImage`
+    /// so a missing variant doesn't render as a broken image.
+    func photoFallbackURL() -> URL? {
+        guard let photoUrl = photoUrl, !photoUrl.isEmpty else { return nil }
+        return URL(string: photoUrl)
+    }
+
+    /// Picks the smallest variant that's at least `maxWidth` pixels wide.
+    /// Anything > 400 stays at `.full` (1200px); ≤ 96 collapses to `.avatar`.
+    private static func variant(forMaxWidth maxWidth: Int) -> ImageVariant {
+        if maxWidth <= ImageVariant.avatar.maxWidthPx { return .avatar }
+        if maxWidth <= ImageVariant.thumb.maxWidthPx  { return .thumb }
+        return .full
     }
     
     /// Returns photo reference for use with GooglePlacesImageView

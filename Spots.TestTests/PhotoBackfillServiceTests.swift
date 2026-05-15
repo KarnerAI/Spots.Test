@@ -118,3 +118,64 @@ struct PhotoQualityConstantsTests {
         #expect(PhotoQuality.jpegQuality == 0.9)
     }
 }
+
+// MARK: - Versioned-variant orphan detection (Issue 2 / 2A)
+
+/// Issue 2 (2A): the orphan sweep used to ignore `_v{n}_w{N}.jpg` files,
+/// which meant every re-backfill leaked sized variants. These tests pin the
+/// recognition + canonical-sibling resolution logic so the sweep keeps
+/// catching them without ever sweeping a fresh save's variant or a canonical
+/// versioned file.
+struct VersionedVariantOrphanTests {
+
+    typealias VL = PhotoBackfillService.VersioningLogic
+
+    @Test func isVersionedVariantRecognizesThumbAndAvatar() {
+        #expect(VL.isVersionedVariantFilename("place_v2_w400.jpg") == true)
+        #expect(VL.isVersionedVariantFilename("place_v17_w96.jpg") == true)
+    }
+
+    @Test func isVersionedVariantRejectsCanonicalVersioned() {
+        // The canonical versioned file (no `_w{N}`) is handled by
+        // isVersionedFilename, not this predicate.
+        #expect(VL.isVersionedVariantFilename("place_v2.jpg") == false)
+    }
+
+    @Test func isVersionedVariantRejectsUnversionedVariant() {
+        // Fresh-save variants (`place_w400.jpg`) must NEVER be swept — they
+        // belong to live un-versioned saves and have no version sibling.
+        #expect(VL.isVersionedVariantFilename("place_w400.jpg") == false)
+    }
+
+    @Test func canonicalFromVariantReturnsVersionedCanonical() {
+        #expect(VL.canonicalFilename(forVariantFilename: "place_v2_w400.jpg") == "place_v2.jpg")
+        #expect(VL.canonicalFilename(forVariantFilename: "place_v17_w96.jpg") == "place_v17.jpg")
+    }
+
+    @Test func canonicalFromCanonicalIsNil() {
+        // Passing a canonical (non-variant) filename returns nil so the
+        // sweep treats it as already-canonical.
+        #expect(VL.canonicalFilename(forVariantFilename: "place_v2.jpg") == nil)
+    }
+
+    @Test func canonicalFromFreshSaveVariantIsNil() {
+        // `place_w400.jpg` (no `_v{n}`) is a fresh-save variant. Its canonical
+        // sibling `place.jpg` exists but is un-versioned and must not be
+        // touched by sweep — so returning nil here keeps it out of orphan logic.
+        #expect(VL.canonicalFilename(forVariantFilename: "place_w400.jpg") == nil)
+    }
+
+    @Test func canonicalFromMalformedIsNil() {
+        #expect(VL.canonicalFilename(forVariantFilename: "no_extension") == nil)
+        #expect(VL.canonicalFilename(forVariantFilename: "missing_width_v2.jpg") == nil)
+        #expect(VL.canonicalFilename(forVariantFilename: "place_v2_wXX.jpg") == nil)
+    }
+
+    @Test func roundTripVariantFromStorageMatchesCanonical() {
+        // Whatever ImageStorageService.variantFileName produces from a
+        // versioned canonical, VersioningLogic.canonicalFilename must invert.
+        let canonical = "place_v3.jpg"
+        let variant = ImageStorageService.variantFileName(canonical: canonical, variant: .thumb)
+        #expect(VL.canonicalFilename(forVariantFilename: variant) == canonical)
+    }
+}
