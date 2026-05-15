@@ -3,11 +3,13 @@
 //  Spots.Test
 //
 //  Read-only profile of another user. Mirrors the layout of `ProfileView`
-//  (cover, avatar, name + handle, stats row, "My Lists" tiles, Travel Map),
-//  swapping the Settings/Edit affordances for a Follow / Following / Requested
-//  button. When the target is private and the viewer is not an accepted
-//  follower, the lists + travel sections fall back to a lock state while the
-//  header and stats stay visible — matching Instagram-style gating.
+//  (cover, avatar, name + handle, stats row, Lists tiles, Footprint), swapping
+//  the Settings/Edit affordances for a Follow / Following / Requested button.
+//  The Footprint section is rendered by the shared `ProfileTravelSection`
+//  component, so own + other profiles stay in lock-step. When the target is
+//  private and the viewer is not an accepted follower, the lists + footprint
+//  sections fall back to a lock state while the header and stats stay
+//  visible — matching Instagram-style gating.
 //
 
 import SwiftUI
@@ -38,7 +40,10 @@ struct UserProfileView: View {
     @State private var mostExploredCity: String?
     @State private var coverImage: UIImage?
     @State private var listTiles: [ListTileData] = []
-    @State private var travelMapSegment: Int = 0
+    /// Target user's deduped spots, used to drive the shared Footprint section
+    /// (city/country grouping). Loaded only when the viewer is allowed to see
+    /// the profile's content.
+    @State private var allSpots: [Spot] = []
 
     private let coverHeight: CGFloat = 260
     private let cardOverlap: CGFloat = 30
@@ -54,15 +59,6 @@ struct UserProfileView: View {
         if !profile.isPrivate { return true }
         return relationship == .following || relationship == .mutual || relationship == .isSelf
     }
-
-    private let placeholderCities: [CityRowData] = [
-        CityRowData(name: "New York",      count: 0),
-        CityRowData(name: "Los Angeles",   count: 0),
-        CityRowData(name: "San Francisco", count: 0),
-        CityRowData(name: "Chicago",       count: 0),
-        CityRowData(name: "Miami",         count: 0),
-        CityRowData(name: "Boston",        count: 0),
-    ]
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -215,8 +211,11 @@ struct UserProfileView: View {
 
     private var statsSection: some View {
         HStack(spacing: 32) {
-            statItem(value: "\(spotsCount)", label: "Spots", tappable: false) {
-                EmptyView()
+            statItem(value: "\(spotsCount)", label: "Spots", tappable: canSeeContent) {
+                ListDetailView(
+                    title: "All Spots",
+                    mode: .allSpotsForLists(listTiles.compactMap { $0.userList })
+                )
             }
             statItem(value: "\(followersCount)", label: "Followers", tappable: canSeeContent) {
                 FollowersFollowingView(
@@ -421,71 +420,26 @@ struct UserProfileView: View {
     // MARK: - Travel Map
 
     private var travelMapSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Travel Map")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
-                .padding(.horizontal, 20)
-
-            Picker("Map View", selection: $travelMapSegment) {
-                Text("Cities").tag(0)
-                Text("Countries").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 20)
-
-            RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
-                .fill(Color.gray100)
-                .frame(height: 230)
-                .overlay(
-                    Image(systemName: "map")
-                        .font(.system(size: 48))
-                        .foregroundColor(.gray300)
+        // Captured into a local so each closure shares one snapshot of the
+        // tile list — the destinations need the target user's UserLists to
+        // drill into a city/country filtered view without falling back to
+        // the current user's `getListByType`.
+        let userLists = listTiles.compactMap { $0.userList }
+        return ProfileTravelSection(
+            spots: allSpots,
+            cityDestination: { city in
+                ListDetailView(
+                    title: city.name,
+                    mode: .allSpotsInCityForLists(city.name, userLists)
                 )
-                .padding(.horizontal, 20)
-
-            VStack(spacing: 0) {
-                ForEach(Array(placeholderCities.enumerated()), id: \.offset) { index, city in
-                    cityRow(city, isLast: index == placeholderCities.count - 1)
-                }
+            },
+            countryDestination: { country in
+                ListDetailView(
+                    title: country.displayName,
+                    mode: .allSpotsInCountryForLists(country.displayName, userLists)
+                )
             }
-            .background(Color.white)
-            .overlay(
-                RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
-                    .stroke(Color.gray200, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
-            .padding(.horizontal, 20)
-        }
-    }
-
-    private func cityRow(_ city: CityRowData, isLast: Bool) -> some View {
-        HStack {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color.spotsTeal.opacity(0.1))
-                        .frame(width: 32, height: 32)
-                    Image(systemName: "mappin")
-                        .font(.system(size: 13))
-                        .foregroundColor(.spotsTeal)
-                }
-                Text(city.name)
-                    .font(.system(size: 14))
-                    .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
-            }
-            Spacer()
-            Text("\(city.count) spots")
-                .font(.system(size: 12))
-                .foregroundColor(.gray500)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 64)
-        .overlay(alignment: .bottom) {
-            if !isLast {
-                Divider().background(Color.gray100)
-            }
-        }
+        )
     }
 
     // MARK: - Data loading
@@ -506,6 +460,7 @@ struct UserProfileView: View {
         // need to bypass it on every navigation.
         let listsTask = Task { try await LocationSavingService.shared.getUserLists(userId: userId) }
         let cityTask = Task { try await LocationSavingService.shared.getMostExploredCity(userId: userId) }
+        let spotsTask = Task { try await LocationSavingService.shared.getAllSpots(userId: userId) }
 
         do {
             async let profileTask = ProfileService.shared.fetchProfile(userId: userId)
@@ -522,6 +477,7 @@ struct UserProfileView: View {
                 isLoadingProfile = false
                 listsTask.cancel()
                 cityTask.cancel()
+                spotsTask.cancel()
                 return
             }
 
@@ -540,11 +496,12 @@ struct UserProfileView: View {
 
             if visible {
                 // Detached: header is already interactive; tiles fade in when ready.
-                Task { await hydrateListsAndCity(listsTask: listsTask, cityTask: cityTask) }
+                Task { await hydrateListsAndCity(listsTask: listsTask, cityTask: cityTask, spotsTask: spotsTask) }
             } else {
                 // Private user we can't see — drop the in-flight queries.
                 listsTask.cancel()
                 cityTask.cancel()
+                spotsTask.cancel()
             }
 
             // Cover photo: also non-blocking. Header art, not critical path.
@@ -555,15 +512,17 @@ struct UserProfileView: View {
             isLoadingProfile = false
             listsTask.cancel()
             cityTask.cancel()
+            spotsTask.cancel()
         }
     }
 
-    /// Awaits the already-in-flight lists/city tasks fanned out in `load()`,
-    /// then runs the tile RPC + spots batch and applies the result. Runs in a
-    /// detached Task so the header doesn't wait on tile latency.
+    /// Awaits the already-in-flight lists/city/spots tasks fanned out in `load()`,
+    /// then runs the tile RPC and applies the result. Runs in a detached Task
+    /// so the header doesn't wait on tile latency.
     private func hydrateListsAndCity(
         listsTask: Task<[UserList], Error>,
-        cityTask: Task<String?, Error>
+        cityTask: Task<String?, Error>,
+        spotsTask: Task<[SpotWithMetadata], Error>
     ) async {
         do {
             let userLists = try await listsTask.value
@@ -575,6 +534,15 @@ struct UserProfileView: View {
             mostExploredCity = city
         } catch {
             print("⚠️ UserProfileView: Could not load lists/city: \(error.localizedDescription)")
+        }
+
+        // Spots load independently from tiles so a tile-RPC failure doesn't
+        // empty the Footprint section.
+        do {
+            let spotsWithMeta = try await spotsTask.value
+            allSpots = spotsWithMeta.map { $0.spot }
+        } catch {
+            print("⚠️ UserProfileView: Could not load spots for travel map: \(error.localizedDescription)")
         }
     }
 
@@ -654,25 +622,4 @@ private struct ErrorToast: View {
     }
 }
 
-// MARK: - UIKit-Backed Rounded Background
-// Local copy of the same helper used by ProfileView (kept private there).
-
-private struct RoundedTopCornersBackground: UIViewRepresentable {
-    let radius: CGFloat
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .white
-        view.layer.cornerRadius = radius
-        view.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        view.layer.cornerCurve = .continuous
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        uiView.layer.cornerRadius = radius
-        CATransaction.commit()
-    }
-}
+// `RoundedTopCornersBackground` is shared via Components/.

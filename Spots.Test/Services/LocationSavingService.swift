@@ -478,6 +478,106 @@ class LocationSavingService: LocationSavingServiceProtocol {
         return result
     }
 
+    /// All-spots fetch for an arbitrary user. Mirrors `getAllSpots()` but reads
+    /// the lists owned by `userId` (no default-list creation). Backend RLS
+    /// enforces visibility — if the viewer can't see the lists, this returns [].
+    func getAllSpots(userId: UUID) async throws -> [SpotWithMetadata] {
+        let userLists = try await getUserLists(userId: userId)
+        guard !userLists.isEmpty else { return [] }
+
+        let listIdStrings = userLists.map { $0.id.uuidString }
+
+        struct SpotListItemRow: Codable {
+            let spot_id: String
+            let list_id: String
+            let saved_at: String
+        }
+
+        let allItems: [SpotListItemRow] = try await supabase
+            .from("spot_list_items")
+            .select("spot_id, list_id, saved_at")
+            .in("list_id", values: listIdStrings)
+            .order("saved_at", ascending: false)
+            .execute()
+            .value
+
+        guard !allItems.isEmpty else { return [] }
+
+        let listTypeByListId: [String: ListType] = Dictionary(
+            uniqueKeysWithValues: userLists.compactMap { list -> (String, ListType)? in
+                guard let listType = Self.resolveListType(for: list) else { return nil }
+                return (list.id.uuidString, listType)
+            }
+        )
+
+        let uniquePlaceIds = Array(Set(allItems.map { $0.spot_id }))
+
+        struct SpotResponse: Codable {
+            let place_id: String
+            let name: String
+            let address: String?
+            let city: String?
+            let country: String?
+            let latitude: Double?
+            let longitude: Double?
+            let types: [String]?
+            let photo_url: String?
+            let photo_reference: String?
+            let rating: Double?
+            let created_at: String?
+            let updated_at: String?
+        }
+
+        let batchResponse: [SpotResponse] = try await supabase
+            .from("spots")
+            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
+            .in("place_id", values: uniquePlaceIds)
+            .execute()
+            .value
+
+        var spotsMap: [String: Spot] = [:]
+        for spotData in batchResponse {
+            let createdAt = spotData.created_at.flatMap { SharedFormatters.date(from: $0) }
+            let updatedAt = spotData.updated_at.flatMap { SharedFormatters.date(from: $0) }
+            spotsMap[spotData.place_id] = Spot(
+                placeId: spotData.place_id,
+                name: spotData.name,
+                address: spotData.address,
+                city: spotData.city,
+                country: spotData.country,
+                latitude: spotData.latitude,
+                longitude: spotData.longitude,
+                types: spotData.types,
+                photoUrl: spotData.photo_url,
+                photoReference: spotData.photo_reference,
+                rating: spotData.rating,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+        }
+
+        var bestSavedAt: [String: Date] = [:]
+        var listTypesPerSpot: [String: Set<ListType>] = [:]
+
+        for item in allItems {
+            guard let savedAt = SharedFormatters.date(from: item.saved_at) else { continue }
+            if bestSavedAt[item.spot_id] == nil {
+                bestSavedAt[item.spot_id] = savedAt
+            }
+            if let listType = listTypeByListId[item.list_id] {
+                listTypesPerSpot[item.spot_id, default: []].insert(listType)
+            }
+        }
+
+        return uniquePlaceIds
+            .compactMap { placeId -> SpotWithMetadata? in
+                guard let spot = spotsMap[placeId], let savedAt = bestSavedAt[placeId] else { return nil }
+                let listTypes = listTypesPerSpot[placeId] ?? []
+                return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: listTypes)
+            }
+            .sorted { $0.savedAt > $1.savedAt }
+    }
+
     /// Resolves a canonical ListType for a user list. Uses list_type when present;
     /// otherwise infers from list name so default lists always map to a type for
     /// marker icon resolution in All Spots map. Accepts current display names

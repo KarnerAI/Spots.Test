@@ -11,11 +11,12 @@ import UIKit
 // MARK: - Profile View
 // Supporting types ListTileData / CityRowData live in Helpers/ProfileSupportTypes.swift
 // (shared with UserProfileView so both screens render the same tile UI).
+// The Travel ("Footprint") section is rendered by the shared `ProfileTravelSection`
+// component so own + other-user profiles stay in lock-step.
 
 
 struct ProfileView: View {
     @EnvironmentObject var viewModel: AuthenticationViewModel
-    @State private var travelMapSegment: Int = 0
     @State private var spotsCount: Int = 0
     @State private var followersCount: Int = 0
     @State private var followingCount: Int = 0
@@ -40,9 +41,6 @@ struct ProfileView: View {
     /// Cities/Countries lists in the Travel Map section. Loaded once on appear
     /// and refreshed when the profile data refreshes from network.
     @State private var allSpots: [Spot] = []
-
-    private var cityRows: [CityRowData] { LocationGrouping.cityRows(from: allSpots) }
-    private var countryRows: [CountryRowData] { LocationGrouping.countryRows(from: allSpots) }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -493,7 +491,7 @@ struct ProfileView: View {
     private var myListsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("My Lists")
+                Text("Lists")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
 
@@ -577,174 +575,15 @@ struct ProfileView: View {
     // MARK: - Travel Map
 
     private var travelMapSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Your Footprint")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
-                .padding(.horizontal, 20)
-
-            // Tag 0 = Countries (left, default selected). Iteration 3 swap:
-            // Countries reads as the "where in the world have you been" headline
-            // and Cities is the drill-down. The default `travelMapSegment: 0`
-            // declaration above puts the user on Countries on first appear.
-            Picker("Footprint View", selection: $travelMapSegment) {
-                Text("Countries").tag(0)
-                Text("Cities").tag(1)
+        ProfileTravelSection(
+            spots: allSpots,
+            cityDestination: { city in
+                ListDetailView(title: city.name, mode: .allSpotsInCity(city.name))
+            },
+            countryDestination: { country in
+                ListDetailView(title: country.displayName, mode: .allSpotsInCountry(country.displayName))
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 20)
-
-            travelMapList
-                .padding(.horizontal, 20)
-        }
-    }
-
-    @ViewBuilder
-    private var travelMapList: some View {
-        let cities = cityRows
-        let countries = countryRows
-        let isCountriesTab = travelMapSegment == 0
-
-        if cities.isEmpty && countries.isEmpty {
-            travelMapEmptyState
-        } else if isCountriesTab {
-            if countries.isEmpty {
-                travelMapTabEmpty(message: "No countries yet — save spots with country info.")
-            } else {
-                travelMapRowGroup {
-                    ForEach(Array(countries.enumerated()), id: \.element.id) { index, country in
-                        NavigationLink(destination: ListDetailView(title: country.displayName, mode: .allSpotsInCountry(country.displayName))) {
-                            countryRow(country, isLast: index == countries.count - 1)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        } else {
-            if cities.isEmpty {
-                travelMapTabEmpty(message: "No cities yet — save spots with city info.")
-            } else {
-                travelMapRowGroup {
-                    ForEach(Array(cities.enumerated()), id: \.element.id) { index, city in
-                        NavigationLink(destination: ListDetailView(title: city.name, mode: .allSpotsInCity(city.name))) {
-                            cityRow(city, isLast: index == cities.count - 1)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-
-    private func travelMapRowGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) { content() }
-            .background(Color.white)
-            .overlay(
-                RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
-                    .stroke(Color.gray200, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
-    }
-
-    private var travelMapEmptyState: some View {
-        Text("Save spots to see your footprint.")
-            .font(.system(size: 14))
-            .foregroundColor(.gray500)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 16)
-    }
-
-    private func travelMapTabEmpty(message: String) -> some View {
-        Text(message)
-            .font(.system(size: 14))
-            .foregroundColor(.gray500)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 16)
-    }
-
-    private func cityRow(_ city: CityRowData, isLast: Bool) -> some View {
-        HStack {
-            Text(city.name)
-                .font(.system(size: 14))
-                .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
-
-            Spacer()
-
-            Text("\(city.count) \(city.count == 1 ? "spot" : "spots")")
-                .font(.system(size: 12))
-                .foregroundColor(.gray500)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 56)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
-            if !isLast {
-                Divider()
-                    .background(Color.gray100)
-            }
-        }
-    }
-
-    private func countryRow(_ country: CountryRowData, isLast: Bool) -> some View {
-        HStack {
-            HStack(spacing: 12) {
-                Group {
-                    if let flag = country.flag {
-                        Text(flag)
-                            .font(.system(size: 22))
-                    } else {
-                        Image(systemName: "globe")
-                            .font(.system(size: 16))
-                            .foregroundColor(.gray500)
-                            .frame(width: 24, height: 24)
-                    }
-                }
-                .frame(width: 28, alignment: .center)
-
-                Text(country.displayName)
-                    .font(.system(size: 14))
-                    .foregroundColor(Color(red: 0.063, green: 0.094, blue: 0.157))
-            }
-
-            Spacer()
-
-            Text("\(country.count) \(country.count == 1 ? "spot" : "spots")")
-                .font(.system(size: 12))
-                .foregroundColor(.gray500)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 56)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
-            if !isLast {
-                Divider()
-                    .background(Color.gray100)
-            }
-        }
-    }
-}
-
-// MARK: - UIKit-Backed Rounded Background
-
-/// Uses `CALayer.cornerRadius` instead of SwiftUI shapes to avoid animation
-/// artifacts from NavigationStack insertion transitions.
-private struct RoundedTopCornersBackground: UIViewRepresentable {
-    let radius: CGFloat
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .white
-        view.layer.cornerRadius = radius
-        view.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        view.layer.cornerCurve = .continuous
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        uiView.layer.cornerRadius = radius
-        CATransaction.commit()
+        )
     }
 }
 
