@@ -87,9 +87,7 @@ struct SettingsView: View {
 
                 sectionHeader("PREFERENCES")
                     .padding(.top, sectionHeaderTopPadding)
-                settingsSection(rows: preferencesRows) { config in
-                    rowTapped(config)
-                }
+                preferencesSection
 
                 sectionHeader("SUPPORT")
                     .padding(.top, sectionHeaderTopPadding)
@@ -141,6 +139,31 @@ struct SettingsView: View {
                 rowTapped(accountRows[1])
             } label: {
                 settingsRow(accountRows[1])
+            }
+            .buttonStyle(.plain)
+        }
+        .background(Color.white)
+    }
+
+    /// Preferences section: Notifications (placeholder chevron) and Privacy
+    /// (NavigationLink → PrivacySettingsView). Privacy gets its own row
+    /// rather than living in `preferencesRows` because it needs a destination,
+    /// not the generic `rowTapped` handler.
+    private var preferencesSection: some View {
+        VStack(spacing: 0) {
+            Button {
+                rowTapped(preferencesRows[0])
+            } label: {
+                settingsRow(preferencesRows[0])
+            }
+            .buttonStyle(.plain)
+
+            Divider()
+                .background(SettingsColors.rowDivider)
+                .padding(.leading, horizontalPadding + iconSize + iconTextGap)
+
+            NavigationLink(destination: PrivacySettingsView()) {
+                settingsRow(preferencesRows[1])
             }
             .buttonStyle(.plain)
         }
