@@ -23,6 +23,7 @@ struct UserProfileView: View {
     @State private var isLoadingProfile: Bool
     @State private var isMutatingFollow = false
     @State private var errorMessage: String?
+    @State private var showCancelRequestSheet = false
 
     /// Seed `profile` synchronously from ProfileService's cache so navigating
     /// from feed / search / followers lists paints the header instantly.
@@ -56,8 +57,10 @@ struct UserProfileView: View {
 
     private var canSeeContent: Bool {
         guard let profile else { return false }
-        if !profile.isPrivate { return true }
-        return relationship == .following || relationship == .mutual || relationship == .isSelf
+        return FollowRelationship.canSeePrivateContent(
+            profileIsPrivate: profile.isPrivate,
+            relationship: relationship
+        )
     }
 
     var body: some View {
@@ -74,7 +77,12 @@ struct UserProfileView: View {
             }
         }
         .ignoresSafeArea(edges: .top)
-        .background(Color.gray100)
+        // White (not gray100) so the area beneath the white card stays
+        // visually continuous when content is short — e.g. the lock state
+        // for non-followers of a private profile, or an empty footprint.
+        // Matches ProfileView's choice for the same reason. The cover image
+        // paints its own gradient above the card so the top is unaffected.
+        .background(Color.white)
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .top) {
             if let errorMessage {
@@ -84,6 +92,29 @@ struct UserProfileView: View {
             }
         }
         .task { await load() }
+        // Live follower/following counts for the viewed user. Also clears the
+        // (currentViewer, userId) relationship cache when a related follow
+        // event arrives — so e.g. accepting their request flips this view's
+        // button from "Requested" to "Following" without waiting for the 60s
+        // cache TTL. SwiftUI cancels .task on disappear, ending the subscription.
+        .task(id: userId) {
+            await FollowService.shared.observeFollowChanges(for: userId) { event in
+                do {
+                    let counts = try await FollowService.shared.counts(userId: userId, forceRefresh: true)
+                    await MainActor.run {
+                        withTransaction(Transaction(animation: nil)) {
+                            followersCount = counts.followers
+                            followingCount = counts.following
+                        }
+                    }
+                } catch {
+                    print("⚠️ UserProfileView: realtime counts refresh failed: \(error.localizedDescription)")
+                }
+                if let other = event.otherPartyId {
+                    FollowService.shared.invalidateCache(viewerId: userId, targetId: other)
+                }
+            }
+        }
     }
 
     // MARK: - Cover
@@ -248,7 +279,14 @@ struct UserProfileView: View {
             }
             .buttonStyle(.plain)
         } else {
+            // VoiceOver: announce "<count> <label>" as plain text, not as a
+            // button-that-does-nothing. Without these traits, users on a
+            // private profile hear "12 Followers, button" and tap to nothing.
             statItemLabel(value: value, label: label)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(value) \(label)")
+                .accessibilityRemoveTraits(.isButton)
+                .accessibilityHint("")
         }
     }
 
@@ -276,16 +314,35 @@ struct UserProfileView: View {
         case .isSelf:
             EmptyView()
         case .none, .followsYou:
+            // Private targets create a pending follow row — label reflects
+            // that the action is sending a request, not an instant follow.
             Button(action: { Task { await tapFollow() } }) {
-                buttonLabel(text: relationship == .followsYou ? "Follow back" : "Follow",
-                            style: .primary)
+                buttonLabel(text: followButtonLabel, style: .primary)
             }
             .disabled(isMutatingFollow)
         case .requested:
-            Button(action: { Task { await tapUnfollow() } }) {
+            // Tapping a pending-request pill opens a confirmation sheet
+            // before retracting (avoids accidental cancel taps).
+            Button(action: { showCancelRequestSheet = true }) {
                 buttonLabel(text: "Requested", style: .secondary)
             }
             .disabled(isMutatingFollow)
+            .confirmationDialog(
+                "Cancel follow request?",
+                isPresented: $showCancelRequestSheet,
+                titleVisibility: .visible
+            ) {
+                Button("Cancel request", role: .destructive) {
+                    Task { await tapUnfollow() }
+                }
+                Button("Keep waiting", role: .cancel) {}
+            } message: {
+                if let username = profile?.username {
+                    Text("You sent a request to follow @\(username). They won't see it after you cancel.")
+                } else {
+                    Text("You won't be able to see their content unless you request again.")
+                }
+            }
         case .following, .mutual:
             Button(action: { Task { await tapUnfollow() } }) {
                 buttonLabel(text: relationship == .mutual ? "Friends" : "Following",
@@ -293,6 +350,16 @@ struct UserProfileView: View {
             }
             .disabled(isMutatingFollow)
         }
+    }
+
+    /// Primary-button copy for the .none / .followsYou case. "Request" when
+    /// the target is private (matches the SearchView pill convention so the
+    /// user sees consistent language wherever follow buttons appear).
+    private var followButtonLabel: String {
+        if profile?.isPrivate == true {
+            return "Request"
+        }
+        return relationship == .followsYou ? "Follow back" : "Follow"
     }
 
     private enum ButtonStyleKind { case primary, secondary }
@@ -310,21 +377,34 @@ struct UserProfileView: View {
     // MARK: - Lock State
 
     private var lockState: some View {
+        // Per Design D1: lock icon prominent, personalized subtitle. The
+        // CTA itself (Follow / Request / Requested) is rendered above the
+        // divider as part of the header so there's no duplicate button here.
         VStack(spacing: 12) {
             Image(systemName: "lock.fill")
-                .font(.system(size: 32))
+                .font(.system(size: 48))
                 .foregroundColor(.gray400)
+                .padding(.top, 8)
             Text("This account is private")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.gray900)
-            Text("Follow this account to see their saved spots and lists.")
+            Text(lockStateSubtitle)
                 .font(.system(size: 13))
                 .foregroundColor(.gray500)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding(.vertical, 32)
+    }
+
+    /// Personalize the lock-state body copy when we know the username; fall
+    /// back to a generic line when the profile is still loading.
+    private var lockStateSubtitle: String {
+        if let username = profile?.username {
+            return "Follow @\(username) to see their spots and lists."
+        }
+        return "Follow this account to see their spots and lists."
     }
 
     // MARK: - My Lists

@@ -46,4 +46,18 @@ enum FollowRelationship: Equatable {
         case .none, .followsYou, .isSelf: return false
         }
     }
+
+    /// Source-of-truth gate for "can the viewer see the target's spots, lists,
+    /// and footprint?" Public profiles are always visible; private profiles
+    /// require an accepted follow edge (or self). Mirrored server-side by the
+    /// RLS policy on `spot_list_items` and the `viewer_can_see_user_activity`
+    /// helper — keeping the rule in one place client-side reduces drift between
+    /// what the UI reveals and what the server actually permits.
+    static func canSeePrivateContent(profileIsPrivate: Bool, relationship: FollowRelationship) -> Bool {
+        if !profileIsPrivate { return true }
+        switch relationship {
+        case .following, .mutual, .isSelf: return true
+        case .none, .requested, .followsYou: return false
+        }
+    }
 }

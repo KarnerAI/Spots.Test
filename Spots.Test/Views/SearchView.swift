@@ -63,6 +63,11 @@ struct SearchView: View {
     @State private var usersError: String?
     @State private var userRelationships: [UUID: FollowRelationship] = [:]
     @State private var followActionInFlight: Set<UUID> = []
+    /// Currently-presented cancel-request confirmation, keyed by the profile
+    /// whose pill was tapped. `nil` = no sheet visible. Lifted to view-scope
+    /// (vs per-row state) because SwiftUI re-instantiates row Views on data
+    /// changes; keeping the flag here survives those rebuilds.
+    @State private var cancelRequestTarget: UserProfile?
 
     init(
         onSelectSpot: @escaping (PlaceAutocompleteResult) -> Void,
@@ -87,7 +92,31 @@ struct SearchView: View {
                         UserProfileView(userId: id)
                     }
                 }
+                .confirmationDialog(
+                    "Cancel follow request?",
+                    isPresented: cancelRequestPresented,
+                    titleVisibility: .visible,
+                    presenting: cancelRequestTarget
+                ) { profile in
+                    Button("Cancel request", role: .destructive) {
+                        let target = profile
+                        cancelRequestTarget = nil
+                        Task { await tapUnfollow(profile: target) }
+                    }
+                    Button("Keep waiting", role: .cancel) {
+                        cancelRequestTarget = nil
+                    }
+                } message: { profile in
+                    Text("You sent a request to follow @\(profile.username). They won't see it after you cancel.")
+                }
         }
+    }
+
+    private var cancelRequestPresented: Binding<Bool> {
+        Binding(
+            get: { cancelRequestTarget != nil },
+            set: { if !$0 { cancelRequestTarget = nil } }
+        )
     }
 
     private var content: some View {
@@ -484,12 +513,16 @@ struct SearchView: View {
         case .isSelf:
             EmptyView()
         case .none, .followsYou:
-            followPillButton(label: "Follow", primary: true, isBusy: isBusy) {
+            // Private profiles produce a pending follow row server-side, so the
+            // pre-tap label reflects what the user is actually doing.
+            followPillButton(label: profile.isPrivate ? "Request" : "Follow", primary: true, isBusy: isBusy) {
                 Task { await tapFollow(profile: profile) }
             }
         case .requested:
+            // Tap opens a confirm sheet (presented at the view level by
+            // `cancelRequestTarget`) before retracting the pending request.
             followPillButton(label: "Requested", primary: false, isBusy: isBusy) {
-                Task { await tapUnfollow(profile: profile) }
+                cancelRequestTarget = profile
             }
         case .following, .mutual:
             followPillButton(label: relationship == .mutual ? "Friends" : "Following", primary: false, isBusy: isBusy) {
