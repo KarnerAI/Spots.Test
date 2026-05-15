@@ -350,6 +350,92 @@ class FollowService {
 
     private var countsCache: [UUID: (followers: Int, following: Int, timestamp: Date)] = [:]
 
+    // MARK: - Realtime
+
+    /// Context for a follow-table change event delivered by Supabase realtime.
+    /// `viewer` is the user the channel is scoped to; `otherPartyId` is the
+    /// person on the other side of the edge (used to invalidate the (viewer, other)
+    /// relationship cache entry).
+    struct FollowEvent {
+        let viewer: UUID
+        let otherPartyId: UUID?
+    }
+
+    /// Subscribe to inserts/updates/deletes on the `follows` table where the
+    /// current user is either the follower or the followee. Fires `onChange`
+    /// every time a relevant edge changes. Returns when the surrounding Task
+    /// is cancelled (call site uses `.task` on a SwiftUI view); the channel is
+    /// unsubscribed via `defer`, so rapid view re-entry won't leak channels.
+    ///
+    /// Requires `ALTER PUBLICATION supabase_realtime ADD TABLE public.follows;`
+    /// — without it, subscribe() succeeds silently but no events fire.
+    func observeFollowChanges(
+        for userId: UUID,
+        onChange: @escaping @Sendable (FollowEvent) async -> Void
+    ) async {
+        let channel = supabase.realtimeV2.channel("follows:\(userId.uuidString)")
+
+        // Two streams because PostgresChanges filters only support a single
+        // column equality — there's no OR across columns. We need to observe
+        // changes where the viewer is either side of the edge.
+        let inboundStream = channel.postgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: "follows",
+            filter: .eq("followee_id", value: userId.uuidString)
+        )
+        let outboundStream = channel.postgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: "follows",
+            filter: .eq("follower_id", value: userId.uuidString)
+        )
+
+        do {
+            try await channel.subscribeWithError()
+        } catch {
+            // Realtime is best-effort: if subscribe fails (offline, auth expired,
+            // backoff exhausted), we fall back to the 60s counts cache TTL. Log
+            // and bail so the caller's Task can complete cleanly.
+            print("FollowService.observeFollowChanges subscribe failed: \(error)")
+            return
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                // viewer is the followee → the other party is the follower
+                for await action in inboundStream {
+                    let other = Self.extractUUID(from: action, column: "follower_id")
+                    await onChange(FollowEvent(viewer: userId, otherPartyId: other))
+                }
+            }
+            group.addTask {
+                // viewer is the follower → the other party is the followee
+                for await action in outboundStream {
+                    let other = Self.extractUUID(from: action, column: "followee_id")
+                    await onChange(FollowEvent(viewer: userId, otherPartyId: other))
+                }
+            }
+        }
+
+        // Reached when both streams end (Task cancelled by SwiftUI .task teardown).
+        await channel.unsubscribe()
+    }
+
+    /// Pull a UUID column out of an action's payload. Inserts/updates carry
+    /// `record`; deletes carry `oldRecord` (the row that was removed).
+    private static func extractUUID(from action: AnyAction, column: String) -> UUID? {
+        let payload: [String: AnyJSON]?
+        switch action {
+        case .insert(let a): payload = a.record
+        case .update(let a): payload = a.record
+        case .delete(let a): payload = a.oldRecord
+        }
+        guard let value = payload?[column],
+              case .string(let str) = value else { return nil }
+        return UUID(uuidString: str)
+    }
+
     // MARK: - Cache
 
     func invalidateCache(viewerId: UUID? = nil, targetId: UUID? = nil) {

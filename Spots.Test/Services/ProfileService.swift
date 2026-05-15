@@ -269,6 +269,31 @@ class ProfileService {
             .execute()
     }
 
+    // MARK: - Privacy
+
+    /// Flip the account between private (request-to-follow) and public
+    /// (auto-accept). The server `normalize_follow_status` trigger keys off
+    /// `profiles.is_private` at INSERT time, and the
+    /// `auto_accept_pending_on_public_flip` trigger drains stranded pending
+    /// requests when flipping back to public.
+    func updateIsPrivate(userId: UUID, isPrivate: Bool) async throws {
+        struct UpdateRow: Encodable {
+            let is_private: Bool
+            let updated_at: String
+        }
+        let row = UpdateRow(
+            is_private: isPrivate,
+            updated_at: ISO8601DateFormatter.fractionalSeconds.string(from: Date())
+        )
+        try await supabase
+            .from("profiles")
+            .update(row)
+            .eq("id", value: userId.uuidString)
+            .execute()
+        // Drop the cached profile so the next read returns the new flag.
+        profileCache[userId] = nil
+    }
+
     // MARK: - Cover photo
 
     /// Persist the user's chosen Unsplash cover photo URL to the `profiles` table.

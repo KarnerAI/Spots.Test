@@ -63,6 +63,21 @@ struct ProfileView: View {
         .background(Color.white)
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { loadProfileData() }
+        // Live follower/following counts. SwiftUI cancels .task on disappear,
+        // which ends the for-await loops inside observeFollowChanges and
+        // triggers channel.unsubscribe() — no @State channel needed.
+        .task(id: viewModel.currentUserId) {
+            guard let userId = viewModel.currentUserId else { return }
+            await FollowService.shared.observeFollowChanges(for: userId) { event in
+                await refreshFollowCounts(userId: userId, forceRefresh: true)
+                if let other = event.otherPartyId {
+                    // Clear the (viewer, other) relationship cache so the next
+                    // profile open of that user reflects the new state instantly
+                    // (e.g. button reads "Following" not "Requested" 1s after accept).
+                    FollowService.shared.invalidateCache(viewerId: userId, targetId: other)
+                }
+            }
+        }
         .sheet(isPresented: $showCoverPicker) {
             if let city = mostExploredCity, let userId = viewModel.currentUserId {
                 CoverPhotoPickerView(city: city, userId: userId) { selectedURL in
@@ -110,6 +125,16 @@ struct ProfileView: View {
         // marks the snapshot stale (e.g. saving a new spot).
         Task { await refreshAllSpotsForTravelMap() }
 
+        // Follow counts change from EXTERNAL events (someone follows you,
+        // someone accepts your request) that don't flip `isStale` — that
+        // flag only fires for local actions like saving a spot or editing
+        // your profile. Refresh counts unconditionally on appear so the
+        // displayed number can't drift behind the actual follows table
+        // when something happened while the app was backgrounded or the
+        // view was off-screen. The 60s realtime subscription in `.task`
+        // keeps counts live while the view IS open; this catches the gap.
+        Task { await refreshFollowCounts(userId: userId, forceRefresh: true) }
+
         // Apply cached snapshot instantly (synchronous, before any async work)
         if let snapshot = cache.snapshot(for: userId) {
             spotsCount = snapshot.spotsCount
@@ -122,10 +147,10 @@ struct ProfileView: View {
             if !cache.isStale { return }
         }
 
-        // Full network refresh (first visit or stale cache)
+        // Full network refresh (first visit or stale cache). Counts are
+        // handled above on every appear, so they're omitted here.
         Task { await refreshListTilesFromNetwork() }
         Task { await refreshCityAndCover() }
-        Task { await refreshFollowCounts(userId: userId) }
     }
 
     /// Loads every spot the user has saved so the Travel Map section can group
@@ -156,11 +181,13 @@ struct ProfileView: View {
         }
     }
 
-    private func refreshFollowCounts(userId: UUID) async {
+    private func refreshFollowCounts(userId: UUID, forceRefresh: Bool = false) async {
         do {
-            // forceRefresh: false — the 60s FollowService cache is fine for
-            // repeat opens of own profile. Mutations invalidate the cache.
-            let counts = try await FollowService.shared.counts(userId: userId)
+            // forceRefresh: false on initial load — the 60s FollowService cache
+            // is fine for repeat opens of own profile. The realtime subscription
+            // passes forceRefresh: true so inbound follow events tick the count
+            // immediately rather than waiting for cache expiry.
+            let counts = try await FollowService.shared.counts(userId: userId, forceRefresh: forceRefresh)
             await MainActor.run {
                 withTransaction(Transaction(animation: nil)) {
                     followersCount = counts.followers
