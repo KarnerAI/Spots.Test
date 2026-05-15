@@ -505,7 +505,9 @@ struct UserProfileView: View {
             }
 
             // Cover photo: also non-blocking. Header art, not critical path.
-            Task { await loadCoverImage(profile: loadedProfile) }
+            // Threads `cityTask` so the no-cover fallback can reuse the
+            // already-in-flight most-explored-city query.
+            Task { await loadCoverImage(profile: loadedProfile, cityTask: cityTask) }
         } catch {
             errorMessage = "Couldn't load profile. \(error.localizedDescription)"
             scheduleErrorDismiss()
@@ -546,12 +548,33 @@ struct UserProfileView: View {
         }
     }
 
-    private func loadCoverImage(profile: UserProfile) async {
+    /// Cover-photo fallback chain — mirrors `ProfileView.loadCoverImage`:
+    ///   1. Explicit `coverPhotoUrl` if the target user picked one
+    ///   2. Unsplash photo of their most-explored city
+    ///   3. Leave the gradient placeholder (`coverImage` stays nil)
+    ///
+    /// Without step 2, profiles for users who never picked a cover render as a
+    /// blank gray gradient, which reads as a broken/empty state. The fallback
+    /// uses the same `UnsplashService.fetchCoverImage(for:)` curated city
+    /// lookup that own-profile uses on first launch.
+    private func loadCoverImage(profile: UserProfile, cityTask: Task<String?, Error>) async {
         if let urlString = profile.coverPhotoUrl,
            let image = await UnsplashService.shared.fetchCoverImageFromURL(urlString) {
             await MainActor.run {
                 withTransaction(Transaction(animation: nil)) { coverImage = image }
             }
+            return
+        }
+
+        // Reuse the in-flight cityTask rather than firing a duplicate
+        // getMostExploredCity request. Two awaits on the same Task share one
+        // result and one network round-trip.
+        let city = (try? await cityTask.value) ?? nil
+        guard let city else { return }
+
+        let image = await UnsplashService.shared.fetchCoverImage(for: city)
+        await MainActor.run {
+            withTransaction(Transaction(animation: nil)) { coverImage = image }
         }
     }
 
