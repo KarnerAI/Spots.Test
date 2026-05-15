@@ -23,6 +23,11 @@ enum ListDetailMode {
     case allSpotsInCity(String)
     /// All of the current user's saved spots, filtered to a single country by name.
     case allSpotsInCountry(String)
+    /// City-filtered drill-down when viewing another user's profile — uses the
+    /// supplied lists rather than `getListByType` (which is current-user only).
+    case allSpotsInCityForLists(String, [UserList])
+    /// Country-filtered drill-down for another user's profile.
+    case allSpotsInCountryForLists(String, [UserList])
 }
 
 enum SpotSortOrder: String, CaseIterable {
@@ -410,6 +415,18 @@ struct ListDetailView: View {
                     to: try await Self.loadAllOwnedSpots(),
                     matching: { LocationGrouping.matchesCountry($0, country) }
                 )
+
+            case .allSpotsInCityForLists(let city, let lists):
+                spots = Self.applyLocationFilter(
+                    to: try await Self.loadAllSpotsForLists(lists),
+                    matching: { LocationGrouping.matchesCity($0, city) }
+                )
+
+            case .allSpotsInCountryForLists(let country, let lists):
+                spots = Self.applyLocationFilter(
+                    to: try await Self.loadAllSpotsForLists(lists),
+                    matching: { LocationGrouping.matchesCountry($0, country) }
+                )
             }
             buildMarkers()
         } catch {
@@ -418,6 +435,19 @@ struct ListDetailView: View {
         }
 
         isLoading = false
+    }
+
+    /// Fetch deduped spots across the supplied lists. Used for other-user
+    /// drill-downs where we already hold the target user's `UserList`s, so we
+    /// must not fall back to current-user's `getListByType`.
+    private static func loadAllSpotsForLists(_ lists: [UserList]) async throws -> [SpotWithMetadata] {
+        let service = LocationSavingService.shared
+        var all: [SpotWithMetadata] = []
+        for list in lists {
+            guard let type = list.listType else { continue }
+            all += try await service.getSpotsInList(listId: list.id, listType: type)
+        }
+        return dedupedAndSorted(all)
     }
 
     /// Fetch all of the current user's saved spots across the three system lists,
