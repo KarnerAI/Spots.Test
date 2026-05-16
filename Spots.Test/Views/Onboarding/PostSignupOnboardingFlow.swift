@@ -12,9 +12,6 @@
 //     is true. When the user completes (or skips through) the flow,
 //     the VM flips that flag and ContentView swaps in MainTabView.
 //
-//  Design (D4): the entire flow runs in light mode regardless of
-//  the user's system theme, via .preferredColorScheme(.light).
-//
 
 import SwiftUI
 
@@ -55,7 +52,6 @@ struct PostSignupOnboardingFlow: View {
             }
         }
         .background(Color.white.ignoresSafeArea())
-        .preferredColorScheme(.light)
         .animation(.easeInOut(duration: 0.3), value: vm.isShowingCelebration)
     }
 }
