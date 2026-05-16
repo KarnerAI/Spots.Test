@@ -9,21 +9,6 @@ import SwiftUI
 
 // MARK: - Data Models
 
-struct SpotResult: Identifiable {
-    let id: String
-    let name: String
-    let address: String
-    let icon: String?
-    let status: String?
-    let type: SpotType?
-    let placeId: String? // Google Place ID for future place detail lookups
-    
-    enum SpotType {
-        case recent
-        case saved
-    }
-}
-
 enum SearchMode {
     case spots
     case users
@@ -45,7 +30,6 @@ struct SearchView: View {
     let onSelectSpot: (PlaceAutocompleteResult) -> Void
     let onFiltersClick: (() -> Void)?
 
-    var recentSpots: [SpotResult] = []
     var initialSearchMode: SearchMode = .spots
 
     @EnvironmentObject var locationSavingVM: LocationSavingViewModel
@@ -53,6 +37,7 @@ struct SearchView: View {
     @State private var searchMode: SearchMode
     @State private var searchTask: Task<Void, Never>?
     @StateObject private var locationManager = LocationManager()
+    @StateObject private var searchVM = SearchViewModel()
     @State private var autocompleteResults: [PlaceAutocompleteResult] = []
     @State private var isLoadingPlaces: Bool = false
     @State private var placesError: String?
@@ -72,12 +57,10 @@ struct SearchView: View {
     init(
         onSelectSpot: @escaping (PlaceAutocompleteResult) -> Void,
         onFiltersClick: (() -> Void)? = nil,
-        recentSpots: [SpotResult] = [],
         initialSearchMode: SearchMode = .spots
     ) {
         self.onSelectSpot = onSelectSpot
         self.onFiltersClick = onFiltersClick
-        self.recentSpots = recentSpots
         self.initialSearchMode = initialSearchMode
         _searchMode = State(initialValue: initialSearchMode)
     }
@@ -239,12 +222,18 @@ struct SearchView: View {
                     alignment: .bottom
                 )
                 
+                // Category filter chips — only visible on the Spots tab's
+                // pre-typing state. Filters Nearby in place; never touches Recent.
+                if searchMode == .spots && searchQuery.isEmpty {
+                    categoryChipsBar
+                }
+
                 // Content Area
                 ScrollView {
                     if searchQuery.isEmpty {
                         // Recent Section
                         if searchMode == .spots {
-                            recentSpotsView
+                            discoverySpotsView
                         } else {
                             recentUsersView
                         }
@@ -258,7 +247,7 @@ struct SearchView: View {
                     }
                 }
             }
-            
+
         }
         .transition(.move(edge: .trailing))
         .onAppear {
@@ -266,113 +255,359 @@ struct SearchView: View {
             Task {
                 await locationSavingVM.loadUserLists()
             }
+            // Nearby fetch fires as soon as we know the user's location.
+            // First fix may already be available (cached); if not, the
+            // onChange below picks up the next published value.
+            searchVM.loadNearby(from: locationManager.getCurrentLocation())
             // Re-sync follow pills when returning from a pushed UserProfileView,
             // in case the user followed/unfollowed inside the detail screen.
             if !userResults.isEmpty {
                 Task { await loadRelationships(for: userResults.map(\.id)) }
             }
         }
+        .onChange(of: locationManager.location) { _, newLocation in
+            // Refire nearby fetch when the location finally resolves
+            // (or jumps materially) after the initial onAppear.
+            if newLocation != nil && searchVM.nearbySpots.isEmpty {
+                searchVM.loadNearby(from: newLocation)
+            }
+        }
     }
 
-    // MARK: - Recent Spots View
-    
-    private var recentSpotsView: some View {
+    // MARK: - Discovery (pre-typing) view — Recent + Nearby
+
+    /// The pre-typing state of the Spots tab. Composes the persistent
+    /// Recent searches list (hidden when empty) and the Nearby list
+    /// (filtered by the active chip when one is selected).
+    private var discoverySpotsView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Recent")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.gray900)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
-                
-                Spacer()
-            }
-            
-            if recentSpots.isEmpty {
-                emptyStateView(message: "No recent searches")
-            } else {
+            if !searchVM.recents.isEmpty {
+                sectionHeader("Recent")
                 VStack(spacing: 0) {
-                    ForEach(recentSpots) { spot in
-                        recentSpotRow(spot: spot)
+                    ForEach(searchVM.recents) { ref in
+                        recentRow(ref: ref)
                     }
+                }
+                .padding(.bottom, 4)
+            }
+
+            nearbyHeaderRow
+
+            nearbyBody
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.4)
+                .foregroundColor(.gray500)
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 6)
+    }
+
+    /// Nearby header. Includes a teal "Clear filter" affordance when a chip
+    /// is active so the user has a discoverable way to reset without scrolling
+    /// up to the chips bar.
+    private var nearbyHeaderRow: some View {
+        HStack {
+            Text(searchVM.nearbyHeader.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.4)
+                .foregroundColor(.gray500)
+            Spacer()
+            if searchVM.activeFilter != nil {
+                Button(action: { searchVM.activeFilter = nil }) {
+                    Text("Clear filter")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.spotsTeal)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 6)
+    }
+
+    /// Nearby content area — picks one of: location-denied prompt, loading
+    /// indicator, error message, filtered empty state, or the actual list.
+    @ViewBuilder
+    private var nearbyBody: some View {
+        let denied = locationManager.authorizationStatus == .denied
+            || locationManager.authorizationStatus == .restricted
+        if denied {
+            locationDeniedRow
+        } else if searchVM.isLoadingNearby && searchVM.nearbySpots.isEmpty {
+            VStack {
+                ProgressView()
+                    .padding(.vertical, 24)
+            }
+            .frame(maxWidth: .infinity)
+        } else if let error = searchVM.nearbyError, searchVM.nearbySpots.isEmpty {
+            VStack(spacing: 6) {
+                Text("Couldn't load nearby spots")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.gray700)
+                Text(error)
+                    .font(.system(size: 12))
+                    .foregroundColor(.gray500)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity)
+        } else if searchVM.filteredNearby.isEmpty {
+            filteredEmptyRow
+        } else {
+            VStack(spacing: 0) {
+                ForEach(searchVM.filteredNearby) { spot in
+                    nearbyRow(spot: spot)
                 }
             }
         }
     }
-    
-    private func recentSpotRow(spot: SpotResult) -> some View {
-        Button(action: {
-            // Recent entries may pre-date the place-card flow (no placeId stored).
-            // Fall through to dismiss without a selection in that case.
-            if let placeId = spot.placeId {
-                let result = PlaceAutocompleteResult(
-                    placeId: placeId,
-                    name: spot.name,
-                    address: spot.address
-                )
-                onSelectSpot(result)
+
+    /// Tap-target row prompting the user to enable location access in
+    /// system Settings. Replaces the nearby list when permission is denied.
+    private var locationDeniedRow: some View {
+        Button(action: openSystemSettings) {
+            HStack(spacing: 12) {
+                Image(systemName: "location.slash")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(.gray500)
+                    .frame(width: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Enable location to see nearby spots")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.gray900)
+                    Text("Opens Settings")
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray500)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.gray400)
             }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    /// Inline row that takes the place of the nearby list when a category
+    /// filter is active but no nearby spots match.
+    private var filteredEmptyRow: some View {
+        VStack(spacing: 6) {
+            let label = searchVM.activeFilter?.displayName.lowercased() ?? "spots"
+            Text("No \(label) spots nearby")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.gray700)
+            Text("Try a different category, or widen the radius in filters.")
+                .font(.system(size: 12))
+                .foregroundColor(.gray500)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Recent search row — red map pin glyph + name + address. Tapping
+    /// re-enters the place-card flow via the existing onSelectSpot callback.
+    private func recentRow(ref: RecentSpotRef) -> some View {
+        Button(action: {
+            let result = PlaceAutocompleteResult(
+                placeId: ref.placeId,
+                name: ref.name,
+                address: ref.address
+            )
+            onSelectSpot(result)
             dismiss()
         }) {
             HStack(spacing: 12) {
-                // Icon
-                ZStack {
-                    if let icon = spot.icon {
-                        Text(icon)
-                            .font(.system(size: 20))
-                            .frame(width: 40, height: 40)
-                            .background(
-                                LinearGradient(
-                                    colors: [Color(red: 1.0, green: 0.95, blue: 1.0), Color(red: 0.95, green: 0.9, blue: 1.0)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .clipShape(Circle())
-                    } else {
-                        Image(systemName: "clock")
-                            .font(.system(size: 18))
-                            .foregroundColor(.gray500)
-                            .frame(width: 40, height: 40)
-                            .background(Color(red: 0.95, green: 0.95, blue: 0.95))
-                            .clipShape(Circle())
-                    }
-                }
-                
-                // Text Content
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(spot.name)
-                        .font(.system(size: 15, weight: .medium))
+                Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(.spotsCoral)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ref.name)
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.gray900)
                         .lineLimit(1)
-                        .multilineTextAlignment(.leading)
-                    
-                    if !spot.address.isEmpty {
-                        Text(spot.address)
-                            .font(.system(size: 13))
+                    if !ref.address.isEmpty {
+                        Text(ref.address)
+                            .font(.system(size: 12))
                             .foregroundColor(.gray500)
                             .lineLimit(1)
-                            .multilineTextAlignment(.leading)
-                    }
-                    
-                    if let status = spot.status {
-                        Text(status)
-                            .font(.system(size: 13))
-                            .foregroundColor(.gray500)
-                            .lineLimit(1)
-                            .multilineTextAlignment(.leading)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                
-                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.gray400)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
+        .overlay(
+            Rectangle()
+                .fill(Color.gray200)
+                .frame(height: 0.5)
+                .padding(.leading, 56),
+            alignment: .bottom
+        )
+    }
+
+    /// Nearby spot row — 56pt thumbnail (Google Places photo if available,
+    /// otherwise a gray placeholder), name, category·distance subtitle.
+    private func nearbyRow(spot: NearbySpot) -> some View {
+        Button(action: {
+            searchVM.recordRecent(placeId: spot.placeId, name: spot.name, address: spot.address)
+            onSelectSpot(spot.toPlaceAutocompleteResult())
+            dismiss()
+        }) {
+            HStack(spacing: 12) {
+                nearbyThumbnail(spot: spot)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(spot.name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.gray900)
+                        .lineLimit(1)
+
+                    Text(nearbySubtitle(for: spot))
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray500)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.gray400)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .overlay(
+            Rectangle()
+                .fill(Color.gray200)
+                .frame(height: 0.5)
+                .padding(.leading, 88),
+            alignment: .bottom
+        )
+    }
+
+    private func nearbySubtitle(for spot: NearbySpot) -> String {
+        let distance = spot.formattedDistance
+        if distance.isEmpty {
+            return spot.category
+        }
+        return "\(spot.category) · \(distance)"
+    }
+
+    /// Thumbnail used in nearby rows. Falls back to a flat gray tile when
+    /// the API hasn't supplied a photo reference yet — keeps the row from
+    /// looking broken while the API resolves.
+    @ViewBuilder
+    private func nearbyThumbnail(spot: NearbySpot) -> some View {
+        ZStack {
+            if let ref = spot.photoReferenceForGoogleAPI() {
+                GooglePlacesImageView(photoReference: ref, maxWidth: 120)
+            } else {
+                Rectangle()
+                    .fill(Color.gray100)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .font(.system(size: 18))
+                            .foregroundColor(.gray400)
+                    )
+            }
+        }
+        .frame(width: 56, height: 56)
+        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.field, style: .continuous))
+    }
+
+    // MARK: - Category Chips
+
+    /// Horizontal pill chips between the tabs and the content area. "All"
+    /// resets the filter (activeFilter == nil); tapping any other category
+    /// toggles into single-select. Re-tapping the active chip also clears.
+    private var categoryChipsBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                allChipButton
+                ForEach(SpotCategory.allCases) { category in
+                    categoryChipButton(category: category)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .background(Color.white)
+        .overlay(
+            Rectangle()
+                .fill(Color.gray100)
+                .frame(height: 0.5),
+            alignment: .bottom
+        )
+    }
+
+    private var allChipButton: some View {
+        let isActive = searchVM.activeFilter == nil
+        return Button(action: { searchVM.activeFilter = nil }) {
+            HStack(spacing: 6) {
+                Text("✦")
+                    .font(.system(size: 13))
+                Text("All")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundColor(isActive ? .white : .gray900)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(isActive ? Color.spotsNavy : Color.gray100)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    private func categoryChipButton(category: SpotCategory) -> some View {
+        let isActive = searchVM.activeFilter == category
+        return Button(action: {
+            // Re-tapping the active chip clears the filter (a common iOS
+            // affordance for single-select filters that doubles as a way out).
+            searchVM.activeFilter = isActive ? nil : category
+        }) {
+            HStack(spacing: 6) {
+                Text(category.emoji)
+                    .font(.system(size: 13))
+                Text(category.displayName)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundColor(isActive ? .white : .gray900)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(isActive ? Color.spotsNavy : Color.gray100)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    private func openSystemSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
     
     // MARK: - Recent Users View
@@ -682,6 +917,9 @@ struct SearchView: View {
         Button(action: {
             // Dismiss keyboard before transitioning back to the map.
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            // Selecting a typed result is a real "search" — record it so the
+            // Recent section reflects what the user actually visited.
+            searchVM.recordRecent(placeId: result.placeId, name: result.name, address: result.address)
             onSelectSpot(result)
             dismiss()
         }) {
@@ -734,18 +972,7 @@ struct SearchView: View {
     SearchView(
         onSelectSpot: { result in
             print("Selected: \(result.name) (\(result.placeId))")
-        },
-        recentSpots: [
-            SpotResult(
-                id: "1",
-                name: "Tripoli Bakery and Pizza - North Andover",
-                address: "542 Turnpike St, North Andover, MA 01845",
-                icon: nil,
-                status: nil,
-                type: .recent,
-                placeId: nil
-            )
-        ]
+        }
     )
     .environmentObject(LocationSavingViewModel())
 }
