@@ -321,7 +321,7 @@ struct SearchView: View {
                 .foregroundColor(.gray500)
             Spacer()
             if searchVM.activeFilter != nil {
-                Button(action: { searchVM.activeFilter = nil }) {
+                Button(action: { searchVM.setFilter(nil) }) {
                     Text("Clear filter")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.spotsTeal)
@@ -342,13 +342,13 @@ struct SearchView: View {
             || locationManager.authorizationStatus == .restricted
         if denied {
             locationDeniedRow
-        } else if searchVM.isLoadingNearby && searchVM.nearbySpots.isEmpty {
+        } else if searchVM.isShowingLoadingState {
             VStack {
                 ProgressView()
                     .padding(.vertical, 24)
             }
             .frame(maxWidth: .infinity)
-        } else if let error = searchVM.nearbyError, searchVM.nearbySpots.isEmpty {
+        } else if let error = searchVM.visibleError, searchVM.filteredNearby.isEmpty {
             VStack(spacing: 6) {
                 Text("Couldn't load nearby spots")
                     .font(.system(size: 14, weight: .medium))
@@ -468,8 +468,10 @@ struct SearchView: View {
         )
     }
 
-    /// Nearby spot row — 56pt thumbnail (Google Places photo if available,
-    /// otherwise a gray placeholder), name, category·distance subtitle.
+    /// Nearby spot row — 32pt category-emoji circle, name, category·distance
+    /// subtitle. Real photos are intentionally not fetched here — Google
+    /// Places photo requests are billed per impression and Search opens
+    /// frequently. Emoji glyphs convey category at a glance for free.
     private func nearbyRow(spot: NearbySpot) -> some View {
         Button(action: {
             searchVM.recordRecent(placeId: spot.placeId, name: spot.name, address: spot.address)
@@ -477,7 +479,7 @@ struct SearchView: View {
             dismiss()
         }) {
             HStack(spacing: 12) {
-                nearbyThumbnail(spot: spot)
+                nearbyEmojiCircle(for: spot)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(spot.name)
@@ -505,7 +507,7 @@ struct SearchView: View {
             Rectangle()
                 .fill(Color.gray200)
                 .frame(height: 0.5)
-                .padding(.leading, 88),
+                .padding(.leading, 64),
             alignment: .bottom
         )
     }
@@ -518,26 +520,20 @@ struct SearchView: View {
         return "\(spot.category) · \(distance)"
     }
 
-    /// Thumbnail used in nearby rows. Falls back to a flat gray tile when
-    /// the API hasn't supplied a photo reference yet — keeps the row from
-    /// looking broken while the API resolves.
-    @ViewBuilder
-    private func nearbyThumbnail(spot: NearbySpot) -> some View {
-        ZStack {
-            if let ref = spot.photoReferenceForGoogleAPI() {
-                GooglePlacesImageView(photoReference: ref, maxWidth: 120)
-            } else {
-                Rectangle()
-                    .fill(Color.gray100)
-                    .overlay(
-                        Image(systemName: "photo")
-                            .font(.system(size: 18))
-                            .foregroundColor(.gray400)
-                    )
-            }
-        }
-        .frame(width: 56, height: 56)
-        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.field, style: .continuous))
+    /// 32pt circular emoji glyph used as the leading element of each
+    /// Nearby row. Re-uses PlaceTypeEmoji by synthesizing a single-element
+    /// `types` array from NearbySpot.category (same trick NearbySpot.toSpot
+    /// uses), falling back to a generic pin when nothing matches.
+    private func nearbyEmojiCircle(for spot: NearbySpot) -> some View {
+        let synthesizedType = spot.category
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+        let glyph = PlaceTypeEmoji.emoji(for: [synthesizedType]) ?? "📍"
+        return Text(glyph)
+            .font(.system(size: 16))
+            .frame(width: 32, height: 32)
+            .background(Color.gray100)
+            .clipShape(Circle())
     }
 
     // MARK: - Category Chips
@@ -567,7 +563,7 @@ struct SearchView: View {
 
     private var allChipButton: some View {
         let isActive = searchVM.activeFilter == nil
-        return Button(action: { searchVM.activeFilter = nil }) {
+        return Button(action: { searchVM.setFilter(nil) }) {
             HStack(spacing: 6) {
                 Text("✦")
                     .font(.system(size: 13))
@@ -588,7 +584,7 @@ struct SearchView: View {
         return Button(action: {
             // Re-tapping the active chip clears the filter (a common iOS
             // affordance for single-select filters that doubles as a way out).
-            searchVM.activeFilter = isActive ? nil : category
+            searchVM.setFilter(isActive ? nil : category)
         }) {
             HStack(spacing: 6) {
                 Text(category.emoji)

@@ -462,16 +462,17 @@ class PlacesAPIService {
         location: CLLocation,
         radius: Double = 1000,
         pageToken: String? = nil,
-        maxResults: Int = 10
+        maxResults: Int = 10,
+        includedPrimaryTypes: [String]? = nil
     ) async throws -> (spots: [NearbySpot], nextPageToken: String?) {
         guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
             throw PlacesAPIError.apiKeyNotConfigured
         }
-        
+
         guard let url = URL(string: nearbySearchURL) else {
             throw PlacesAPIError.invalidURL
         }
-        
+
         // Build request body for Nearby Search (New) API
         var requestBody: [String: Any] = [
             "maxResultCount": maxResults,
@@ -485,7 +486,15 @@ class PlacesAPIService {
                 ]
             ]
         ]
-        
+
+        // Restrict to specific primary types when the caller passes them —
+        // used by Search's category chips so dense urban areas reliably
+        // return 10 cafes instead of "the closest 20 places, of which 3
+        // happen to be cafes."
+        if let types = includedPrimaryTypes, !types.isEmpty {
+            requestBody["includedPrimaryTypes"] = types
+        }
+
         // Add page token for pagination if provided
         if let pageToken = pageToken {
             requestBody["pageToken"] = pageToken

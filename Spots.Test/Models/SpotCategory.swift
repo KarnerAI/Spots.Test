@@ -57,4 +57,19 @@ enum SpotCategory: String, CaseIterable, Identifiable {
         case .shopping: return ["store"]
         }
     }
+
+    /// Google Places "Type A" primary types that map to this category.
+    /// Fed to `searchNearby`'s `includedPrimaryTypes` filter so a
+    /// chip-restricted fetch returns only places of these types — instead
+    /// of mixing every nearby place and filtering client-side, which under-
+    /// counts in dense urban areas.
+    var primaryTypes: [String] {
+        switch self {
+        case .coffee:   return ["cafe", "coffee_shop"]
+        case .food:     return ["restaurant", "bakery", "meal_takeaway", "meal_delivery"]
+        case .bars:     return ["bar", "night_club"]
+        case .outdoors: return ["park"]
+        case .shopping: return ["store", "shopping_mall", "clothing_store"]
+        }
+    }
 }
