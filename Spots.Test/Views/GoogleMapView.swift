@@ -49,7 +49,18 @@ struct GoogleMapView: UIViewRepresentable {
         mapView.settings.myLocationButton = false // We'll use custom button
         mapView.settings.compassButton = false
         mapView.delegate = context.coordinator
-        
+
+        // The app is locked to light mode via Info.plist (UIUserInterfaceStyle = Light),
+        // but the Google Map should still follow the device's actual appearance so dark-mode
+        // users see the SDK's dark map style. UIScreen.main.traitCollection reflects the
+        // device-level appearance and is not affected by the per-window override.
+        mapView.overrideUserInterfaceStyle = UIScreen.main.traitCollection.userInterfaceStyle
+        context.coordinator.traitChangeRegistration = mapView.registerForTraitChanges(
+            [UITraitUserInterfaceStyle.self]
+        ) { (view: GMSMapView, _) in
+            view.overrideUserInterfaceStyle = UIScreen.main.traitCollection.userInterfaceStyle
+        }
+
         // Store map view reference in coordinator
         context.coordinator.mapView = mapView
         
@@ -65,6 +76,9 @@ struct GoogleMapView: UIViewRepresentable {
     }
     
     func updateUIView(_ mapView: GMSMapView, context: Context) {
+        // Re-apply device appearance in case it changed while the view was offscreen.
+        mapView.overrideUserInterfaceStyle = UIScreen.main.traitCollection.userInterfaceStyle
+
         // Update camera position if changed
         if let cameraPosition = cameraPosition {
             if forceCameraUpdate {
@@ -119,6 +133,7 @@ struct GoogleMapView: UIViewRepresentable {
         var onPOITapped: ((String, String, CLLocationCoordinate2D) -> Void)?
         var onMapTapped: (() -> Void)?
         var lastCameraPosition: GMSCameraPosition?
+        var traitChangeRegistration: UITraitChangeRegistration?
         
         func mapView(_ mapView: GMSMapView, didChange position: GMSCameraPosition) {
             // Intentionally not reporting here — updates only when idle to avoid 60fps @Published updates
