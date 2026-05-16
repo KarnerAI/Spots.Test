@@ -920,47 +920,47 @@ struct SearchView: View {
             dismiss()
         }) {
             HStack(spacing: 12) {
-                // Category emoji (or fallback pin)
-                ZStack {
-                    if let emoji = PlaceTypeEmoji.emoji(for: result.types) {
-                        Text(emoji)
-                            .font(.system(size: 20))
-                            .frame(width: 40, height: 40)
-                            .background(Color(red: 1.0, green: 0.9, blue: 0.9))
-                            .clipShape(Circle())
-                    } else {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(.red)
-                            .frame(width: 40, height: 40)
-                            .background(Color(red: 1.0, green: 0.9, blue: 0.9))
-                            .clipShape(Circle())
-                    }
-                }
+                // Same red pin glyph used by Recent rows. Earlier versions
+                // wrapped this in a 40pt pink circle which made autocomplete
+                // visually inconsistent with the rest of the screen — pin
+                // style is now uniform across Recent and autocomplete.
+                Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(.spotsCoral)
+                    .frame(width: 24)
 
                 // Text Content
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(result.name)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.gray900)
                         .lineLimit(1)
                         .multilineTextAlignment(.leading)
 
                     Text(result.address)
-                        .font(.system(size: 13))
+                        .font(.system(size: 12))
                         .foregroundColor(.gray500)
                         .lineLimit(1)
                         .multilineTextAlignment(.leading)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.gray400)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
+        .overlay(
+            Rectangle()
+                .fill(Color.gray200)
+                .frame(height: 0.5)
+                .padding(.leading, 56),
+            alignment: .bottom
+        )
     }
 }
 
