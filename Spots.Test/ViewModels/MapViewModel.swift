@@ -810,8 +810,9 @@ class MapViewModel: ObservableObject {
             marker.title = placeWithMetadata.spot.name
             marker.snippet = placeWithMetadata.spot.address
             marker.userData = placeWithMetadata.spot.placeId  // Store placeId for tap handling
-            // Bias anchor slightly downward so the larger circular icon covers the underlying POI pin head.
-            marker.groundAnchor = CGPoint(x: 0.5, y: 0.6)
+            // Center the custom marker on the lat/lng so it sits directly over Google's default
+            // POI icon (also center-anchored), eliminating the visual stack at street zoom.
+            marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
             
             // Get base icon
             var icon = iconForListTypes(placeWithMetadata.listTypes)
