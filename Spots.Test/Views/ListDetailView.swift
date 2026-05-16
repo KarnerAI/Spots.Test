@@ -302,8 +302,8 @@ struct ListDetailView: View {
                         }
                         .padding(.trailing, 16)
                         .padding(.bottom, selectedSpot != nil
-                            ? 70 + 36 + 120 + 8
-                            : 70 + 44)
+                            ? 16 + 120 + 8
+                            : 16)
                         .animation(.easeInOut(duration: 0.25), value: selectedSpot != nil)
                     }
                 }
@@ -320,7 +320,7 @@ struct ListDetailView: View {
                     )
                     .frame(width: SpotCardView.cardWidth(for: UIScreen.main.bounds.width))
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 70 + 36)
+                    .padding(.bottom, 16)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
