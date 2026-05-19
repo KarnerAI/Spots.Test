@@ -110,4 +110,71 @@ struct PlacesAPIServiceTests {
             #expect(body["includedPrimaryTypes"] as? [String] == ["establishment"], "Missing includedPrimaryTypes for mode \(mode)")
         }
     }
+
+    // MARK: - Text Search request body (Round 7)
+
+    @Test func textSearch_distanceMode_includesRankPreferenceAndBias() {
+        let body = PlacesAPIService.buildTextSearchRequestBody(
+            query: "pizza",
+            location: Self.nyc,
+            rankPreference: .distance,
+            radius: 50_000
+        )
+
+        #expect(body["textQuery"] as? String == "pizza")
+        #expect(body["rankPreference"] as? String == "DISTANCE")
+
+        let bias = body["locationBias"] as? [String: Any]
+        #expect(bias != nil)
+        let circle = bias?["circle"] as? [String: Any]
+        #expect(circle?["radius"] as? Double == 50_000)
+        let center = circle?["center"] as? [String: Any]
+        #expect(center?["latitude"] as? Double == 40.7128)
+        #expect(center?["longitude"] as? Double == -74.0060)
+    }
+
+    @Test func textSearch_relevanceMode_emitsCorrectRankString() {
+        // `.relevance` and `.distance` are the only two valid rank strings.
+        // Guard the raw value mapping so a future rename of the enum case
+        // can't silently send Google a string it rejects with a 400.
+        let body = PlacesAPIService.buildTextSearchRequestBody(
+            query: "pizza",
+            location: Self.nyc,
+            rankPreference: .relevance,
+            radius: 50_000
+        )
+        #expect(body["rankPreference"] as? String == "RELEVANCE")
+    }
+
+    @Test func textSearch_noLocation_omitsBiasAndRankPreference() {
+        // Google rejects rankPreference=DISTANCE without a location to
+        // measure from. The builder must strip BOTH fields when location
+        // is nil — leaving rankPreference set would 400 the request.
+        let body = PlacesAPIService.buildTextSearchRequestBody(
+            query: "pizza",
+            location: nil,
+            rankPreference: .distance,
+            radius: 50_000
+        )
+
+        #expect(body["textQuery"] as? String == "pizza")
+        #expect(body["locationBias"] == nil)
+        #expect(body["rankPreference"] == nil)
+    }
+
+    @Test func textSearch_useTextQueryNotInput() {
+        // Text Search uses `textQuery`; Autocomplete uses `input`. If a
+        // future refactor accidentally unifies these, Google's API will
+        // ignore the wrong field and return unrelated results — silent
+        // regression that wouldn't surface in a smoke test. Pin the key.
+        let body = PlacesAPIService.buildTextSearchRequestBody(
+            query: "pizza",
+            location: Self.nyc,
+            rankPreference: .distance,
+            radius: 50_000
+        )
+
+        #expect(body["textQuery"] != nil)
+        #expect(body["input"] == nil)
+    }
 }

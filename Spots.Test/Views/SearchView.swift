@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import CoreLocation
 
 // MARK: - Data Models
 
@@ -581,6 +582,24 @@ struct SearchView: View {
         return "\(spot.category) · \(distance)"
     }
 
+    /// Subtitle for an autocomplete result row. Appends "· {distance}"
+    /// when both the user location and the result's coordinate are known.
+    /// Round 7 Text Search returns coordinates inline so this branch fires
+    /// for every nearest-first result; trip-planning fallback results
+    /// (Autocomplete + bias) still get coordinates via the existing
+    /// sortResultsByDistance step before they reach the view.
+    private func autocompleteSubtitle(for result: PlaceAutocompleteResult) -> String {
+        guard let coord = result.coordinate,
+              let userLocation = locationManager.getCurrentLocation() else {
+            return result.address
+        }
+        let placeLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        let meters = userLocation.distance(from: placeLocation)
+        let distance = DistanceCalculator.formattedDistance(meters)
+        if result.address.isEmpty { return distance }
+        return "\(result.address) · \(distance)"
+    }
+
     /// 32pt circular emoji glyph used as the leading element of each
     /// Nearby row. Re-uses PlaceTypeEmoji by synthesizing a single-element
     /// `types` array from NearbySpot.category (same trick NearbySpot.toSpot
@@ -998,7 +1017,7 @@ struct SearchView: View {
                         .lineLimit(1)
                         .multilineTextAlignment(.leading)
 
-                    Text(result.address)
+                    Text(autocompleteSubtitle(for: result))
                         .font(.system(size: 12))
                         .foregroundColor(.gray500)
                         .lineLimit(1)
