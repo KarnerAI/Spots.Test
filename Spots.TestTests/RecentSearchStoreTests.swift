@@ -85,4 +85,31 @@ struct RecentSearchStoreTests {
         store.remove(placeId: "a")
         #expect(store.recents.map(\.placeId) == ["b"])
     }
+
+    @Test func clearEmptiesAndPersists() {
+        let suite = UUID().uuidString
+        let (store, defaults) = Self.makeStore(suite: suite)
+        store.record(placeId: "a", name: "Alpha", address: "1 Way")
+        store.record(placeId: "b", name: "Bravo", address: "2 Way")
+        #expect(store.recents.count == 2)
+
+        store.clear()
+        #expect(store.recents.isEmpty)
+
+        // Fresh store reading the same defaults should see the cleared
+        // state — the wipe has to land on disk, not just in memory.
+        let reloaded = RecentSearchStore(defaults: defaults)
+        #expect(reloaded.recents.isEmpty)
+    }
+
+    @Test func clearOnEmptyIsNoop() {
+        let (store, _) = Self.makeStore()
+        #expect(store.recents.isEmpty)
+
+        // Should not throw, should not flip any state, should not write
+        // garbage. Trivial but guards against a future "clear if empty
+        // throws" regression.
+        store.clear()
+        #expect(store.recents.isEmpty)
+    }
 }

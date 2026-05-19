@@ -205,9 +205,18 @@ final class SearchViewModel: ObservableObject {
         store.record(placeId: placeId, name: name, address: address)
     }
 
-    /// Drops a stale recent — used when the upstream spot is gone.
+    /// Drops a stale recent — used when the upstream spot is gone, and as
+    /// the action for the per-row swipe-to-delete affordance on the Recent
+    /// section of the Search screen.
     func removeRecent(placeId: String) {
         store.remove(placeId: placeId)
+    }
+
+    /// Wipes the entire recent searches list. Backs the "Clear" button in
+    /// the Recent section header. View layer is expected to gate this
+    /// behind a confirmation dialog — there is no undo.
+    func clearRecents() {
+        store.clear()
     }
 
     // MARK: - Test hooks

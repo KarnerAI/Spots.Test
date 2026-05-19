@@ -120,6 +120,34 @@ struct SearchViewModelTests {
         #expect(types.contains("coffee_shop"))
     }
 
+    @Test func clearRecentsProxiesToStore() {
+        // Each test injects its own UserDefaults so the proxy effect is
+        // observable without polluting other suites. Direct store
+        // reference also serves as the assertion target.
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let store = RecentSearchStore(defaults: defaults)
+        store.record(placeId: "a", name: "Alpha", address: "1 Way")
+        store.record(placeId: "b", name: "Bravo", address: "2 Way")
+        let vm = SearchViewModel(store: store)
+        #expect(vm.recents.count == 2)
+
+        vm.clearRecents()
+        #expect(store.recents.isEmpty)
+        #expect(vm.recents.isEmpty)
+    }
+
+    @Test func removeRecentProxiesToStore() {
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let store = RecentSearchStore(defaults: defaults)
+        store.record(placeId: "a", name: "Alpha", address: "1 Way")
+        store.record(placeId: "b", name: "Bravo", address: "2 Way")
+        let vm = SearchViewModel(store: store)
+
+        vm.removeRecent(placeId: "a")
+        #expect(store.recents.map(\.placeId) == ["b"])
+        #expect(vm.recents.map(\.placeId) == ["b"])
+    }
+
     // MARK: - Helpers
 
     private func isolatedStore() -> RecentSearchStore {

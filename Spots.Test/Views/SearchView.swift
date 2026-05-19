@@ -39,6 +39,10 @@ struct SearchView: View {
     @StateObject private var locationManager = LocationManager()
     @StateObject private var searchVM = SearchViewModel()
     @State private var autocompleteResults: [PlaceAutocompleteResult] = []
+    /// Drives the "Clear all recent searches?" confirmation dialog. Kept at
+    /// view scope (vs. inside the Recent section) so the dialog's lifecycle
+    /// survives the section collapsing once recents becomes empty.
+    @State private var showClearConfirm: Bool = false
     @State private var isLoadingPlaces: Bool = false
     @State private var placesError: String?
 
@@ -228,18 +232,17 @@ struct SearchView: View {
                     categoryChipsBar
                 }
 
-                // Content Area
-                ScrollView {
-                    if searchQuery.isEmpty {
-                        // Recent Section
-                        if searchMode == .spots {
-                            discoverySpotsView
-                        } else {
+                // Content Area. Pre-typing Spots state uses a List so we get
+                // native Section semantics and .swipeActions on Recent rows;
+                // every other state stays a plain ScrollView.
+                if searchMode == .spots && searchQuery.isEmpty {
+                    discoveryList
+                } else {
+                    ScrollView {
+                        if searchQuery.isEmpty {
+                            // Users tab pre-typing state.
                             recentUsersView
-                        }
-                    } else {
-                        // Search Results
-                        if searchMode == .spots {
+                        } else if searchMode == .spots {
                             searchResultsSpotsView
                         } else {
                             searchResultsUsersView
@@ -250,6 +253,23 @@ struct SearchView: View {
 
         }
         .transition(.move(edge: .trailing))
+        // Confirmation dialog for "Clear all recents". Attached at the
+        // outermost content view so the dialog's presentation lifecycle is
+        // independent of the Recent section's visibility — the section
+        // collapses to nothing the moment the user confirms, and an
+        // inside-the-section attachment would tear down mid-animation.
+        .confirmationDialog(
+            "Clear all recent searches?",
+            isPresented: $showClearConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Clear", role: .destructive) {
+                searchVM.clearRecents()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This can't be undone.")
+        }
         .onAppear {
             locationManager.requestLocationPermission()
             Task {
@@ -276,78 +296,89 @@ struct SearchView: View {
 
     // MARK: - Discovery (pre-typing) view — Recent + Nearby
 
-    /// The pre-typing state of the Spots tab. Composes the persistent
-    /// Recent searches list (hidden when empty) and the Nearby list
-    /// (filtered by the active chip when one is selected).
-    private var discoverySpotsView: some View {
-        VStack(alignment: .leading, spacing: 0) {
+    /// The pre-typing state of the Spots tab. A single `List` so Recent
+    /// rows can use SwiftUI's native `.swipeActions` without the
+    /// fixed-height-nested-List footgun (broken under Dynamic Type,
+    /// gesture conflicts with an outer ScrollView). Section headers carry
+    /// the section labels — "RECENT" (with a Clear button) and the
+    /// dynamic "NEARBY NOW" / "NEARBY COFFEE" header.
+    private var discoveryList: some View {
+        List {
             if !searchVM.recents.isEmpty {
-                sectionHeader("Recent")
-                VStack(spacing: 0) {
+                Section {
                     ForEach(searchVM.recents) { ref in
                         recentRow(ref: ref)
+                            .modifier(DiscoveryRowStyle())
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    searchVM.removeRecent(placeId: ref.placeId)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                     }
+                } header: {
+                    recentSectionHeader
+                        .modifier(DiscoveryHeaderStyle())
                 }
-                .padding(.bottom, 4)
             }
 
-            nearbyHeaderRow
-
-            nearbyBody
+            Section {
+                nearbyListRows
+            } header: {
+                nearbyHeaderRow
+                    .modifier(DiscoveryHeaderStyle())
+            }
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color.white)
+        .environment(\.defaultMinListRowHeight, 0)
     }
 
-    private func sectionHeader(_ title: String) -> some View {
+    /// "RECENT" section header with the trailing Clear button. 44pt hit
+    /// target on the button via .frame(minHeight:) so it stays accessible
+    /// even though the label is only 13pt.
+    private var recentSectionHeader: some View {
         HStack {
-            Text(title.uppercased())
+            Text("RECENT")
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.4)
                 .foregroundColor(.gray500)
             Spacer()
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
-        .padding(.bottom, 6)
-    }
-
-    /// Nearby header. Includes a teal "Clear filter" affordance when a chip
-    /// is active so the user has a discoverable way to reset without scrolling
-    /// up to the chips bar.
-    private var nearbyHeaderRow: some View {
-        HStack {
-            Text(searchVM.nearbyHeader.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.4)
-                .foregroundColor(.gray500)
-            Spacer()
-            if searchVM.activeFilter != nil {
-                Button(action: { searchVM.setFilter(nil) }) {
-                    Text("Clear filter")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.spotsTeal)
-                }
-                .buttonStyle(PlainButtonStyle())
+            Button(action: { showClearConfirm = true }) {
+                Text("Clear")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.spotsTeal)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(PlainButtonStyle())
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
     }
 
-    /// Nearby content area — picks one of: location-denied prompt, loading
-    /// indicator, error message, filtered empty state, or the actual list.
+    /// Renders the Nearby section's state machine as a sequence of List
+    /// rows (location-denied prompt, loading indicator, error message,
+    /// filtered empty state, or the populated list). Each branch applies
+    /// the same DiscoveryRowStyle so backgrounds, insets, and separator
+    /// suppression are consistent across every state.
     @ViewBuilder
-    private var nearbyBody: some View {
+    private var nearbyListRows: some View {
         let denied = locationManager.authorizationStatus == .denied
             || locationManager.authorizationStatus == .restricted
         if denied {
             locationDeniedRow
+                .modifier(DiscoveryRowStyle())
         } else if searchVM.isShowingLoadingState {
-            VStack {
-                ProgressView()
-                    .padding(.vertical, 24)
-            }
-            .frame(maxWidth: .infinity)
+            ProgressView()
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity)
+                .modifier(DiscoveryRowStyle())
         } else if let error = searchVM.visibleError, searchVM.filteredNearby.isEmpty {
             VStack(spacing: 6) {
                 Text("Couldn't load nearby spots")
@@ -360,15 +391,45 @@ struct SearchView: View {
             }
             .padding(24)
             .frame(maxWidth: .infinity)
+            .modifier(DiscoveryRowStyle())
         } else if searchVM.filteredNearby.isEmpty {
             filteredEmptyRow
+                .modifier(DiscoveryRowStyle())
         } else {
-            VStack(spacing: 0) {
-                ForEach(searchVM.filteredNearby) { spot in
-                    nearbyRow(spot: spot)
-                }
+            ForEach(searchVM.filteredNearby) { spot in
+                nearbyRow(spot: spot)
+                    .modifier(DiscoveryRowStyle())
             }
         }
+    }
+
+    /// Nearby header. Includes a teal "Clear filter" affordance when a chip
+    /// is active so the user has a discoverable way to reset without
+    /// scrolling up to the chips bar. Rendered as the Nearby Section header
+    /// inside `discoveryList`.
+    private var nearbyHeaderRow: some View {
+        HStack {
+            Text(searchVM.nearbyHeader.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.4)
+                .foregroundColor(.gray500)
+            Spacer()
+            if searchVM.activeFilter != nil {
+                Button(action: { searchVM.setFilter(nil) }) {
+                    Text("Clear filter")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.spotsTeal)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
     }
 
     /// Tap-target row prompting the user to enable location access in
@@ -961,6 +1022,34 @@ struct SearchView: View {
                 .padding(.leading, 56),
             alignment: .bottom
         )
+    }
+}
+
+// MARK: - List Styling Modifiers
+
+/// Strips List's default row chrome — insets, separator, and grouped-style
+/// background — so rows render edge-to-edge on a white surface, matching
+/// the rest of the Search screen. Their visual dividers come from each
+/// row's own `.overlay(Rectangle...)` rather than the List separator.
+private struct DiscoveryRowStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.white)
+    }
+}
+
+/// Section header styling — same insets/background treatment as rows so
+/// the custom-padded HStack inside the header renders without an extra
+/// margin layer from List's default header chrome. `textCase(nil)` keeps
+/// our manual uppercase string as-is instead of List's default upcasing.
+private struct DiscoveryHeaderStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.white)
+            .textCase(nil)
     }
 }
 
