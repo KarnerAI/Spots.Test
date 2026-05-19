@@ -299,17 +299,30 @@ class PlacesAPIService {
             switch result {
             case .success(let results) where results.count >= Self.autocompleteFallbackThreshold:
                 completion(.success(results))
-            case .success(let results):
-                print("Places API: Tier 1 (Text Search) returned \(results.count) (< \(Self.autocompleteFallbackThreshold)). Falling back to autocomplete with bias.")
+            case .success(let tier1Results):
+                print("Places API: Tier 1 (Text Search) returned \(tier1Results.count) (< \(Self.autocompleteFallbackThreshold)). Falling back to autocomplete with bias.")
                 // Tier 2: relax to soft bias so global matches can surface.
                 // Stays on the autocomplete endpoint since it's cheaper for
-                // the rare fallback case.
+                // the rare fallback case. If Tier 2 errors out (transient
+                // network problem, rate limit, etc.) AND Tier 1 had at
+                // least one result, surface Tier 1's partial results
+                // instead of the error — better to show 1 weak local hit
+                // than "Couldn't search."
                 self.performAutocompleteRequest(
                     query: query,
                     location: location,
-                    mode: .bias(radius: Self.autocompleteRadius),
-                    completion: completion
-                )
+                    mode: .bias(radius: Self.autocompleteRadius)
+                ) { tier2Result in
+                    switch tier2Result {
+                    case .success:
+                        completion(tier2Result)
+                    case .failure where !tier1Results.isEmpty:
+                        print("Places API: Tier 2 failed; surfacing \(tier1Results.count) Tier 1 result(s) instead.")
+                        completion(.success(tier1Results))
+                    case .failure:
+                        completion(tier2Result)
+                    }
+                }
             case .failure(let error):
                 completion(.failure(error))
             }
