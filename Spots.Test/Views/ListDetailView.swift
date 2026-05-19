@@ -31,10 +31,11 @@ enum ListDetailMode {
 }
 
 enum SpotSortOrder: String, CaseIterable {
-    case dateNewest = "Date Added (Newest)"
-    case dateOldest = "Date Added (Oldest)"
-    case nameAZ     = "Name (A–Z)"
-    case nameZA     = "Name (Z–A)"
+    case dateNewest      = "Date Added (Newest)"
+    case dateOldest      = "Date Added (Oldest)"
+    case nameAZ          = "Name (A–Z)"
+    case nameZA          = "Name (Z–A)"
+    case distanceNearest = "Distance (Nearest)"
 }
 
 enum ListViewStyle {
@@ -86,14 +87,44 @@ struct ListDetailView: View {
         let filtered = searchText.isEmpty
             ? spots
             : spots.filter { $0.spot.name.localizedCaseInsensitiveContains(searchText) }
+        let userLocation = locationManager.location
         cachedFilteredAndSortedSpots = filtered.sorted { a, b in
             switch sortOrder {
             case .dateNewest: return a.savedAt > b.savedAt
             case .dateOldest: return a.savedAt < b.savedAt
             case .nameAZ:     return a.spot.name.localizedCaseInsensitiveCompare(b.spot.name) == .orderedAscending
             case .nameZA:     return a.spot.name.localizedCaseInsensitiveCompare(b.spot.name) == .orderedDescending
+            case .distanceNearest:
+                let da = Self.distanceMeters(from: userLocation, to: a.spot)
+                let db = Self.distanceMeters(from: userLocation, to: b.spot)
+                // Spots without coordinates sort to the bottom.
+                switch (da, db) {
+                case let (a?, b?): return a < b
+                case (_?, nil):    return true
+                case (nil, _?):    return false
+                case (nil, nil):   return a.savedAt > b.savedAt
+                }
             }
         }
+    }
+
+    /// Distance in meters from user to spot, or nil if either side has no coordinate.
+    private static func distanceMeters(from userLocation: CLLocation?, to spot: Spot) -> CLLocationDistance? {
+        guard let userLocation,
+              let lat = spot.latitude,
+              let lng = spot.longitude else { return nil }
+        return DistanceCalculator.distance(
+            from: userLocation,
+            to: CLLocationCoordinate2D(latitude: lat, longitude: lng)
+        )
+    }
+
+    /// Sort orders available given current state. Distance is hidden when location is unknown.
+    private var availableSortOrders: [SpotSortOrder] {
+        if locationManager.location == nil {
+            return SpotSortOrder.allCases.filter { $0 != .distanceNearest }
+        }
+        return SpotSortOrder.allCases
     }
 
     // MARK: - Body
@@ -142,12 +173,18 @@ struct ListDetailView: View {
             }
         }
         .confirmationDialog("Sort by", isPresented: $showSortDialog, titleVisibility: .visible) {
-            ForEach(SpotSortOrder.allCases, id: \.self) { order in
+            ForEach(availableSortOrders, id: \.self) { order in
                 Button(order.rawValue) { sortOrder = order }
             }
             Button("Cancel", role: .cancel) {}
         }
         .onChange(of: locationManager.location) { _, newLocation in
+            // Distance labels and distance-sort need to react to location updates.
+            updateCachedSpots()
+            // If permission was revoked while sorting by distance, fall back to default.
+            if newLocation == nil, sortOrder == .distanceNearest {
+                sortOrder = .dateNewest
+            }
             guard shouldCenterWhenLocationArrives, let location = newLocation else { return }
             shouldCenterWhenLocationArrives = false
             centerMapOnLocation(location)
@@ -155,7 +192,12 @@ struct ListDetailView: View {
         .onChange(of: spots) { _, _ in updateCachedSpots() }
         .onChange(of: searchText) { _, _ in updateCachedSpots() }
         .onChange(of: sortOrder) { _, _ in updateCachedSpots() }
-        .task { await loadSpots() }
+        .task {
+            // Kick off a location fix so distance labels and Distance sort are
+            // available without first opening the map tab.
+            locationManager.requestLocation()
+            await loadSpots()
+        }
         .listPickerSheet(spot: $spotForSaving) {
             Task { await loadSpots() }
         }
@@ -246,9 +288,16 @@ struct ListDetailView: View {
                 emptyState
             } else {
                 List(filteredAndSortedSpots) { spotWithMetadata in
-                    SavedSpotRow(spotWithMetadata: spotWithMetadata)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                        .listRowSeparator(.visible)
+                    SavedSpotRow(
+                        spotWithMetadata: spotWithMetadata,
+                        userLocation: locationManager.location
+                    )
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    .listRowSeparator(.visible)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        spotToOpenInMaps = spotWithMetadata.toNearbySpot()
+                    }
                 }
                 .listStyle(.plain)
             }
@@ -569,10 +618,11 @@ struct ListDetailView: View {
 private extension SpotSortOrder {
     var shortLabel: String {
         switch self {
-        case .dateNewest: return "Recent"
-        case .dateOldest: return "Oldest"
-        case .nameAZ:     return "A–Z"
-        case .nameZA:     return "Z–A"
+        case .dateNewest:      return "Recent"
+        case .dateOldest:      return "Oldest"
+        case .nameAZ:          return "A–Z"
+        case .nameZA:          return "Z–A"
+        case .distanceNearest: return "Nearest"
         }
     }
 }
@@ -581,8 +631,20 @@ private extension SpotSortOrder {
 
 struct SavedSpotRow: View {
     let spotWithMetadata: SpotWithMetadata
+    var userLocation: CLLocation? = nil
 
     private var spot: Spot { spotWithMetadata.spot }
+
+    private var distanceText: String? {
+        guard let userLocation,
+              let lat = spot.latitude,
+              let lng = spot.longitude else { return nil }
+        let meters = DistanceCalculator.distance(
+            from: userLocation,
+            to: CLLocationCoordinate2D(latitude: lat, longitude: lng)
+        )
+        return DistanceCalculator.formattedDistance(meters)
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -603,11 +665,21 @@ struct SavedSpotRow: View {
                         .lineLimit(1)
                 }
 
-                if let city = spot.city, !city.isEmpty {
-                    Text(city)
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray400)
-                        .lineLimit(1)
+                let cityText = spot.city?.isEmpty == false ? spot.city : nil
+                if cityText != nil || distanceText != nil {
+                    HStack(spacing: 0) {
+                        if let cityText {
+                            Text(cityText)
+                                .lineLimit(1)
+                        }
+                        if let distanceText {
+                            if cityText != nil { Text(" · ") }
+                            Text(distanceText)
+                                .layoutPriority(1) // never truncate the distance
+                        }
+                    }
+                    .font(.system(size: 12))
+                    .foregroundColor(.gray400)
                 }
             }
 
