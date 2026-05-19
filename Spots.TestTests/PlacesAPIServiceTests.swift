@@ -177,4 +177,80 @@ struct PlacesAPIServiceTests {
         #expect(body["textQuery"] != nil)
         #expect(body["input"] == nil)
     }
+
+    // MARK: - includedType detection (Round 8)
+
+    @Test func detectIncludedType_singleKeywordMatches() {
+        // Most common case: user types a single category word.
+        #expect(PlacesAPIService.detectIncludedType(from: "pizza") == "restaurant")
+        #expect(PlacesAPIService.detectIncludedType(from: "coffee") == "cafe")
+        #expect(PlacesAPIService.detectIncludedType(from: "cocktails") == "bar")
+        #expect(PlacesAPIService.detectIncludedType(from: "bakery") == "bakery")
+    }
+
+    @Test func detectIncludedType_multiWordQueryWithKeywordMatches() {
+        // User types a place name that happens to contain a category word —
+        // we still want to filter Google's candidate set to restaurants.
+        // Filtering doesn't hurt here: a restaurant named "Joe's Pizza"
+        // stays in scope; a toy store named "Pizzazzz Toyz" gets cut.
+        #expect(PlacesAPIService.detectIncludedType(from: "Joe's Pizza") == "restaurant")
+        #expect(PlacesAPIService.detectIncludedType(from: "pizza near me") == "restaurant")
+        #expect(PlacesAPIService.detectIncludedType(from: "best coffee in soho") == "cafe")
+    }
+
+    @Test func detectIncludedType_caseInsensitive() {
+        // Users mid-type with capitalization shouldn't break the mapper.
+        #expect(PlacesAPIService.detectIncludedType(from: "PIZZA") == "restaurant")
+        #expect(PlacesAPIService.detectIncludedType(from: "Coffee") == "cafe")
+    }
+
+    @Test func detectIncludedType_partialTypingReturnsNil() {
+        // The mapper requires a whole-token match. Partial typing of a
+        // keyword shouldn't trigger the filter early — that would change
+        // the request shape mid-keystroke as the user types and could
+        // surprise the cache.
+        #expect(PlacesAPIService.detectIncludedType(from: "piz") == nil)
+        #expect(PlacesAPIService.detectIncludedType(from: "coff") == nil)
+    }
+
+    @Test func detectIncludedType_unrelatedQueryReturnsNil() {
+        // Free-text searches for specific places (no category signal) fall
+        // through to plain Text Search without a filter.
+        #expect(PlacesAPIService.detectIncludedType(from: "wework") == nil)
+        #expect(PlacesAPIService.detectIncludedType(from: "Eiffel Tower") == nil)
+        #expect(PlacesAPIService.detectIncludedType(from: "Central Park") == nil)
+    }
+
+    @Test func detectIncludedType_emptyOrWhitespaceReturnsNil() {
+        // Defensive: empty/whitespace queries shouldn't crash or match.
+        #expect(PlacesAPIService.detectIncludedType(from: "") == nil)
+        #expect(PlacesAPIService.detectIncludedType(from: "   ") == nil)
+    }
+
+    @Test func textSearch_includedTypeInBodyWhenProvided() {
+        // The request body builder must thread `includedType` through to
+        // the API request. Without this, the mapper would compute the
+        // right type and silently fail to apply it.
+        let body = PlacesAPIService.buildTextSearchRequestBody(
+            query: "pizza",
+            location: Self.nyc,
+            rankPreference: .distance,
+            radius: 50_000,
+            includedType: "restaurant"
+        )
+        #expect(body["includedType"] as? String == "restaurant")
+    }
+
+    @Test func textSearch_includedTypeOmittedWhenNil() {
+        // For queries without a category match, no filter — let Google
+        // do its full text matching without artificial type constraint.
+        let body = PlacesAPIService.buildTextSearchRequestBody(
+            query: "wework",
+            location: Self.nyc,
+            rankPreference: .distance,
+            radius: 50_000,
+            includedType: nil
+        )
+        #expect(body["includedType"] == nil)
+    }
 }

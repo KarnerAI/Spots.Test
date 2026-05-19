@@ -282,11 +282,18 @@ class PlacesAPIService {
 
         // Tier 1: Text Search ranked by distance. Returns places sorted
         // nearest-first, with coordinates inline.
+        //
+        // Round 8: pass a derived `includedType` so Google narrows the
+        // candidate set to the right category (e.g. "pizza" → only
+        // restaurants, not toy stores named "Pizzazzz Toyz"). Falls back
+        // to no filter for queries that don't match a known category.
+        let detectedType = Self.detectIncludedType(from: query)
         performTextSearchRequest(
             query: query,
             location: location,
             rankPreference: .distance,
-            radius: Self.autocompleteRadius
+            radius: Self.autocompleteRadius,
+            includedType: detectedType
         ) { [weak self] result in
             guard let self = self else { return }
             switch result {
@@ -401,15 +408,26 @@ class PlacesAPIService {
     /// with coordinates inline. The body omits `rankPreference` entirely
     /// when location is nil — Google rejects DISTANCE ranking without a
     /// center to measure from.
+    ///
+    /// `includedType` is optional. When set, Google narrows results to
+    /// places of that primary type (or a related subtype, since
+    /// strictTypeFiltering defaults to false). Round 8 adds this to fix
+    /// the "Pizza" candidate-set problem: without a type filter, Google's
+    /// text matcher returned toy stores named "Pizzazzz Toyz" alongside
+    /// actual pizzerias.
     static func buildTextSearchRequestBody(
         query: String,
         location: CLLocation?,
         rankPreference: TextSearchRankPreference,
-        radius: Double
+        radius: Double,
+        includedType: String? = nil
     ) -> [String: Any] {
         var body: [String: Any] = [
             "textQuery": query
         ]
+        if let includedType = includedType, !includedType.isEmpty {
+            body["includedType"] = includedType
+        }
         guard let location = location else { return body }
         body["locationBias"] = [
             "circle": [
@@ -424,6 +442,85 @@ class PlacesAPIService {
         return body
     }
 
+    /// Detects a Google Places primary type from common free-text queries.
+    /// Returns nil for queries that don't map to a category — those fall
+    /// through to plain Text Search without a type filter.
+    ///
+    /// The mapping is intentionally small and hand-curated rather than
+    /// derived from `SpotCategory` because the chip taxonomy is tuned for
+    /// the filter UI (5 broad buckets) while query intent is more granular
+    /// (e.g. "ramen" and "thai" both → restaurant). Expand this list as
+    /// real user queries demand it; don't try to enumerate every cuisine
+    /// up front.
+    ///
+    /// Matching rule: tokenize by whitespace, check for whole-token
+    /// equality (case-insensitive). "pizza" matches; "piz" does not
+    /// (partial typing); "Joe's Pizza" matches (token "pizza" present);
+    /// "WeWork" returns nil.
+    static func detectIncludedType(from query: String) -> String? {
+        let tokens = Set(
+            query.lowercased()
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+        )
+        guard !tokens.isEmpty else { return nil }
+        for (keyword, type) in keywordToIncludedType {
+            if tokens.contains(keyword) { return type }
+        }
+        return nil
+    }
+
+    /// Order matters only when keywords overlap (which they don't today).
+    /// Keep as an array of tuples for readability; size is small enough
+    /// that O(n) lookup is fine.
+    private static let keywordToIncludedType: [(String, String)] = [
+        // Restaurant signals — cuisines, dish types, meal occasions.
+        ("pizza", "restaurant"),
+        ("burger", "restaurant"),
+        ("burgers", "restaurant"),
+        ("sushi", "restaurant"),
+        ("ramen", "restaurant"),
+        ("thai", "restaurant"),
+        ("chinese", "restaurant"),
+        ("italian", "restaurant"),
+        ("mexican", "restaurant"),
+        ("japanese", "restaurant"),
+        ("korean", "restaurant"),
+        ("indian", "restaurant"),
+        ("vietnamese", "restaurant"),
+        ("taco", "restaurant"),
+        ("tacos", "restaurant"),
+        ("noodles", "restaurant"),
+        ("dumplings", "restaurant"),
+        ("brunch", "restaurant"),
+        ("breakfast", "restaurant"),
+        // Cafe signals.
+        ("coffee", "cafe"),
+        ("espresso", "cafe"),
+        ("latte", "cafe"),
+        ("cappuccino", "cafe"),
+        ("matcha", "cafe"),
+        ("tea", "cafe"),
+        ("boba", "cafe"),
+        ("cafe", "cafe"),
+        ("café", "cafe"),
+        // Bar signals.
+        ("bar", "bar"),
+        ("cocktail", "bar"),
+        ("cocktails", "bar"),
+        ("beer", "bar"),
+        ("wine", "bar"),
+        ("whiskey", "bar"),
+        ("pub", "bar"),
+        ("brewery", "bar"),
+        // Bakery signals.
+        ("bakery", "bakery"),
+        ("pastry", "bakery"),
+        ("croissant", "bakery"),
+        ("donut", "bakery"),
+        ("donuts", "bakery")
+    ]
+
     /// Performs a single Text Search (New) request. Decodes the response
     /// using `NearbySearchResponse` since Text Search and Nearby Search
     /// return the same `places: [Place]` shape; we map each `Place` to a
@@ -435,6 +532,7 @@ class PlacesAPIService {
         location: CLLocation?,
         rankPreference: TextSearchRankPreference,
         radius: Double,
+        includedType: String? = nil,
         completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
     ) {
         guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
@@ -456,7 +554,8 @@ class PlacesAPIService {
             query: query,
             location: location,
             rankPreference: rankPreference,
-            radius: radius
+            radius: radius,
+            includedType: includedType
         )
 
         var request = URLRequest(url: url)
