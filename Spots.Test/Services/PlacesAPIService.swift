@@ -143,9 +143,11 @@ class PlacesAPIService {
             return persistedResults
         }
 
-        // 3. No cache hit — make the API call
+        // 3. No cache hit — run the two-tier flow (locationRestriction first,
+        // fall back to locationBias if fewer than `fallbackThreshold` results
+        // and a location is set). See `performTwoTierAutocomplete`.
         let results: [PlaceAutocompleteResult] = try await withCheckedThrowingContinuation { continuation in
-            performAutocompleteRequest(query: query, location: location, radius: 10000.0) { result in
+            performTwoTierAutocomplete(query: query, location: location) { result in
                 continuation.resume(with: result)
             }
         }
@@ -165,9 +167,13 @@ class PlacesAPIService {
         }
 
         let limited = Array(sorted.prefix(10))
-        setAutocompleteCacheEntry(key: cacheKey, results: limited)
-        // Persist to Supabase for future sessions
-        await persistAutocompleteResults(cacheKey: cacheKey, results: limited)
+        // Cache only non-empty results — caching an empty list under the
+        // (query, location) key would permanently poison the cache for
+        // legitimate trip-planning queries that should hit the bias fallback.
+        if !limited.isEmpty {
+            setAutocompleteCacheEntry(key: cacheKey, results: limited)
+            await persistAutocompleteResults(cacheKey: cacheKey, results: limited)
+        }
         return limited
     }
 
@@ -197,23 +203,29 @@ class PlacesAPIService {
                 return
             }
 
-            // 3. No cache hit — make the API call
-            self?.performAutocompleteRequest(query: query, location: location, radius: 10000.0) { [weak self] result in
+            // 3. No cache hit — run the two-tier flow.
+            self?.performTwoTierAutocomplete(query: query, location: location) { [weak self] result in
                 switch result {
                 case .success(let results):
                     print("Places API: Request returned \(results.count) results")
                     if let location = location {
                         self?.sortResultsByDistance(results, userLocation: location) { sortedResults in
                             let limited = Array(sortedResults.prefix(10))
-                            self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
-                            // Persist to Supabase for future sessions
-                            Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                            // Skip cache writes when both tiers come back empty
+                            // so a transient miss doesn't poison the (query,
+                            // location) key forever.
+                            if !limited.isEmpty {
+                                self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
+                                Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                            }
                             completion(.success(limited))
                         }
                     } else {
                         let limited = Array(results.prefix(10))
-                        self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
-                        Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                        if !limited.isEmpty {
+                            self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
+                            Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                        }
                         completion(.success(limited))
                     }
                 case .failure(let error):
@@ -222,45 +234,148 @@ class PlacesAPIService {
             }
         }
     }
+
+    // MARK: - Two-tier autocomplete orchestration
+    //
+    //   ┌──────────────────────────────────────────────────────────────┐
+    //   │  performTwoTierAutocomplete                                   │
+    //   │                                                               │
+    //   │   ┌─ location == nil ─ ─ ─ ▶  perform(.none) ─ ─ ─ ▶ done     │
+    //   │   │                                                           │
+    //   │   └─ location set ─▶ perform(.restriction(50km))               │
+    //   │                          │                                    │
+    //   │                          ├─ error ─ ─ ─ ─ ─ ─ ─ ▶ propagate  │
+    //   │                          │                                    │
+    //   │                          └─ success(results)                  │
+    //   │                                │                              │
+    //   │                                ├─ count >= 3 ─ ─ ─ ▶ done    │
+    //   │                                │                              │
+    //   │                                └─ count <  3 ─▶ perform(.bias)│
+    //   │                                                  │            │
+    //   │                                                  └ ─ ─ ▶ done │
+    //   └──────────────────────────────────────────────────────────────┘
+    //
+    // Why "< 3" not "== 0": a single weak local hit ("Disneyland Costume
+    // Rental" when the user typed "Disneyland") shouldn't suppress the real
+    // global match (Anaheim). Three is a soft floor where local density is
+    // good enough to trust the restricted result.
+    //
+    // Why errors don't fall back: a 5xx or network failure is likely
+    // transient. Firing Tier 2 in that case would burn a second API call
+    // for the same likely-failing reason. Let the user retry the keystroke.
+
+    /// 50km covers most metro areas (Manhattan→White Plains, SF→San Jose).
+    /// Same value for both tiers — Tier 2's bias is meant as a "global with
+    /// soft local nudge" rather than a different geographic scope.
+    private static let autocompleteRadius: Double = 50_000.0
+    /// Fewer than this many local results triggers the global fallback.
+    private static let autocompleteFallbackThreshold: Int = 3
+
+    private func performTwoTierAutocomplete(
+        query: String,
+        location: CLLocation?,
+        completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
+    ) {
+        // No location → single-pass with no bias/restriction. Preserves the
+        // pre-Round-6 behavior for users with location disabled.
+        guard let location = location else {
+            performAutocompleteRequest(query: query, location: nil, mode: .none, completion: completion)
+            return
+        }
+
+        // Tier 1: hard-filter by user's metro area.
+        performAutocompleteRequest(
+            query: query,
+            location: location,
+            mode: .restriction(radius: Self.autocompleteRadius)
+        ) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let results) where results.count >= Self.autocompleteFallbackThreshold:
+                completion(.success(results))
+            case .success(let results):
+                print("Places API: Tier 1 returned \(results.count) (< \(Self.autocompleteFallbackThreshold)). Falling back to bias.")
+                // Tier 2: relax to soft bias so global matches can surface.
+                self.performAutocompleteRequest(
+                    query: query,
+                    location: location,
+                    mode: .bias(radius: Self.autocompleteRadius),
+                    completion: completion
+                )
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
     
+    // MARK: - Autocomplete request modes
+    //
+    // Tier 1 of the two-tier autocomplete (`.restriction`) is a *hard* filter
+    // — Google only returns places within the circle. Tier 2 (`.bias`) is a
+    // *soft* hint — globally-famous matches can still surface. `.none` is the
+    // no-location fallback. Encoding the choice as an enum (vs a bool flag
+    // and a separate radius) keeps `buildAutocompleteRequestBody` and the
+    // unit tests around it self-documenting.
+    enum AutocompleteMode: Equatable {
+        case restriction(radius: Double)
+        case bias(radius: Double)
+        case none
+    }
+
+    /// Pure function that produces the JSON body for a Google Places
+    /// Autocomplete (New) request. Extracted so unit tests can pin down the
+    /// exact request shape per mode — the silent-regression vector is a
+    /// future refactor accidentally dropping `locationRestriction` and
+    /// reverting to the soft-bias-only behavior that caused users to see
+    /// "Pizza Hut HQ" instead of nearby pizza places.
+    static func buildAutocompleteRequestBody(
+        query: String,
+        location: CLLocation?,
+        mode: AutocompleteMode
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "input": query,
+            "includedPrimaryTypes": ["establishment"]
+        ]
+        guard let location = location else { return body }
+        func circle(radius: Double) -> [String: Any] {
+            [
+                "center": [
+                    "latitude": location.coordinate.latitude,
+                    "longitude": location.coordinate.longitude
+                ],
+                "radius": radius
+            ]
+        }
+        switch mode {
+        case .restriction(let radius):
+            body["locationRestriction"] = ["circle": circle(radius: radius)]
+        case .bias(let radius):
+            body["locationBias"] = ["circle": circle(radius: radius)]
+        case .none:
+            break
+        }
+        return body
+    }
+
     /// Internal method to perform a single autocomplete request
     private func performAutocompleteRequest(
         query: String,
         location: CLLocation?,
-        radius: Double,
+        mode: AutocompleteMode,
         completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
     ) {
         guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
             completion(.failure(PlacesAPIError.apiKeyNotConfigured))
             return
         }
-        
+
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
             completion(.success([]))
             return
         }
-        
-        // Build request body according to Google Places API (New) specification
-        // Note: maxResultCount is not a valid field - the API returns a default number of results
-        var requestBody: [String: Any] = [
-            "input": query,
-            "includedPrimaryTypes": ["establishment"]
-        ]
-        
-        // Add location bias if available
-        // Using the provided radius for location bias
-        // Smaller radius (10km) for focused results, larger (20km) for more results
-        if let location = location {
-            requestBody["locationBias"] = [
-                "circle": [
-                    "center": [
-                        "latitude": location.coordinate.latitude,
-                        "longitude": location.coordinate.longitude
-                    ],
-                    "radius": radius // Use provided radius
-                ]
-            ]
-        }
+
+        let requestBody = Self.buildAutocompleteRequestBody(query: query, location: location, mode: mode)
         
         guard let url = URL(string: baseURL) else {
             completion(.failure(PlacesAPIError.invalidURL))
