@@ -29,6 +29,11 @@ class PlacesAPIService {
     
     private let baseURL = "https://places.googleapis.com/v1/places:autocomplete"
     private let nearbySearchURL = "https://places.googleapis.com/v1/places:searchNearby"
+    /// Text Search (New) endpoint. Used by Round 7's nearest-first search path
+    /// because, unlike Autocomplete, it supports `rankPreference=DISTANCE` and
+    /// returns full Place objects with coordinates inline — eliminating the
+    /// per-result Place Details lookup the legacy autocomplete flow needed.
+    private let textSearchURL = "https://places.googleapis.com/v1/places:searchText"
     
     // MARK: - Autocomplete Response Cache
 
@@ -143,9 +148,11 @@ class PlacesAPIService {
             return persistedResults
         }
 
-        // 3. No cache hit — make the API call
+        // 3. No cache hit — run the two-tier flow (locationRestriction first,
+        // fall back to locationBias if fewer than `fallbackThreshold` results
+        // and a location is set). See `performTwoTierAutocomplete`.
         let results: [PlaceAutocompleteResult] = try await withCheckedThrowingContinuation { continuation in
-            performAutocompleteRequest(query: query, location: location, radius: 10000.0) { result in
+            performTwoTierAutocomplete(query: query, location: location) { result in
                 continuation.resume(with: result)
             }
         }
@@ -165,9 +172,13 @@ class PlacesAPIService {
         }
 
         let limited = Array(sorted.prefix(10))
-        setAutocompleteCacheEntry(key: cacheKey, results: limited)
-        // Persist to Supabase for future sessions
-        await persistAutocompleteResults(cacheKey: cacheKey, results: limited)
+        // Cache only non-empty results — caching an empty list under the
+        // (query, location) key would permanently poison the cache for
+        // legitimate trip-planning queries that should hit the bias fallback.
+        if !limited.isEmpty {
+            setAutocompleteCacheEntry(key: cacheKey, results: limited)
+            await persistAutocompleteResults(cacheKey: cacheKey, results: limited)
+        }
         return limited
     }
 
@@ -197,23 +208,29 @@ class PlacesAPIService {
                 return
             }
 
-            // 3. No cache hit — make the API call
-            self?.performAutocompleteRequest(query: query, location: location, radius: 10000.0) { [weak self] result in
+            // 3. No cache hit — run the two-tier flow.
+            self?.performTwoTierAutocomplete(query: query, location: location) { [weak self] result in
                 switch result {
                 case .success(let results):
                     print("Places API: Request returned \(results.count) results")
                     if let location = location {
                         self?.sortResultsByDistance(results, userLocation: location) { sortedResults in
                             let limited = Array(sortedResults.prefix(10))
-                            self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
-                            // Persist to Supabase for future sessions
-                            Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                            // Skip cache writes when both tiers come back empty
+                            // so a transient miss doesn't poison the (query,
+                            // location) key forever.
+                            if !limited.isEmpty {
+                                self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
+                                Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                            }
                             completion(.success(limited))
                         }
                     } else {
                         let limited = Array(results.prefix(10))
-                        self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
-                        Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                        if !limited.isEmpty {
+                            self?.setAutocompleteCacheEntry(key: cacheKey, results: limited)
+                            Task { await self?.persistAutocompleteResults(cacheKey: cacheKey, results: limited) }
+                        }
                         completion(.success(limited))
                     }
                 case .failure(let error):
@@ -222,45 +239,432 @@ class PlacesAPIService {
             }
         }
     }
-    
-    /// Internal method to perform a single autocomplete request
-    private func performAutocompleteRequest(
+
+    // MARK: - Two-tier search orchestration
+    //
+    // Round 7 swap: Tier 1 now uses Text Search (rankPreference=DISTANCE)
+    // instead of Autocomplete (locationRestriction). The previous flow's
+    // ordering issue — "Top 5 most relevant pizza in NYC, then sorted by
+    // distance" — is replaced with genuine nearest-first ordering from
+    // Google. Text Search also returns coordinates inline, so the
+    // sortResultsByDistance step that previously fired up to 10 Place
+    // Details lookups per session becomes a free re-sort over already-
+    // populated coordinates.
+    //
+    // Why "< 3" not "== 0": a single weak local hit ("Disneyland Costume
+    // Rental" when the user typed "Disneyland") shouldn't suppress the real
+    // global match (Anaheim). Three is a soft floor where local density is
+    // good enough to trust the local result.
+    //
+    // Why errors don't fall back: a 5xx or network failure is likely
+    // transient. Firing Tier 2 in that case would burn a second API call
+    // for the same likely-failing reason. Let the user retry the keystroke.
+
+    /// 50km covers most metro areas (Manhattan→White Plains, SF→San Jose).
+    /// Same value for both tiers — Tier 2's bias is meant as a "global with
+    /// soft local nudge" rather than a different geographic scope.
+    private static let autocompleteRadius: Double = 50_000.0
+    /// Fewer than this many local results triggers the global fallback.
+    private static let autocompleteFallbackThreshold: Int = 3
+
+    private func performTwoTierAutocomplete(
         query: String,
         location: CLLocation?,
+        completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
+    ) {
+        // No location → single-pass autocomplete with no bias/restriction.
+        // Text Search requires a location bias to rank by distance, so
+        // location-disabled users stay on the cheaper autocomplete SKU.
+        guard let location = location else {
+            performAutocompleteRequest(query: query, location: nil, mode: .none, completion: completion)
+            return
+        }
+
+        // Tier 1: Text Search ranked by distance. Returns places sorted
+        // nearest-first, with coordinates inline.
+        //
+        // Round 8: pass a derived `includedType` so Google narrows the
+        // candidate set to the right category (e.g. "pizza" → only
+        // restaurants, not toy stores named "Pizzazzz Toyz"). Falls back
+        // to no filter for queries that don't match a known category.
+        let detectedType = Self.detectIncludedType(from: query)
+        performTextSearchRequest(
+            query: query,
+            location: location,
+            rankPreference: .distance,
+            radius: Self.autocompleteRadius,
+            includedType: detectedType
+        ) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let results) where results.count >= Self.autocompleteFallbackThreshold:
+                completion(.success(results))
+            case .success(let tier1Results):
+                print("Places API: Tier 1 (Text Search) returned \(tier1Results.count) (< \(Self.autocompleteFallbackThreshold)). Falling back to autocomplete with bias.")
+                // Tier 2: relax to soft bias so global matches can surface.
+                // Stays on the autocomplete endpoint since it's cheaper for
+                // the rare fallback case. If Tier 2 errors out (transient
+                // network problem, rate limit, etc.) AND Tier 1 had at
+                // least one result, surface Tier 1's partial results
+                // instead of the error — better to show 1 weak local hit
+                // than "Couldn't search."
+                self.performAutocompleteRequest(
+                    query: query,
+                    location: location,
+                    mode: .bias(radius: Self.autocompleteRadius)
+                ) { tier2Result in
+                    switch tier2Result {
+                    case .success:
+                        completion(tier2Result)
+                    case .failure where !tier1Results.isEmpty:
+                        print("Places API: Tier 2 failed; surfacing \(tier1Results.count) Tier 1 result(s) instead.")
+                        completion(.success(tier1Results))
+                    case .failure:
+                        completion(tier2Result)
+                    }
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+    
+    // MARK: - Search request modes
+    //
+    // After Round 7, Tier 1 of the typed-query flow uses Text Search (New)
+    // with rankPreference=DISTANCE — Google returns places ranked by
+    // proximity to the user, with coordinates inline (no per-result Place
+    // Details round trip required). Tier 2 falls back to the original
+    // Autocomplete (New) endpoint with locationBias so trip-planning
+    // queries ("Eiffel Tower" from NYC) still work.
+    //
+    //   ┌──────────────────────────────────────────────────────────────┐
+    //   │  performTwoTierAutocomplete                                   │
+    //   │                                                               │
+    //   │   ┌─ location == nil ─▶ autocomplete .none ─▶ done            │
+    //   │   │                                                            │
+    //   │   └─ location set ──▶ Text Search (rank=DISTANCE, bias 50km)   │
+    //   │                          │                                    │
+    //   │                          ├─ error ────────▶ propagate          │
+    //   │                          │                                    │
+    //   │                          └─ success(results)                  │
+    //   │                                │                              │
+    //   │                                ├─ count >= 3 ─▶ done          │
+    //   │                                │                              │
+    //   │                                └─ count <  3 ─▶ Autocomplete   │
+    //   │                                                 (.bias 50km)   │
+    //   │                                                  │             │
+    //   │                                                  └──▶ done    │
+    //   └──────────────────────────────────────────────────────────────┘
+    //
+    // Tier 1 of the *legacy* two-tier autocomplete used `locationRestriction`
+    // on the autocomplete endpoint. We kept the `.restriction` enum case
+    // because it's still useful for direct callers that want the cheaper
+    // autocomplete SKU with a hard-filter, but the typed-query path now
+    // routes through Text Search instead.
+    enum AutocompleteMode: Equatable {
+        case restriction(radius: Double)
+        case bias(radius: Double)
+        case none
+    }
+
+    /// Controls the ordering Google applies to Text Search results. `.distance`
+    /// gives true nearest-first; `.relevance` matches the default ranking that
+    /// `searchText` uses without a preference set. We pin `.distance` for
+    /// Tier 1 of the search-screen flow per Round 7's "fix nearest-first"
+    /// decision (Finding B2).
+    enum TextSearchRankPreference: String, Equatable {
+        case distance = "DISTANCE"
+        case relevance = "RELEVANCE"
+    }
+
+    /// Pure function that produces the JSON body for a Google Places
+    /// Autocomplete (New) request. Extracted so unit tests can pin down the
+    /// exact request shape per mode — the silent-regression vector is a
+    /// future refactor accidentally dropping `locationRestriction` and
+    /// reverting to the soft-bias-only behavior that caused users to see
+    /// "Pizza Hut HQ" instead of nearby pizza places.
+    static func buildAutocompleteRequestBody(
+        query: String,
+        location: CLLocation?,
+        mode: AutocompleteMode
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "input": query,
+            "includedPrimaryTypes": ["establishment"]
+        ]
+        guard let location = location else { return body }
+        func circle(radius: Double) -> [String: Any] {
+            [
+                "center": [
+                    "latitude": location.coordinate.latitude,
+                    "longitude": location.coordinate.longitude
+                ],
+                "radius": radius
+            ]
+        }
+        switch mode {
+        case .restriction(let radius):
+            body["locationRestriction"] = ["circle": circle(radius: radius)]
+        case .bias(let radius):
+            body["locationBias"] = ["circle": circle(radius: radius)]
+        case .none:
+            break
+        }
+        return body
+    }
+
+    /// Pure function that produces the JSON body for a Google Places
+    /// Text Search (New) request. Mirrors `buildAutocompleteRequestBody`
+    /// but for the `places:searchText` endpoint, which supports
+    /// `rankPreference` (DISTANCE/RELEVANCE) and returns full Place objects
+    /// with coordinates inline. The body omits `rankPreference` entirely
+    /// when location is nil — Google rejects DISTANCE ranking without a
+    /// center to measure from.
+    ///
+    /// `includedType` is optional. When set, Google narrows results to
+    /// places of that primary type (or a related subtype, since
+    /// strictTypeFiltering defaults to false). Round 8 adds this to fix
+    /// the "Pizza" candidate-set problem: without a type filter, Google's
+    /// text matcher returned toy stores named "Pizzazzz Toyz" alongside
+    /// actual pizzerias.
+    static func buildTextSearchRequestBody(
+        query: String,
+        location: CLLocation?,
+        rankPreference: TextSearchRankPreference,
         radius: Double,
+        includedType: String? = nil
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "textQuery": query
+        ]
+        if let includedType = includedType, !includedType.isEmpty {
+            body["includedType"] = includedType
+        }
+        guard let location = location else { return body }
+        body["locationBias"] = [
+            "circle": [
+                "center": [
+                    "latitude": location.coordinate.latitude,
+                    "longitude": location.coordinate.longitude
+                ],
+                "radius": radius
+            ]
+        ]
+        body["rankPreference"] = rankPreference.rawValue
+        return body
+    }
+
+    /// Detects a Google Places primary type from common free-text queries.
+    /// Returns nil for queries that don't map to a category — those fall
+    /// through to plain Text Search without a type filter.
+    ///
+    /// The mapping is intentionally small and hand-curated rather than
+    /// derived from `SpotCategory` because the chip taxonomy is tuned for
+    /// the filter UI (5 broad buckets) while query intent is more granular
+    /// (e.g. "ramen" and "thai" both → restaurant). Expand this list as
+    /// real user queries demand it; don't try to enumerate every cuisine
+    /// up front.
+    ///
+    /// Matching rule: tokenize by whitespace, check for whole-token
+    /// equality (case-insensitive). "pizza" matches; "piz" does not
+    /// (partial typing); "Joe's Pizza" matches (token "pizza" present);
+    /// "WeWork" returns nil.
+    static func detectIncludedType(from query: String) -> String? {
+        let tokens = Set(
+            query.lowercased()
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+        )
+        guard !tokens.isEmpty else { return nil }
+        for (keyword, type) in keywordToIncludedType {
+            if tokens.contains(keyword) { return type }
+        }
+        return nil
+    }
+
+    /// Order matters only when keywords overlap (which they don't today).
+    /// Keep as an array of tuples for readability; size is small enough
+    /// that O(n) lookup is fine.
+    private static let keywordToIncludedType: [(String, String)] = [
+        // Restaurant signals — cuisines, dish types, meal occasions.
+        ("pizza", "restaurant"),
+        ("burger", "restaurant"),
+        ("burgers", "restaurant"),
+        ("sushi", "restaurant"),
+        ("ramen", "restaurant"),
+        ("thai", "restaurant"),
+        ("chinese", "restaurant"),
+        ("italian", "restaurant"),
+        ("mexican", "restaurant"),
+        ("japanese", "restaurant"),
+        ("korean", "restaurant"),
+        ("indian", "restaurant"),
+        ("vietnamese", "restaurant"),
+        ("taco", "restaurant"),
+        ("tacos", "restaurant"),
+        ("noodles", "restaurant"),
+        ("dumplings", "restaurant"),
+        ("brunch", "restaurant"),
+        ("breakfast", "restaurant"),
+        // Cafe signals.
+        ("coffee", "cafe"),
+        ("espresso", "cafe"),
+        ("latte", "cafe"),
+        ("cappuccino", "cafe"),
+        ("matcha", "cafe"),
+        ("tea", "cafe"),
+        ("boba", "cafe"),
+        ("cafe", "cafe"),
+        ("café", "cafe"),
+        // Bar signals.
+        ("bar", "bar"),
+        ("cocktail", "bar"),
+        ("cocktails", "bar"),
+        ("beer", "bar"),
+        ("wine", "bar"),
+        ("whiskey", "bar"),
+        ("pub", "bar"),
+        ("brewery", "bar"),
+        // Bakery signals.
+        ("bakery", "bakery"),
+        ("pastry", "bakery"),
+        ("croissant", "bakery"),
+        ("donut", "bakery"),
+        ("donuts", "bakery")
+    ]
+
+    /// Performs a single Text Search (New) request. Decodes the response
+    /// using `NearbySearchResponse` since Text Search and Nearby Search
+    /// return the same `places: [Place]` shape; we map each `Place` to a
+    /// `PlaceAutocompleteResult` so the rest of the autocomplete pipeline
+    /// is unchanged. Coordinates come back inline — callers can skip
+    /// `sortResultsByDistance`'s Place Details lookups.
+    private func performTextSearchRequest(
+        query: String,
+        location: CLLocation?,
+        rankPreference: TextSearchRankPreference,
+        radius: Double,
+        includedType: String? = nil,
         completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
     ) {
         guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
             completion(.failure(PlacesAPIError.apiKeyNotConfigured))
             return
         }
-        
+
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
             completion(.success([]))
             return
         }
-        
-        // Build request body according to Google Places API (New) specification
-        // Note: maxResultCount is not a valid field - the API returns a default number of results
-        var requestBody: [String: Any] = [
-            "input": query,
-            "includedPrimaryTypes": ["establishment"]
-        ]
-        
-        // Add location bias if available
-        // Using the provided radius for location bias
-        // Smaller radius (10km) for focused results, larger (20km) for more results
-        if let location = location {
-            requestBody["locationBias"] = [
-                "circle": [
-                    "center": [
-                        "latitude": location.coordinate.latitude,
-                        "longitude": location.coordinate.longitude
-                    ],
-                    "radius": radius // Use provided radius
-                ]
-            ]
+
+        guard let url = URL(string: textSearchURL) else {
+            completion(.failure(PlacesAPIError.invalidURL))
+            return
         }
+
+        let body = Self.buildTextSearchRequestBody(
+            query: query,
+            location: location,
+            rankPreference: rankPreference,
+            radius: radius,
+            includedType: includedType
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        let bundleId = bundleIdentifier
+        if !bundleId.isEmpty {
+            request.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
+        }
+        // Field mask kept tight: only the fields we map to PlaceAutocompleteResult.
+        // Adding fields here moves the request to a higher billing SKU.
+        request.setValue(
+            "places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,places.location,places.types,places.addressComponents",
+            forHTTPHeaderField: "X-Goog-FieldMask"
+        )
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(.failure(PlacesAPIError.requestEncodingFailed))
+            return
+        }
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                DispatchQueue.main.async { completion(.failure(error)) }
+                return
+            }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                DispatchQueue.main.async { completion(.failure(PlacesAPIError.invalidResponse)) }
+                return
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if let data = data, let errorString = String(data: data, encoding: .utf8) {
+                    print("Text Search API Error Response: \(errorString)")
+                }
+                if httpResponse.statusCode == 403 {
+                    DispatchQueue.main.async { completion(.failure(PlacesAPIError.apiKeyInvalid)) }
+                } else {
+                    DispatchQueue.main.async { completion(.failure(PlacesAPIError.httpError(statusCode: httpResponse.statusCode))) }
+                }
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                DispatchQueue.main.async { completion(.failure(PlacesAPIError.noData)) }
+                return
+            }
+            do {
+                let decoded = try JSONDecoder().decode(NearbySearchResponse.self, from: data)
+                let results: [PlaceAutocompleteResult] = (decoded.places ?? []).map { place in
+                    // Pull city + types straight from the response — same
+                    // semantics as NearbyPlaceResult.toNearbySpot, but the
+                    // target type is the autocomplete-side result struct so
+                    // the rest of SearchView's pipeline is unchanged.
+                    let city = place.addressComponents?
+                        .first { $0.types?.contains("administrative_area_level_1") ?? false }?
+                        .longText
+                    let coord: CLLocationCoordinate2D? = place.location.map {
+                        CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                    }
+                    return PlaceAutocompleteResult(
+                        placeId: place.id,
+                        name: place.displayName?.text ?? "Unknown",
+                        address: place.shortFormattedAddress ?? place.formattedAddress ?? "",
+                        city: city,
+                        types: place.types,
+                        coordinate: coord
+                    )
+                }
+                DispatchQueue.main.async { completion(.success(results)) }
+            } catch {
+                print("Text Search decode error: \(error)")
+                DispatchQueue.main.async { completion(.failure(PlacesAPIError.decodingFailed(error))) }
+            }
+        }.resume()
+    }
+
+    /// Internal method to perform a single autocomplete request
+    private func performAutocompleteRequest(
+        query: String,
+        location: CLLocation?,
+        mode: AutocompleteMode,
+        completion: @escaping (Result<[PlaceAutocompleteResult], Error>) -> Void
+    ) {
+        guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
+            completion(.failure(PlacesAPIError.apiKeyNotConfigured))
+            return
+        }
+
+        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
+            completion(.success([]))
+            return
+        }
+
+        let requestBody = Self.buildAutocompleteRequestBody(query: query, location: location, mode: mode)
         
         guard let url = URL(string: baseURL) else {
             completion(.failure(PlacesAPIError.invalidURL))
@@ -462,16 +866,17 @@ class PlacesAPIService {
         location: CLLocation,
         radius: Double = 1000,
         pageToken: String? = nil,
-        maxResults: Int = 10
+        maxResults: Int = 10,
+        includedPrimaryTypes: [String]? = nil
     ) async throws -> (spots: [NearbySpot], nextPageToken: String?) {
         guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
             throw PlacesAPIError.apiKeyNotConfigured
         }
-        
+
         guard let url = URL(string: nearbySearchURL) else {
             throw PlacesAPIError.invalidURL
         }
-        
+
         // Build request body for Nearby Search (New) API
         var requestBody: [String: Any] = [
             "maxResultCount": maxResults,
@@ -485,7 +890,15 @@ class PlacesAPIService {
                 ]
             ]
         ]
-        
+
+        // Restrict to specific primary types when the caller passes them —
+        // used by Search's category chips so dense urban areas reliably
+        // return 10 cafes instead of "the closest 20 places, of which 3
+        // happen to be cafes."
+        if let types = includedPrimaryTypes, !types.isEmpty {
+            requestBody["includedPrimaryTypes"] = types
+        }
+
         // Add page token for pagination if provided
         if let pageToken = pageToken {
             requestBody["pageToken"] = pageToken
