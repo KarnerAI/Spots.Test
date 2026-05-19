@@ -45,10 +45,34 @@ struct RecentSearchStoreTests {
             store.record(placeId: "p\(i)", name: "Spot \(i)", address: "Addr")
         }
 
-        #expect(store.recents.count == 10)
-        // Newest first → p14 at top, p5 at bottom (p0…p4 dropped).
+        // Cap is 5 (down from 10 in earlier builds — see RecentSearchStore
+        // comment on `cap` for the UX rationale).
+        #expect(store.recents.count == 5)
+        // Newest first → p14 at top, p10 at bottom (p0…p9 dropped).
         #expect(store.recents.first?.placeId == "p14")
-        #expect(store.recents.last?.placeId == "p5")
+        #expect(store.recents.last?.placeId == "p10")
+    }
+
+    @Test func loadTrimsOverCapPersistedData() {
+        // Simulates the cap=10 → cap=5 migration: a previous build wrote
+        // 10 entries to UserDefaults, and the current build with cap=5
+        // must surface only 5 on read instead of letting the over-cap
+        // state linger until the user's next tap.
+        let suite = UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+
+        let oversized: [RecentSpotRef] = (0..<10).map { i in
+            RecentSpotRef(placeId: "p\(i)", name: "Spot \(i)", address: "Addr", savedAt: Date())
+        }
+        defaults.set(try! JSONEncoder().encode(oversized), forKey: "spots.searchRecents.v1")
+
+        let store = RecentSearchStore(defaults: defaults)
+        #expect(store.recents.count == 5)
+        // Preserves the original ordering of the first 5 entries — load
+        // must trim from the tail, not the head, because callers expect
+        // newest-first semantics.
+        #expect(store.recents.map(\.placeId) == ["p0", "p1", "p2", "p3", "p4"])
     }
 
     @Test func persistAndReloadRoundTrip() {

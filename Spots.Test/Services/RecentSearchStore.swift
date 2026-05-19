@@ -26,7 +26,10 @@ final class RecentSearchStore: ObservableObject {
     static let shared = RecentSearchStore()
 
     private static let storageKey = "spots.searchRecents.v1"
-    private static let cap = 10
+    // 5 fits cleanly above the iOS keyboard in the Search screen's pre-typing
+    // state without scrolling. A bigger cap (10+) created a wall of history
+    // that drowned out the Nearby section underneath.
+    private static let cap = 5
 
     @Published private(set) var recents: [RecentSpotRef]
 
@@ -81,7 +84,13 @@ final class RecentSearchStore: ObservableObject {
     private static func load(from defaults: UserDefaults) -> [RecentSpotRef] {
         guard let data = defaults.data(forKey: storageKey) else { return [] }
         do {
-            return try JSONDecoder().decode([RecentSpotRef].self, from: data)
+            let decoded = try JSONDecoder().decode([RecentSpotRef].self, from: data)
+            // Trim down to the current cap on load. Earlier builds shipped
+            // with cap=10, so users upgrading carry up to 10 persisted
+            // entries — without this trim they'd see 10 rows on first
+            // launch and only collapse to 5 after their next tap. Trimming
+            // here means the new cap takes effect immediately.
+            return Array(decoded.prefix(cap))
         } catch {
             #if DEBUG
             print("⚠️ RecentSearchStore: decode failed, resetting: \(error)")
