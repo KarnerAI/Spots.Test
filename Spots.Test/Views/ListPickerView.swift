@@ -162,7 +162,7 @@ struct ListPickerView: View {
     /// just for save-sheet polish).
     private var placeSubtitle: String? {
         var parts: [String] = []
-        if let city = spotData.city, !city.isEmpty {
+        if let city = spotData.displayCity {
             parts.append(city)
         }
         if let category = humanizedCategory {

@@ -62,28 +62,6 @@ struct CuratedSpot: Identifiable, Hashable {
 }
 
 extension CuratedSpot {
-    /// Returns the display city for a curated spot's place_id, falling back to
-    /// the provided DB-stored value when the place_id isn't in the curated set.
-    ///
-    /// Why this exists: the `spots.city` column in Supabase is misnamed — it
-    /// stores `administrative_area_level_1` (state/region/province) per
-    /// NearbySpot.swift:253-259. That's intentional for the Travel Map's
-    /// region-grouping feature but produces awkward labels on the onboarding
-    /// cards ("Île-de-France" instead of "Paris", "Lazio" instead of "Rome").
-    ///
-    /// Until the broader `locality` vs `region` schema fix lands
-    /// (see TODOS.md "Fix spots.city vs locality naming"), `CuratedSpotCard`
-    /// calls this helper to swap in the cleaner display value for the 12
-    /// curated rows. All other spots app-wide keep current behavior.
-    ///
-    /// Lookup is keyed by `googlePlaceId` (the array's `id`), making the
-    /// static `all` array the authoritative override source.
-    static func displayCity(forPlaceId placeId: String, dbCity: String?) -> String {
-        all.first { $0.googlePlaceId == placeId }?.city ?? dbCity ?? ""
-    }
-}
-
-extension CuratedSpot {
     /// Curated set for onboarding screens 2 and 3. Both screens render the
     /// same array; the difference is which list the SaveSpotButton writes
     /// to (bucket vs starred).

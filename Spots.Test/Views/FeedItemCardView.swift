@@ -266,7 +266,7 @@ struct FeedItemCardView: View {
 
     private var subtitleLine: String? {
         var parts: [String] = []
-        if let city = spot?.city, !city.isEmpty {
+        if let city = spot?.displayCity {
             parts.append(city)
         }
         if let country = spot?.country, !country.isEmpty {
