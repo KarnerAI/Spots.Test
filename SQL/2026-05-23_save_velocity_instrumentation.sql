@@ -64,7 +64,15 @@ CREATE POLICY "Save events: owner reads"
   USING (auth.uid() = user_id);
 
 -- No INSERT/UPDATE/DELETE policies. Writes only via the SECURITY DEFINER
--- trigger below; analytics reads use the service role (which bypasses RLS).
+-- trigger below.
+--
+-- IMPORTANT: The owner-reads policy applies to the aggregation view too —
+-- Postgres views run with the caller's privileges, so a user-session query
+-- against `saves_per_user_7d` would return per-caller aggregates, not
+-- org-wide. Analytics reads of `saves_per_user_7d` MUST be done with the
+-- service role (Supabase Dashboard, a server-side admin tool, or a SQL
+-- editor session), which bypasses RLS. There is no client-side analytics
+-- service in T1 by design.
 
 -- ============================================
 -- Step 3: Emission trigger
