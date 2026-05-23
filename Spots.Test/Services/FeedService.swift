@@ -68,6 +68,7 @@ class FeedService {
             let name: String
             let address: String?
             let city: String?
+            let locality: String?
             let country: String?
             let latitude: Double?
             let longitude: Double?
@@ -81,7 +82,7 @@ class FeedService {
         // Spot.createdAt or Spot.updatedAt; only FeedItem.createdAt is rendered.
         let rows: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating")
+            .select("place_id, name, address, city, locality, country, latitude, longitude, types, photo_url, photo_reference, rating")
             .in("place_id", values: unique)
             .execute()
             .value
@@ -93,6 +94,7 @@ class FeedService {
                 name: r.name,
                 address: r.address,
                 city: r.city,
+                locality: r.locality,
                 country: r.country,
                 latitude: r.latitude,
                 longitude: r.longitude,

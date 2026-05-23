@@ -11,7 +11,15 @@ struct Spot: Codable, Identifiable, Equatable, Hashable {
     let placeId: String
     let name: String
     let address: String?
+    /// Misnamed historical column. Stores Google Places
+    /// `administrative_area_level_1` (e.g. "Île-de-France", "Lazio"). Retained
+    /// for region grouping and as a fallback for pre-backfill rows. Prefer
+    /// `displayCity` for any user-visible label.
     let city: String?
+    /// Google Places `locality` addressComponent (e.g. "Paris", "Rome").
+    /// Authoritative for city-context display. Nil for pre-backfill rows; the
+    /// `displayCity` computed property falls back to `city` in that case.
+    let locality: String?
     let country: String?
     let latitude: Double?
     let longitude: Double?
@@ -27,6 +35,7 @@ struct Spot: Codable, Identifiable, Equatable, Hashable {
         name: String,
         address: String? = nil,
         city: String? = nil,
+        locality: String? = nil,
         country: String? = nil,
         latitude: Double? = nil,
         longitude: Double? = nil,
@@ -41,6 +50,7 @@ struct Spot: Codable, Identifiable, Equatable, Hashable {
         self.name = name
         self.address = address
         self.city = city
+        self.locality = locality
         self.country = country
         self.latitude = latitude
         self.longitude = longitude
@@ -54,6 +64,28 @@ struct Spot: Codable, Identifiable, Equatable, Hashable {
 
     var id: String { placeId }
 
+    /// User-facing city label. Prefers `locality` ("Paris"), falls back to
+    /// `city` ("Île-de-France") for rows saved before the locality column
+    /// existed. Treats whitespace-only / empty strings as missing on both
+    /// sides — Google occasionally returns an empty `longText`, and the
+    /// fallback would otherwise render a blank UI.
+    ///
+    /// Belt-and-suspenders: writers also normalize empty→nil at the
+    /// boundary (see `NearbySpot.toNearbySpot`), so this property is
+    /// resilient to bad data that slips in via SQL imports or future
+    /// migrations.
+    var displayCity: String? {
+        if let trimmed = locality?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty {
+            return trimmed
+        }
+        if let trimmed = city?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty {
+            return trimmed
+        }
+        return nil
+    }
+
     /// Returns a copy of this spot with non-nil fields from `other` filled in
     /// where this spot's value is missing. Used to merge live Google Places
     /// enrichment into the cached row without overwriting good data.
@@ -63,6 +95,7 @@ struct Spot: Codable, Identifiable, Equatable, Hashable {
             name: name.isEmpty ? other.name : name,
             address: address ?? other.address,
             city: city ?? other.city,
+            locality: locality ?? other.locality,
             country: country ?? other.country,
             latitude: latitude ?? other.latitude,
             longitude: longitude ?? other.longitude,
@@ -79,7 +112,7 @@ struct Spot: Codable, Identifiable, Equatable, Hashable {
     /// hero feed card relies on. Drives lazy Google Places enrichment.
     var needsEnrichment: Bool {
         let hasPhoto = (photoUrl?.isEmpty == false) || (photoReference?.isEmpty == false)
-        let hasCity = (city?.isEmpty == false)
+        let hasCity = (displayCity?.isEmpty == false)
         let hasCountry = (country?.isEmpty == false)
         let hasTypes = (types?.isEmpty == false)
         let hasRating = (rating != nil)
@@ -91,6 +124,7 @@ struct Spot: Codable, Identifiable, Equatable, Hashable {
         case name
         case address
         case city
+        case locality
         case country
         case latitude
         case longitude

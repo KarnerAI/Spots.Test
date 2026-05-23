@@ -620,13 +620,25 @@ class PlacesAPIService {
             do {
                 let decoded = try JSONDecoder().decode(NearbySearchResponse.self, from: data)
                 let results: [PlaceAutocompleteResult] = (decoded.places ?? []).map { place in
-                    // Pull city + types straight from the response — same
-                    // semantics as NearbyPlaceResult.toNearbySpot, but the
-                    // target type is the autocomplete-side result struct so
-                    // the rest of SearchView's pipeline is unchanged.
-                    let city = place.addressComponents?
+                    // Pull city + locality + types straight from the response.
+                    // Mirrors NearbyPlaceResult.toNearbySpot semantics: `city`
+                    // is administrative_area_level_1 (region), `locality` is
+                    // the true city. Display callsites prefer locality via
+                    // PlaceAutocompleteResult.displayCity / Spot.displayCity.
+                    let rawCity = place.addressComponents?
                         .first { $0.types?.contains("administrative_area_level_1") ?? false }?
                         .longText
+                    let rawLocality = place.addressComponents?
+                        .first { $0.types?.contains("locality") ?? false }?
+                        .longText
+                    let city: String? = {
+                        guard let t = rawCity?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+                        return t
+                    }()
+                    let locality: String? = {
+                        guard let t = rawLocality?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+                        return t
+                    }()
                     let coord: CLLocationCoordinate2D? = place.location.map {
                         CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
                     }
@@ -635,6 +647,7 @@ class PlacesAPIService {
                         name: place.displayName?.text ?? "Unknown",
                         address: place.shortFormattedAddress ?? place.formattedAddress ?? "",
                         city: city,
+                        locality: locality,
                         types: place.types,
                         coordinate: coord
                     )
@@ -989,22 +1002,37 @@ class PlacesAPIService {
     private var placeDetailsCache: [String: NearbySpot] = [:]
     private let placeDetailsCacheMaxEntries = 50
 
-    /// Fetches place details by placeId from Google Places API
-    /// Used for getting details of tapped POI markers
-    /// - Parameter placeId: The Google Place ID
-    /// - Returns: NearbySpot with full details, or nil if not found
-    func fetchPlaceDetails(placeId: String) async throws -> NearbySpot? {
-        // Only honor cache hits that have everything the feed hero needs.
-        // A sparse cached row would short-circuit to a NearbySpot with nil
-        // city/country/rating and feed enrichment would never get those
-        // fields filled in.
-        if let cached = placeDetailsCache[placeId], cached.hasFullEnrichmentFields {
-            return cached
-        }
-        if let dbCached = await getCachedSpot(placeId: placeId), dbCached.hasFullEnrichmentFields {
-            evictPlaceDetailsCacheIfNeeded()
-            placeDetailsCache[placeId] = dbCached
-            return dbCached
+    /// Fetches place details by placeId from Google Places API.
+    /// Used for getting details of tapped POI markers and for backfill jobs.
+    ///
+    /// - Parameters:
+    ///   - placeId: The Google Place ID.
+    ///   - forceNetworkFetch: When true, both the in-memory cache and the
+    ///     DB-row cache are bypassed for the READ; the network result still
+    ///     populates both caches. Set this from backfill scripts that need to
+    ///     pick up new addressComponent types added after the cached row was
+    ///     written (e.g. the `locality` column add 2026-05-19 — pre-existing
+    ///     rows already had photo/city/country/rating populated, so the cache
+    ///     short-circuit would return a NearbySpot with `locality = nil` and
+    ///     the caller would never see fresh Google data).
+    /// - Returns: NearbySpot with full details, or nil if not found.
+    func fetchPlaceDetails(
+        placeId: String,
+        forceNetworkFetch: Bool = false
+    ) async throws -> NearbySpot? {
+        if !forceNetworkFetch {
+            // Only honor cache hits that have everything the feed hero needs.
+            // A sparse cached row would short-circuit to a NearbySpot with nil
+            // city/country/rating and feed enrichment would never get those
+            // fields filled in.
+            if let cached = placeDetailsCache[placeId], cached.hasFullEnrichmentFields {
+                return cached
+            }
+            if let dbCached = await getCachedSpot(placeId: placeId), dbCached.hasFullEnrichmentFields {
+                evictPlaceDetailsCacheIfNeeded()
+                placeDetailsCache[placeId] = dbCached
+                return dbCached
+            }
         }
 
         guard !apiKey.isEmpty && apiKey != "YOUR_GOOGLE_PLACES_API_KEY_HERE" else {
@@ -1481,6 +1509,7 @@ extension PlacesAPIService {
                 let name: String
                 let address: String?
                 let city: String?
+                let locality: String?
                 let country: String?
                 let latitude: Double?
                 let longitude: Double?
@@ -1492,7 +1521,7 @@ extension PlacesAPIService {
 
             let response: [CachedSpotRow] = try await supabase
                 .from("spots")
-                .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating")
+                .select("place_id, name, address, city, locality, country, latitude, longitude, types, photo_url, photo_reference, rating")
                 .eq("place_id", value: placeId)
                 .limit(1)
                 .execute()
@@ -1511,6 +1540,7 @@ extension PlacesAPIService {
                 name: row.name,
                 address: row.address ?? "",
                 city: row.city,
+                locality: row.locality,
                 country: row.country,
                 category: category,
                 rating: row.rating,
@@ -1533,6 +1563,7 @@ extension PlacesAPIService {
             let name: String
             let address: String
             let city: String?
+            let locality: String?
             let latitude: Double
             let longitude: Double
             let photo_url: String
@@ -1545,6 +1576,7 @@ extension PlacesAPIService {
             name: spot.name,
             address: spot.address,
             city: spot.city,
+            locality: spot.locality,
             latitude: spot.latitude,
             longitude: spot.longitude,
             photo_url: photoUrl,

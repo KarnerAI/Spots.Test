@@ -40,6 +40,7 @@ extension SpotWithMetadata {
             name: spot.name,
             address: spot.address ?? "",
             city: spot.city,
+            locality: spot.locality,
             category: NearbySpot.mapCategory(from: spot.types ?? []),
             rating: nil,
             photoReference: spot.photoReference,

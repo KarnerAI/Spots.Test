@@ -13,28 +13,53 @@ struct PlaceAutocompleteResult: Identifiable, Codable, Equatable, Hashable {
     let placeId: String
     let name: String
     let address: String
+    /// administrative_area_level_1 ("Île-de-France"). Misnamed historical field.
     let city: String?
+    /// Google Places `locality` ("Paris"). Prefer this for user-visible labels.
+    let locality: String?
     let types: [String]?
     var coordinate: CLLocationCoordinate2D? // Optional coordinate for distance calculation
     var photoUrl: String?        // Supabase cached photo URL (if available)
     var photoReference: String?  // Google Places photo reference (for fallback)
 
-    init(placeId: String, name: String, address: String, city: String? = nil, types: [String]? = nil, coordinate: CLLocationCoordinate2D? = nil, photoUrl: String? = nil, photoReference: String? = nil) {
+    init(
+        placeId: String,
+        name: String,
+        address: String,
+        city: String? = nil,
+        locality: String? = nil,
+        types: [String]? = nil,
+        coordinate: CLLocationCoordinate2D? = nil,
+        photoUrl: String? = nil,
+        photoReference: String? = nil
+    ) {
         self.id = placeId
         self.placeId = placeId
         self.name = name
         self.address = address
         self.city = city
+        self.locality = locality
         self.types = types
         self.coordinate = coordinate
         self.photoUrl = photoUrl
         self.photoReference = photoReference
     }
 
+    /// User-facing city label. Mirrors `Spot.displayCity` — prefers
+    /// `locality`, falls back to the misnamed `city` (region) for older
+    /// rows that don't have locality populated yet.
+    var displayCity: String? {
+        if let trimmed = locality?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty { return trimmed }
+        if let trimmed = city?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty { return trimmed }
+        return nil
+    }
+
     // MARK: - Codable (custom for CLLocationCoordinate2D)
 
     enum CodingKeys: String, CodingKey {
-        case id, placeId, name, address, city, types
+        case id, placeId, name, address, city, locality, types
         case coordinateLatitude, coordinateLongitude
         case photoUrl, photoReference
     }
@@ -46,6 +71,7 @@ struct PlaceAutocompleteResult: Identifiable, Codable, Equatable, Hashable {
         name = try container.decode(String.self, forKey: .name)
         address = try container.decode(String.self, forKey: .address)
         city = try container.decodeIfPresent(String.self, forKey: .city)
+        locality = try container.decodeIfPresent(String.self, forKey: .locality)
         types = try container.decodeIfPresent([String].self, forKey: .types)
         photoUrl = try container.decodeIfPresent(String.self, forKey: .photoUrl)
         photoReference = try container.decodeIfPresent(String.self, forKey: .photoReference)
@@ -65,6 +91,7 @@ struct PlaceAutocompleteResult: Identifiable, Codable, Equatable, Hashable {
         try container.encode(name, forKey: .name)
         try container.encode(address, forKey: .address)
         try container.encodeIfPresent(city, forKey: .city)
+        try container.encodeIfPresent(locality, forKey: .locality)
         try container.encodeIfPresent(types, forKey: .types)
         try container.encodeIfPresent(photoUrl, forKey: .photoUrl)
         try container.encodeIfPresent(photoReference, forKey: .photoReference)
@@ -85,6 +112,7 @@ struct PlaceAutocompleteResult: Identifiable, Codable, Equatable, Hashable {
             && lhs.name == rhs.name
             && lhs.address == rhs.address
             && lhs.city == rhs.city
+            && lhs.locality == rhs.locality
             && lhs.types == rhs.types
             && lhs.photoUrl == rhs.photoUrl
             && lhs.photoReference == rhs.photoReference
@@ -102,7 +130,7 @@ struct PlaceAutocompleteResult: Identifiable, Codable, Equatable, Hashable {
 struct PlacesAutocompleteResponse: Codable {
     let predictions: [OldPlacePrediction]
     let status: String
-    
+
     enum CodingKeys: String, CodingKey {
         case predictions
         case status
@@ -113,7 +141,7 @@ struct OldPlacePrediction: Codable {
     let placeId: String
     let description: String
     let structuredFormatting: StructuredFormatting?
-    
+
     enum CodingKeys: String, CodingKey {
         case placeId = "place_id"
         case description
@@ -124,10 +152,9 @@ struct OldPlacePrediction: Codable {
 struct StructuredFormatting: Codable {
     let mainText: String
     let secondaryText: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case mainText = "main_text"
         case secondaryText = "secondary_text"
     }
 }
-

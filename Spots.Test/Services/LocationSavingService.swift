@@ -25,6 +25,7 @@ protocol LocationSavingServiceProtocol: AnyObject {
         name: String,
         address: String?,
         city: String?,
+        locality: String?,
         country: String?,
         latitude: Double?,
         longitude: Double?,
@@ -117,6 +118,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
         name: String,
         address: String?,
         city: String? = nil,
+        locality: String? = nil,
         country: String? = nil,
         latitude: Double?,
         longitude: Double?,
@@ -133,6 +135,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let p_name: String
             let p_address: String?
             let p_city: String?
+            let p_locality: String?
             let p_country: String?
             let p_latitude: Double?
             let p_longitude: Double?
@@ -156,6 +159,11 @@ class LocationSavingService: LocationSavingServiceProtocol {
                     try container.encode(city, forKey: .p_city)
                 } else {
                     try container.encodeNil(forKey: .p_city)
+                }
+                if let locality = p_locality {
+                    try container.encode(locality, forKey: .p_locality)
+                } else {
+                    try container.encodeNil(forKey: .p_locality)
                 }
                 if let country = p_country {
                     try container.encode(country, forKey: .p_country)
@@ -199,6 +207,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 case p_name
                 case p_address
                 case p_city
+                case p_locality
                 case p_country
                 case p_latitude
                 case p_longitude
@@ -214,6 +223,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             p_name: name,
             p_address: address,
             p_city: city,
+            p_locality: locality,
             p_country: country,
             p_latitude: latitude,
             p_longitude: longitude,
@@ -288,6 +298,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let locality: String?
             let country: String?
             let latitude: Double?
             let longitude: Double?
@@ -301,7 +312,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
         // UI uses SpotWithMetadata.savedAt, not Spot.createdAt/updatedAt.
         let batchResponse: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating")
+            .select("place_id, name, address, city, locality, country, latitude, longitude, types, photo_url, photo_reference, rating")
             .in("place_id", values: placeIds)
             .execute()
             .value
@@ -313,6 +324,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 name: spotData.name,
                 address: spotData.address,
                 city: spotData.city,
+                locality: spotData.locality,
                 country: spotData.country,
                 latitude: spotData.latitude,
                 longitude: spotData.longitude,
@@ -412,6 +424,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let locality: String?
             let country: String?
             let latitude: Double?
             let longitude: Double?
@@ -425,7 +438,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
         let batchResponse: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
+            .select("place_id, name, address, city, locality, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
             .in("place_id", values: uniquePlaceIds)
             .execute()
             .value
@@ -439,6 +452,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 name: spotData.name,
                 address: spotData.address,
                 city: spotData.city,
+                locality: spotData.locality,
                 country: spotData.country,
                 latitude: spotData.latitude,
                 longitude: spotData.longitude,
@@ -517,6 +531,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let locality: String?
             let country: String?
             let latitude: Double?
             let longitude: Double?
@@ -530,7 +545,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
         let batchResponse: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
+            .select("place_id, name, address, city, locality, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
             .in("place_id", values: uniquePlaceIds)
             .execute()
             .value
@@ -544,6 +559,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 name: spotData.name,
                 address: spotData.address,
                 city: spotData.city,
+                locality: spotData.locality,
                 country: spotData.country,
                 latitude: spotData.latitude,
                 longitude: spotData.longitude,
@@ -610,6 +626,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let locality: String?
             let country: String?
             let latitude: Double?
             let longitude: Double?
@@ -623,7 +640,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
         let response: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
+            .select("place_id, name, address, city, locality, country, latitude, longitude, types, photo_url, photo_reference, rating, created_at, updated_at")
             .eq("place_id", value: placeId)
             .limit(1)
             .execute()
@@ -641,6 +658,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             name: spotData.name,
             address: spotData.address,
             city: spotData.city,
+            locality: spotData.locality,
             country: spotData.country,
             latitude: spotData.latitude,
             longitude: spotData.longitude,
@@ -739,6 +757,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             let name: String
             let address: String?
             let city: String?
+            let locality: String?
             let country: String?
             let latitude: Double?
             let longitude: Double?
@@ -750,7 +769,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
         let response: [SpotResponse] = try await supabase
             .from("spots")
-            .select("place_id, name, address, city, country, latitude, longitude, types, photo_url, photo_reference, rating")
+            .select("place_id, name, address, city, locality, country, latitude, longitude, types, photo_url, photo_reference, rating")
             .in("place_id", values: unique)
             .execute()
             .value
@@ -761,6 +780,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 name: row.name,
                 address: row.address,
                 city: row.city,
+                locality: row.locality,
                 country: row.country,
                 latitude: row.latitude,
                 longitude: row.longitude,

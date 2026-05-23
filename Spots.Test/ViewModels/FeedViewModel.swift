@@ -224,6 +224,7 @@ class FeedViewModel: ObservableObject {
                     name: spot.name,
                     address: spot.address,
                     city: spot.city,
+                    locality: spot.locality,
                     country: spot.country,
                     latitude: spot.latitude,
                     longitude: spot.longitude,

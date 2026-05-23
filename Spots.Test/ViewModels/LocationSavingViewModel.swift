@@ -150,6 +150,7 @@ class LocationSavingViewModel: ObservableObject {
         name: String,
         address: String?,
         city: String? = nil,
+        locality: String? = nil,
         country: String? = nil,
         latitude: Double?,
         longitude: Double?,
@@ -185,6 +186,7 @@ class LocationSavingViewModel: ObservableObject {
         // rows. fetchPlaceDetails is cache-backed; subsequent saves of the same
         // placeId in this session don't pay the API cost.
         var resolvedCity = city
+        var resolvedLocality = locality
         var resolvedCountry = country
         var resolvedTypes = types
         var resolvedPhotoUrl = photoUrl
@@ -194,6 +196,7 @@ class LocationSavingViewModel: ObservableObject {
         let needsDetails = (resolvedCountry?.isEmpty ?? true)
             || (resolvedRating == nil)
             || (resolvedCity?.isEmpty ?? true)
+            || (resolvedLocality?.isEmpty ?? true)
             || (resolvedTypes?.isEmpty ?? true)
         if needsDetails {
             // Previously this used `try?`, which silently swallowed every
@@ -207,6 +210,7 @@ class LocationSavingViewModel: ObservableObject {
             do {
                 if let details = try await PlacesAPIService.shared.fetchPlaceDetails(placeId: placeId) {
                     if (resolvedCity?.isEmpty ?? true) { resolvedCity = details.city }
+                    if (resolvedLocality?.isEmpty ?? true) { resolvedLocality = details.locality }
                     if (resolvedCountry?.isEmpty ?? true) { resolvedCountry = details.country }
                     if (resolvedTypes?.isEmpty ?? true), !details.category.isEmpty {
                         resolvedTypes = [details.category.lowercased().replacingOccurrences(of: " ", with: "_")]
@@ -260,6 +264,7 @@ class LocationSavingViewModel: ObservableObject {
             name: name,
             address: address,
             city: resolvedCity,
+            locality: resolvedLocality,
             country: resolvedCountry,
             latitude: latitude,
             longitude: longitude,
@@ -367,6 +372,7 @@ class LocationSavingViewModel: ObservableObject {
                     name: spotData.name,
                     address: spotData.address,
                     city: spotData.city,
+                    locality: spotData.locality,
                     latitude: spotData.coordinate?.latitude,
                     longitude: spotData.coordinate?.longitude,
                     types: spotData.types,
