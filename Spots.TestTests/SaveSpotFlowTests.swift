@@ -114,6 +114,7 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
         name: String,
         address: String?,
         city: String?,
+        locality: String?,
         country: String?,
         latitude: Double?,
         longitude: Double?,

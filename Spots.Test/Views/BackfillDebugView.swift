@@ -27,9 +27,12 @@ struct BackfillDebugView: View {
     @State private var lastReport: PhotoBackfillService.BackfillReport?
     @State private var errorMessage: String?
 
+    @StateObject private var localityBackfill = LocalityBackfillService.shared
+    @State private var localityLimitText: String = ""
+
     var body: some View {
         Form {
-            Section(header: Text("Run").font(.headline)) {
+            Section(header: Text("Photo backfill").font(.headline)) {
                 Toggle("Dry-run sweep (recommended for first run)", isOn: $dryRunSweep)
                 HStack {
                     Text("Limit (blank = all)")
@@ -70,13 +73,65 @@ struct BackfillDebugView: View {
                 }
             }
 
+            // MARK: - Locality backfill
+            //
+            // Fixes the user-visible bug where saved spots showed
+            // "Île-de-France" instead of "Paris" (region vs locality). Adds
+            // the locality field to rows saved before the column existed.
+            // Re-fetches via Google Places — one lookup per row — throttled
+            // to ~5 QPS. Re-runnable: skips rows that already have locality.
+            Section(header: Text("Locality backfill").font(.headline)) {
+                HStack {
+                    Text("Limit (blank = all)")
+                    Spacer()
+                    TextField("e.g. 50", text: $localityLimitText)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                }
+                Button(action: triggerLocalityBackfill) {
+                    HStack {
+                        if localityBackfill.progress.isRunning {
+                            ProgressView().padding(.trailing, 6)
+                        }
+                        Text(localityBackfill.progress.isRunning ? "Running..." : "Backfill locality")
+                    }
+                }
+                .disabled(localityBackfill.progress.isRunning)
+
+                let p = localityBackfill.progress
+                if p.total > 0 || p.isRunning {
+                    LabeledRow("Progress", "\(p.processed) / \(p.total)")
+                    LabeledRow("Updated", "\(p.updated)")
+                    LabeledRow("Skipped (no locality)", "\(p.skippedNoLocality)")
+                    LabeledRow("Failures", "\(p.failures.count)")
+                }
+                if !p.failures.isEmpty {
+                    DisclosureGroup("Failure details") {
+                        ForEach(Array(p.failures.enumerated()), id: \.offset) { _, failure in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(failure.placeId).font(.caption.monospaced())
+                                Text(failure.reason).font(.caption2).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+
             Section(header: Text("Notes").font(.headline).foregroundColor(.secondary)) {
                 Text("Keep this screen foregrounded for the duration. iOS suspends backgrounded apps after ~30s; an interrupted run is safe to resume — backfill is idempotent.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
         }
-        .navigationTitle("Photo backfill (debug)")
+        .navigationTitle("Backfill (debug)")
+    }
+
+    private func triggerLocalityBackfill() {
+        let parsed = Int(localityLimitText.trimmingCharacters(in: .whitespaces))
+        Task {
+            await LocalityBackfillService.shared.run(limit: parsed)
+        }
     }
 
     private func triggerRun() {

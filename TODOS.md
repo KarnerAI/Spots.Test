@@ -22,21 +22,29 @@ Deferred work items captured during planning + reviews. Each item is self-contai
 
 ---
 
-## P2 — Fix spots.city vs locality naming
+## ~~P2 — Fix spots.city vs locality naming~~ (DONE 2026-05-19, branch `fix-city-mapping-05.19.26`)
 
-**What:** The `spots.city` column actually stores `administrative_area_level_1` (state/region/province), not the literal city/locality. Add a proper `locality` column (Paris, Rome, Mexico City) alongside the existing `city`-which-is-actually-region. Update `NearbySpot.toNearbySpot()` to populate both. Audit display callsites and prefer `locality` for city-like contexts, keep `region` for grouping contexts (Travel Map, profile region groupings).
+**Shipped:** `locality TEXT` column added to `spots`; `NearbySpot.toNearbySpot()` populates locality from `addressComponents.locality.longText` with empty→nil normalization at the boundary; `Spot.displayCity` computed property centralizes the `locality ?? city` fallback rule; all display callsites (ListDetailView, SpottedByView, FeedItemCardView, ListPickerView, CuratedSpotCard, LocationGrouping.cityRows) read via `displayCity`; `CuratedSpot.displayCity(forPlaceId:dbCity:)` workaround deleted; `LocalityBackfillService` + debug-screen button re-fetches null-locality rows from Google Places (throttled 5 QPS, resumable, observable).
 
-**Why:** The current naming is confusing for new contributors and produces awkward labels in the UI for international spots ("Île-de-France" under Eiffel Tower, "Lazio" under the Colosseum, "Catalunya" under Sagrada Família). For US spots it works because the state name often coincides with the user's mental "city" anchor. The misnaming was deliberate (per `NearbySpot.swift:253-259` comment) — the column was repurposed to drive the Travel Map's region grouping — but it never got renamed afterwards.
+**Follow-up captured below as P3 — Rename spots.city → spots.region.**
 
-**Pros:** Display labels become honest. Anyone reading the schema understands what each column holds. Onboarding cards (and any future feature) can use the right value without per-feature overrides.
+---
 
-**Cons:** Schema migration touches every existing `spots` row (backfill `locality` from address parsing). Display callsites across the app need an audit: feed hero card subtitle, list grouping views (the "Île-de-France" header from the screenshot that surfaced this), Travel Map. Risk of mid-migration UI states.
+## P3 — Rename spots.city → spots.region (DB-side cleanup)
 
-**Context:** Surfaced during onboarding implementation 2026-05-12 when curated cards showed "Île-de-France" under Eiffel Tower and "Lazio" under Colosseum. Worked around in v1 via `CuratedSpot.displayCity(forPlaceId:dbCity:)` (see `Spots.Test/Constants/CuratedSpots.swift`) — this TODO removes the workaround and fixes the root cause.
+**What:** The `spots.city` column is now load-bearing only as a region fallback for pre-backfill rows and for Travel Map grouping. Once `LocalityBackfillService` has been run against production and verified, the column should be renamed to `spots.region` to match what it actually stores. Pair with a Swift-side rename of `Spot.city` → `Spot.region`.
 
-**Effort:** Human ~1-2 days / CC ~4-6 hours. Steps: (1) add `locality TEXT` column to spots, (2) backfill from `address_components.locality.longText` via a one-off script that re-parses existing rows or re-fetches via Google Places, (3) update `NearbySpot.toNearbySpot()` to populate `locality`, (4) audit display callsites and choose per-context which column to render, (5) remove the `CuratedSpot.displayCity` workaround.
+**Why:** Eliminates the last bit of cognitive load from the misnamed column. New contributors no longer need the "city actually means region" explanation.
 
-**Priority:** P2. **Depends on:** v1 onboarding shipped (don't block on this); decide on rename strategy (keep `city` as region alias vs full rename with read-side compatibility).
+**Pros:** Schema becomes fully self-documenting.
+
+**Cons:** Touches every SELECT clause that mentions `city`, every Spot constructor, every Codable CodingKey, every SpotResponse struct in services. Larger diff than this PR, but mechanical. Needs a coordinated client + DB rollout: ship a client that reads `region` (with read-side fallback to `city` for one release) before the DB column rename, or both columns aliased via a generated/computed view.
+
+**Context:** Surfaced 2026-05-19 alongside the locality column add. `Spot.displayCity` already abstracts this from UI callers, so the rename is contained to the data layer.
+
+**Effort:** Human ~half day / CC ~1-2 hours. **Depends on:** locality backfill complete (verified via `SELECT count(*) FROM spots WHERE locality IS NULL`) — once that count stabilizes at "spots that genuinely have no locality" (remote attractions, etc.), the rename is safe.
+
+**Priority:** P3.
 
 ---
 

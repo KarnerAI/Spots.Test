@@ -18,9 +18,10 @@ struct LocationGroupingTests {
     private func spot(
         id: String,
         city: String? = nil,
+        locality: String? = nil,
         country: String? = nil
     ) -> Spot {
-        Spot(placeId: id, name: "Spot \(id)", city: city, country: country)
+        Spot(placeId: id, name: "Spot \(id)", city: city, locality: locality, country: country)
     }
 
     // MARK: - cityRows
@@ -152,5 +153,56 @@ struct LocationGroupingTests {
             let matched = spots.filter { LocationGrouping.matchesCity($0, row.name) }.count
             #expect(matched == row.count)
         }
+    }
+
+    // MARK: - locality-aware grouping (regression: Île-de-France → Paris)
+
+    /// Regression for the user-visible bug that motivated the locality column.
+    /// Saved spots in Paris used to group under "Île-de-France" because the
+    /// `city` column actually stored administrative_area_level_1. With the
+    /// locality column populated, the same spots now group under "Paris".
+    @Test func regression_groupsByLocalityWhenPresent() {
+        let spots = [
+            spot(id: "1", city: "Île-de-France", locality: "Paris"),
+            spot(id: "2", city: "Île-de-France", locality: "Paris"),
+            spot(id: "3", city: "Île-de-France", locality: "Versailles"),
+        ]
+        let rows = LocationGrouping.cityRows(from: spots)
+        #expect(rows.map(\.name).sorted() == ["Paris", "Versailles"])
+        #expect(rows.first(where: { $0.name == "Paris" })?.count == 2)
+    }
+
+    /// Pre-backfill rows (no locality) fall back to the region label so they
+    /// keep grouping somewhere instead of dropping out of the Travel Map.
+    @Test func fallsBackToCityWhenLocalityNil() {
+        let spots = [
+            spot(id: "1", city: "Île-de-France", locality: nil),
+            spot(id: "2", city: "Île-de-France", locality: nil),
+        ]
+        let rows = LocationGrouping.cityRows(from: spots)
+        #expect(rows.count == 1)
+        #expect(rows[0].name == "Île-de-France")
+        #expect(rows[0].count == 2)
+    }
+
+    /// Mixed-state: some rows backfilled, some not. They should NOT collapse
+    /// into one bucket — "Paris" and "Île-de-France" are different display
+    /// keys until backfill finishes the migration.
+    @Test func mixedPreAndPostBackfillStaySeparate() {
+        let spots = [
+            spot(id: "1", city: "Île-de-France", locality: "Paris"),
+            spot(id: "2", city: "Île-de-France", locality: nil),
+        ]
+        let rows = LocationGrouping.cityRows(from: spots)
+        #expect(rows.count == 2)
+        #expect(Set(rows.map(\.name)) == ["Paris", "Île-de-France"])
+    }
+
+    @Test func matchesCityPrefersLocality() {
+        let s = spot(id: "1", city: "Île-de-France", locality: "Paris")
+        #expect(LocationGrouping.matchesCity(s, "Paris"))
+        // The region label no longer matches when locality is present —
+        // matches the new display behavior.
+        #expect(!LocationGrouping.matchesCity(s, "Île-de-France"))
     }
 }
