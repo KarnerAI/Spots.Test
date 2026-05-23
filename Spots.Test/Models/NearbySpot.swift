@@ -12,7 +12,12 @@ struct NearbySpot: Identifiable, Equatable {
     let placeId: String
     let name: String
     let address: String
+    /// administrative_area_level_1 ("Île-de-France"). Misnamed historical
+    /// field, retained for region grouping. Prefer `displayCity` on the
+    /// downstream `Spot` for any user-visible label.
     let city: String?
+    /// Google Places `locality` ("Paris"). Authoritative for city display.
+    let locality: String?
     let country: String?
     let category: String
     let rating: Double?
@@ -24,14 +29,14 @@ struct NearbySpot: Identifiable, Equatable {
     // Distance is computed based on user location
     var distanceMeters: Double?
 
-    /// Explicit init that defaults `country` and `distanceMeters` so existing
-    /// call sites (which pre-date the country field) keep compiling without
-    /// changes.
+    /// Explicit init. All new optional fields default to nil so older call
+    /// sites that pre-date `country` and `locality` keep compiling.
     init(
         placeId: String,
         name: String,
         address: String,
         city: String? = nil,
+        locality: String? = nil,
         country: String? = nil,
         category: String,
         rating: Double? = nil,
@@ -45,6 +50,7 @@ struct NearbySpot: Identifiable, Equatable {
         self.name = name
         self.address = address
         self.city = city
+        self.locality = locality
         self.country = country
         self.category = category
         self.rating = rating
@@ -137,6 +143,7 @@ struct NearbySpot: Identifiable, Equatable {
             name: name,
             address: address,
             city: city,
+            locality: locality,
             country: country,
             latitude: latitude,
             longitude: longitude,
@@ -158,6 +165,7 @@ struct NearbySpot: Identifiable, Equatable {
             name: name,
             address: address,
             city: city,
+            locality: locality,
             types: category.isEmpty ? nil : [category.lowercased().replacingOccurrences(of: " ", with: "_")],
             coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
             photoUrl: photoUrl,
@@ -267,18 +275,23 @@ struct NearbyPlaceResult: Codable {
         
         let category = NearbySpot.mapCategory(from: types ?? [])
 
-        // The Spot model's `city` field is repurposed as "regional locality" —
-        // for US/CA addresses this is the state, for international it's the
-        // closest equivalent (province, region, prefecture). Drives the
-        // 'State • Country • Category' subtitle on the feed hero card.
-        let city = addressComponents?
+        // The historical `city` field stores administrative_area_level_1
+        // (state/region) and is retained for region grouping (Travel Map,
+        // profile region rows) and as a back-compat fallback. The new
+        // `locality` field is the true city ("Paris", "Tokyo") and is what
+        // user-visible labels should prefer via `Spot.displayCity`.
+        let city = NearbyPlaceResult.normalize(addressComponents?
             .first { $0.types?.contains("administrative_area_level_1") ?? false }?
-            .longText
+            .longText)
+
+        let locality = NearbyPlaceResult.normalize(addressComponents?
+            .first { $0.types?.contains("locality") ?? false }?
+            .longText)
 
         // Country long name (e.g. "United States", "Japan") for the subtitle.
-        let country = addressComponents?
+        let country = NearbyPlaceResult.normalize(addressComponents?
             .first { $0.types?.contains("country") ?? false }?
-            .longText
+            .longText)
 
         // Extract photo reference from the first photo
         // The photo name format is: "places/{placeId}/photos/{photoReference}"
@@ -298,6 +311,7 @@ struct NearbyPlaceResult: Codable {
             name: name,
             address: address,
             city: city,
+            locality: locality,
             country: country,
             category: category,
             rating: rating,
@@ -306,6 +320,17 @@ struct NearbyPlaceResult: Codable {
             latitude: location.latitude,
             longitude: location.longitude
         )
+    }
+
+    /// Trim + treat empty/whitespace-only as nil. Google occasionally
+    /// returns addressComponent `longText: ""` and the downstream
+    /// `?? city` fallback in `Spot.displayCity` only triggers on nil,
+    /// not empty string. Normalizing at the boundary keeps bad data
+    /// out of the database.
+    fileprivate static func normalize(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 }
 
@@ -356,19 +381,25 @@ struct PlaceDetailsResponse: Codable {
         let category = NearbySpot.mapCategory(from: types ?? [])
         let photoReference = photos?.first?.name
 
-        // Same semantics as PlaceResult.toNearbySpot: state-level + long country.
-        let city = addressComponents?
+        // Mirrors PlaceResult.toNearbySpot. `city` stays as
+        // administrative_area_level_1 for region grouping; `locality` is the
+        // true city. See `Spot.displayCity` for the read-side rule.
+        let city = PlaceDetailsResponse.normalize(addressComponents?
             .first { $0.types?.contains("administrative_area_level_1") ?? false }?
-            .longText
-        let country = addressComponents?
+            .longText)
+        let locality = PlaceDetailsResponse.normalize(addressComponents?
+            .first { $0.types?.contains("locality") ?? false }?
+            .longText)
+        let country = PlaceDetailsResponse.normalize(addressComponents?
             .first { $0.types?.contains("country") ?? false }?
-            .longText
+            .longText)
 
         return NearbySpot(
             placeId: id,
             name: name,
             address: address,
             city: city,
+            locality: locality,
             country: country,
             category: category,
             rating: rating,
@@ -377,5 +408,13 @@ struct PlaceDetailsResponse: Codable {
             latitude: location.latitude,
             longitude: location.longitude
         )
+    }
+
+    /// Boundary normalizer: trim + empty→nil. See identical helper on
+    /// `NearbyPlaceResult` for rationale.
+    fileprivate static func normalize(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 }

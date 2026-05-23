@@ -122,9 +122,10 @@ enum LocationGrouping {
         return value.lowercased()
     }
 
-    /// `spot.city` matches `query` after normalization.
+    /// `spot.displayCity` matches `query` after normalization. Prefers the
+    /// true locality ("Paris") over the misnamed region column.
     static func matchesCity(_ spot: Spot, _ query: String) -> Bool {
-        guard let normSpot = normalize(spot.city), let normQuery = normalize(query) else { return false }
+        guard let normSpot = normalize(spot.displayCity), let normQuery = normalize(query) else { return false }
         return normSpot == normQuery
     }
 
@@ -135,11 +136,17 @@ enum LocationGrouping {
     }
 
     /// Group spots by normalized city, dropping empties. Sorted by count desc, name asc.
+    ///
+    /// Uses `Spot.displayCity` so the Travel Map (and any other consumer)
+    /// groups by the true locality ("Paris", "Rome") when present, falling
+    /// back to the misnamed `city` (region) for pre-backfill rows. This was
+    /// the user-visible bug that motivated the locality column: tapping a
+    /// region label like "Île-de-France" surprised users who expected "Paris".
     static func cityRows(from spots: [Spot]) -> [CityRowData] {
         var buckets: [String: (display: String, count: Int)] = [:]
         for spot in spots {
-            guard let key = normalize(spot.city),
-                  let display = spot.city?.trimmingCharacters(in: .whitespacesAndNewlines), !display.isEmpty
+            guard let display = spot.displayCity,
+                  let key = normalize(display)
             else { continue }
             if var existing = buckets[key] {
                 existing.count += 1

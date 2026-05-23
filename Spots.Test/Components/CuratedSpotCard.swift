@@ -182,12 +182,12 @@ struct CuratedSpotCard: View {
         .padding(.vertical, 10)
     }
 
-    /// Display city for the card, swapping the DB's
-    /// administrative_area_level_1 ("Île-de-France") for the cleaner
-    /// curated label ("Paris") on the 12 onboarding spots. Falls back
-    /// to the DB value for anything not in the curated set.
+    /// Display city for the card. Reads `Spot.displayCity`, which prefers the
+    /// real locality ("Paris") and falls back to the misnamed `city` (region)
+    /// for pre-backfill rows. The earlier `CuratedSpot.displayCity` workaround
+    /// is no longer needed now that the schema has a true locality column.
     private var displayCity: String {
-        CuratedSpot.displayCity(forPlaceId: spot.placeId, dbCity: spot.city)
+        spot.displayCity ?? ""
     }
 
     // MARK: - Accessibility

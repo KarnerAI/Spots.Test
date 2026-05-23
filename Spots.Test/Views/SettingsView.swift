@@ -99,6 +99,10 @@ struct SettingsView: View {
                     .padding(.top, sectionHeaderTopPadding)
                 maintenanceSection
 
+                #if DEBUG
+                debugBackfillRow
+                #endif
+
                 sectionHeader("ACCOUNT ACTIONS")
                     .padding(.top, sectionHeaderTopPadding)
                 accountActionsSection
@@ -189,6 +193,45 @@ struct SettingsView: View {
         }
         .background(Color.white)
     }
+
+    #if DEBUG
+    /// DEBUG-only navigation row into BackfillDebugView. Hosts the locality
+    /// backfill button used to populate the new `spots.locality` column on
+    /// rows saved before the column existed. Stripped from Release builds.
+    private var debugBackfillRow: some View {
+        NavigationLink(destination: BackfillDebugView()) {
+            HStack(alignment: .center, spacing: iconTextGap) {
+                ZStack {
+                    Circle()
+                        .fill(SettingsColors.iconBgTeal)
+                        .frame(width: iconSize, height: iconSize)
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: symbolSize))
+                        .foregroundColor(.spotsTeal)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Backfill (debug)")
+                        .font(.system(size: 14))
+                        .foregroundColor(SettingsColors.primaryText)
+                    Text("Locality + photo backfill tools")
+                        .font(.system(size: 12))
+                        .foregroundColor(SettingsColors.secondaryText)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(SettingsColors.secondaryText)
+            }
+            .padding(.horizontal, horizontalPadding)
+            .frame(minHeight: rowHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(Color.white)
+    }
+    #endif
 
     private var maintenanceSection: some View {
         Button {

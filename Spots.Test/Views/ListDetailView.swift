@@ -665,7 +665,7 @@ struct SavedSpotRow: View {
                         .lineLimit(1)
                 }
 
-                let cityText = spot.city?.isEmpty == false ? spot.city : nil
+                let cityText = spot.displayCity
                 if cityText != nil || distanceText != nil {
                     HStack(spacing: 0) {
                         if let cityText {

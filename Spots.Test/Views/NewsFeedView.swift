@@ -257,6 +257,7 @@ struct NewsFeedView: View {
             name: spot.name,
             address: spot.address ?? "",
             city: spot.city,
+            locality: spot.locality,
             types: spot.types,
             coordinate: coordinate,
             photoUrl: spot.photoUrl,

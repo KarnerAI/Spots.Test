@@ -75,7 +75,7 @@ struct SpottedByView: View {
 
     private var subtitleLine: String? {
         var parts: [String] = []
-        if let city = spot.city, !city.isEmpty { parts.append(city) }
+        if let city = spot.displayCity { parts.append(city) }
         if let country = spot.country, !country.isEmpty { parts.append(country) }
         if let category = humanizedCategory { parts.append(category) }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
