@@ -11,8 +11,8 @@
 //
 //  Save flow (see saveSpotToLists):
 //
-//    user picks lists → coerceToSingleDefault (radio across .favorites / .starred / .bucketList)
-//      → optimistic spotListTypeMap[placeId] = listType for new default
+//    user picks lists → coerceToSingleDefault (radio across .liked / .favorites / .wantToGo)
+//      → optimistic spotListKindMap[placeId] = kind for new default
 //      → ADD to new lists (if any add fails → throw → rollback)
 //      → REMOVE from de-selected lists (best-effort; failures don't roll back the add)
 //
@@ -32,7 +32,7 @@ class LocationSavingViewModel: ObservableObject {
 
     // MARK: - Saved-places state (lifted from MapViewModel)
     @Published var savedPlaces: [SpotWithMetadata] = []
-    @Published var spotListTypeMap: [String: ListType] = [:]
+    @Published var spotListKindMap: [String: ListKind] = [:]
     @Published var hasLoadedSavedPlacesOnce: Bool = false
 
     /// Drives a transient toast at the app root when an optimistic save/remove
@@ -79,7 +79,7 @@ class LocationSavingViewModel: ObservableObject {
     // MARK: - Load Saved Places
     //
     // Pulls every spot in the three default lists, dedupes by placeId merging
-    // listTypes sets, then computes spotListTypeMap via the priority resolver
+    // listKinds sets, then computes spotListKindMap via the priority resolver
     // (bucketList > starred > favorites). Lifted from MapViewModel so both
     // Explore (map markers) and Newsfeed (per-card icon) read one truth.
 
@@ -90,35 +90,35 @@ class LocationSavingViewModel: ObservableObject {
         }
 
         do {
-            let starredList = try await service.getListByType(.starred)
-            let favoritesList = try await service.getListByType(.favorites)
-            let bucketList = try await service.getListByType(.bucketList)
+            let starredList = try await service.getListByKind(.favorites)
+            let favoritesList = try await service.getListByKind(.liked)
+            let bucketList = try await service.getListByKind(.wantToGo)
 
             var allPlaces: [SpotWithMetadata] = []
 
             if let starredId = starredList?.id {
-                let starredPlaces = try await service.getSpotsInList(listId: starredId, listType: .starred)
+                let starredPlaces = try await service.getSpotsInList(listId: starredId, kind: .favorites)
                 allPlaces.append(contentsOf: starredPlaces)
             }
             if let favoritesId = favoritesList?.id {
-                let favoritesPlaces = try await service.getSpotsInList(listId: favoritesId, listType: .favorites)
+                let favoritesPlaces = try await service.getSpotsInList(listId: favoritesId, kind: .liked)
                 allPlaces.append(contentsOf: favoritesPlaces)
             }
             if let bucketId = bucketList?.id {
-                let bucketPlaces = try await service.getSpotsInList(listId: bucketId, listType: .bucketList)
+                let bucketPlaces = try await service.getSpotsInList(listId: bucketId, kind: .wantToGo)
                 allPlaces.append(contentsOf: bucketPlaces)
             }
 
-            // Aggregate by placeId — merge listTypes sets, keep most-recent savedAt.
+            // Aggregate by placeId — merge listKinds sets, keep most-recent savedAt.
             var uniquePlaces: [String: SpotWithMetadata] = [:]
             for place in allPlaces {
                 if let existing = uniquePlaces[place.spot.placeId] {
-                    let mergedListTypes = existing.listTypes.union(place.listTypes)
+                    let mergedListTypes = existing.listKinds.union(place.listKinds)
                     let mostRecentSavedAt = max(existing.savedAt, place.savedAt)
                     uniquePlaces[place.spot.placeId] = SpotWithMetadata(
                         spot: existing.spot,
                         savedAt: mostRecentSavedAt,
-                        listTypes: mergedListTypes
+                        listKinds: mergedListTypes
                     )
                 } else {
                     uniquePlaces[place.spot.placeId] = place
@@ -127,11 +127,11 @@ class LocationSavingViewModel: ObservableObject {
 
             savedPlaces = Array(uniquePlaces.values)
 
-            // O(1) lookup map for cards: placeId → display ListType (priority resolver).
-            spotListTypeMap = Dictionary(uniqueKeysWithValues:
+            // O(1) lookup map for cards: placeId → display ListKind (priority resolver).
+            spotListKindMap = Dictionary(uniqueKeysWithValues:
                 savedPlaces.compactMap { spot in
-                    guard let listType = displayListType(for: spot.listTypes) else { return nil }
-                    return (spot.spot.placeId, listType)
+                    guard let kind = displayKind(for: spot.listKinds) else { return nil }
+                    return (spot.spot.placeId, kind)
                 }
             )
 
@@ -295,12 +295,12 @@ class LocationSavingViewModel: ObservableObject {
     func removeSpot(placeId: String, fromListId: UUID) async throws {
         try await runSerialized(forPlaceId: placeId) { [weak self] in
             guard let self else { return }
-            let prior = self.spotListTypeMap[placeId]
-            self.spotListTypeMap[placeId] = nil
+            let prior = self.spotListKindMap[placeId]
+            self.spotListKindMap[placeId] = nil
             do {
                 try await self.service.removeSpotFromList(placeId: placeId, listId: fromListId)
             } catch {
-                self.spotListTypeMap[placeId] = prior
+                self.spotListKindMap[placeId] = prior
                 self.lastSaveError = "Couldn't remove. Try again."
                 throw error
             }
@@ -309,8 +309,8 @@ class LocationSavingViewModel: ObservableObject {
 
     // MARK: - Get Spots in List
 
-    func getSpotsInList(listId: UUID, listType: ListType) async throws -> [SpotWithMetadata] {
-        return try await service.getSpotsInList(listId: listId, listType: listType)
+    func getSpotsInList(listId: UUID, kind: ListKind) async throws -> [SpotWithMetadata] {
+        return try await service.getSpotsInList(listId: listId, kind: kind)
     }
 
     // MARK: - Get Spot Count
@@ -330,12 +330,12 @@ class LocationSavingViewModel: ObservableObject {
     //   incoming selection
     //         │
     //         ▼
-    //   coerceToSingleDefault (drop extras across .favorites/.starred/.bucketList,
+    //   coerceToSingleDefault (drop extras across .liked/.favorites/.wantToGo,
     //                          keep at most one default; user-created lists pass through)
     //         │
     //         ▼
-    //   snapshot prior spotListTypeMap[placeId]
-    //   optimistic spotListTypeMap[placeId] = listType for new single default (or nil)
+    //   snapshot prior spotListKindMap[placeId]
+    //   optimistic spotListKindMap[placeId] = kind for new single default (or nil)
     //         │
     //         ▼
     //   diff(coerced, original) → toAdd, toRemove
@@ -357,9 +357,9 @@ class LocationSavingViewModel: ObservableObject {
         let coerced = Self.coerceToSingleDefault(listIds, userLists: userLists)
         let placeId = spotData.placeId
 
-        let prior = spotListTypeMap[placeId]
-        let newListType = Self.listType(for: coerced, userLists: userLists)
-        spotListTypeMap[placeId] = newListType
+        let prior = spotListKindMap[placeId]
+        let newListType = Self.kind(for: coerced, userLists: userLists)
+        spotListKindMap[placeId] = newListType
 
         do {
             let original = Set(try await service.getListsContainingSpot(placeId: placeId))
@@ -388,7 +388,7 @@ class LocationSavingViewModel: ObservableObject {
                 try? await service.removeSpotFromList(placeId: spotData.placeId, listId: id)
             }
         } catch {
-            spotListTypeMap[placeId] = prior
+            spotListKindMap[placeId] = prior
             lastSaveError = "Couldn't save. Try again."
             throw error
         }
@@ -407,10 +407,11 @@ class LocationSavingViewModel: ObservableObject {
 
     // MARK: - Single-default coercion (pure helpers, exposed for testing)
 
-    /// If the input contains more than one of the three default lists
-    /// (.favorites / .starred / .bucketList), drop the extras and keep one
-    /// using the same priority order as `displayListType` (bucketList wins,
-    /// then starred, then favorites). User-created lists always pass through.
+    /// If the input contains more than one of the three system default lists
+    /// (.favorites / .liked / .wantToGo), drop the extras and keep one using
+    /// the same priority order as `displayKind` (wantToGo wins, then
+    /// favorites, then liked). Custom / trip / date_plan lists always pass
+    /// through unfiltered.
     /// Defensive — the picker UI prevents users from selecting >1 default,
     /// but this guarantees the invariant for non-UI callers (share extension,
     /// deep links, tests).
@@ -419,15 +420,15 @@ class LocationSavingViewModel: ObservableObject {
         userLists: [UserList]
     ) -> Set<UUID> {
         let defaultListsInSelection = userLists.filter { list in
-            list.listType != nil && selected.contains(list.id)
+            list.kind.isSystemKind && selected.contains(list.id)
         }
         guard defaultListsInSelection.count > 1 else { return selected }
 
         // Pick the canonical default by priority.
-        let priorityOrder: [ListType] = [.bucketList, .starred, .favorites]
+        let priorityOrder: [ListKind] = [.wantToGo, .favorites, .liked]
         var winner: UserList?
         for type in priorityOrder {
-            if let match = defaultListsInSelection.first(where: { $0.listType == type }) {
+            if let match = defaultListsInSelection.first(where: { $0.kind == type }) {
                 winner = match
                 break
             }
@@ -440,13 +441,14 @@ class LocationSavingViewModel: ObservableObject {
         return coerced
     }
 
-    /// Returns the `ListType` of the single default list in `selected`, or nil
-    /// if no default list is selected. Assumes input has already passed
-    /// through `coerceToSingleDefault` so at most one default is present.
-    static func listType(for selected: Set<UUID>, userLists: [UserList]) -> ListType? {
+    /// Returns the system `ListKind` of the single default list in `selected`,
+    /// or nil if no system list is selected. Custom / trip / date_plan kinds
+    /// return nil. Assumes input has already passed through
+    /// `coerceToSingleDefault` so at most one system default is present.
+    static func kind(for selected: Set<UUID>, userLists: [UserList]) -> ListKind? {
         for list in userLists {
-            if let type = list.listType, selected.contains(list.id) {
-                return type
+            if list.kind.isSystemKind, selected.contains(list.id) {
+                return list.kind
             }
         }
         return nil

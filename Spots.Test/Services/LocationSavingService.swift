@@ -14,12 +14,18 @@ import Supabase
 /// inject a mock conforming to this protocol via `LocationSavingViewModel.init(service:)`.
 protocol LocationSavingServiceProtocol: AnyObject {
     func getUserLists() async throws -> [UserList]
-    func getListByType(_ listType: ListType) async throws -> UserList?
-    func getSpotsInList(listId: UUID, listType: ListType) async throws -> [SpotWithMetadata]
+    func getListByKind(_ kind: ListKind) async throws -> UserList?
+    func getSpotsInList(listId: UUID, kind: ListKind) async throws -> [SpotWithMetadata]
     func getSpotCount(listId: UUID) async throws -> Int
     func getListsContainingSpot(placeId: String) async throws -> [UUID]
     func saveSpotToList(placeId: String, listId: UUID) async throws
     func removeSpotFromList(placeId: String, listId: UUID) async throws
+    func moveSpotBetweenLists(
+        placeId: String,
+        fromListId: UUID?,
+        toListId: UUID?,
+        source: SpotSaveSource
+    ) async throws
     func upsertSpot(
         placeId: String,
         name: String,
@@ -56,7 +62,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
             .from("user_lists")
             .select()
             .eq("user_id", value: userId.uuidString)
-            .order("list_type", ascending: true)
+            .order("kind", ascending: true)
             .execute()
             .value
 
@@ -66,7 +72,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 .from("user_lists")
                 .select()
                 .eq("user_id", value: userId.uuidString)
-                .order("list_type", ascending: true)
+                .order("kind", ascending: true)
                 .execute()
                 .value
         }
@@ -80,30 +86,33 @@ class LocationSavingService: LocationSavingServiceProtocol {
             .from("user_lists")
             .select()
             .eq("user_id", value: userId.uuidString)
-            .order("list_type", ascending: true)
+            .order("kind", ascending: true)
             .execute()
             .value
     }
-    
-    /// Get a specific list by type
-    func getListByType(_ listType: ListType) async throws -> UserList? {
+
+    /// Get a specific list by kind. For system kinds (favorites/liked/want_to_go)
+    /// each user has at most one row (enforced by partial unique index); for
+    /// custom kinds the first match is returned.
+    func getListByKind(_ kind: ListKind) async throws -> UserList? {
         let userId = try await getCurrentUserId()
-        
+
         let response: [UserList] = try await supabase
             .from("user_lists")
             .select()
             .eq("user_id", value: userId.uuidString)
-            .eq("list_type", value: listType.rawValue)
+            .eq("kind", value: kind.rawValue)
             .limit(1)
             .execute()
             .value
-        
+
         return response.first
     }
-    
-    /// Creates the three default lists (Favorites, Liked, Want to Go) for the current user if they don't exist.
-    /// DB enum values intentionally remain `starred` / `favorites` / `bucket_list` — only display labels were renamed.
-    /// Tier mapping: starred → "Favorites" (elite), favorites → "Liked" (mid), bucket_list → "Want to Go" (wishlist).
+
+    /// Creates the three default lists (Favorites / Liked / Want to Go) for the
+    /// current user if they don't exist. The DB enum was renamed in the Phase 1
+    /// migration: legacy `starred` → `favorites`, `favorites` → `liked`,
+    /// `bucket_list` → `want_to_go`. Display labels match DB values directly.
     /// Idempotent; safe to call after signup, login, or when lists are missing.
     func ensureDefaultListsForCurrentUser() async throws {
         let userId = try await getCurrentUserId()
@@ -268,7 +277,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
     }
     
     /// Get all spots in a list (ordered by recency)
-    func getSpotsInList(listId: UUID, listType: ListType) async throws -> [SpotWithMetadata] {
+    func getSpotsInList(listId: UUID, kind: ListKind) async throws -> [SpotWithMetadata] {
         // Use a simpler approach: query spot_list_items to get spot_ids and saved_at
         // Then query spots table for each spot's details
         
@@ -354,7 +363,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
                 return nil
             }
 
-            return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: [listType])
+            return SpotWithMetadata(spot: spot, savedAt: savedAt, listKinds: [kind])
         }
 
         // Lazy-load images in background with bounded concurrency (max 4 at a time)
@@ -383,7 +392,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
     }
     
     /// Get all spots across every list for the current user, deduplicated by place_id.
-    /// Each SpotWithMetadata.listTypes reflects all lists the spot belongs to.
+    /// Each SpotWithMetadata.listKinds reflects all system-kind lists the spot belongs to.
     func getAllSpots() async throws -> [SpotWithMetadata] {
         let userLists = try await getUserLists()
         guard !userLists.isEmpty else { return [] }
@@ -406,13 +415,14 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
         guard !allItems.isEmpty else { return [] }
 
-        // Build a map from list_id UUID → ListType for resolving listTypes later.
-        // Use canonical ListType from list when present; otherwise infer from list name
-        // so default lists (Starred, Favorites, Bucket List) always contribute to marker icons.
-        let listTypeByListId: [String: ListType] = Dictionary(
-            uniqueKeysWithValues: userLists.compactMap { list -> (String, ListType)? in
-                guard let listType = Self.resolveListType(for: list) else { return nil }
-                return (list.id.uuidString, listType)
+        // Build a map from list_id UUID → system ListKind for resolving listKinds later.
+        // Each user_lists row has a non-null kind post Phase-1 migration; the
+        // helper returns nil for non-system kinds so custom/trip/date_plan lists
+        // don't contribute marker icons.
+        let kindByListId: [String: ListKind] = Dictionary(
+            uniqueKeysWithValues: userLists.compactMap { list -> (String, ListKind)? in
+                guard let kind = Self.resolveSystemKind(for: list) else { return nil }
+                return (list.id.uuidString, kind)
             }
         )
 
@@ -465,9 +475,9 @@ class LocationSavingService: LocationSavingServiceProtocol {
             )
         }
 
-        // Deduplicate: for each place_id, keep the most recent saved_at and union all listTypes
+        // Deduplicate: for each place_id, keep the most recent saved_at and union all kinds
         var bestSavedAt: [String: Date] = [:]
-        var listTypesPerSpot: [String: Set<ListType>] = [:]
+        var kindsPerSpot: [String: Set<ListKind>] = [:]
 
         for item in allItems {
             guard let savedAt = SharedFormatters.date(from: item.saved_at) else { continue }
@@ -475,8 +485,8 @@ class LocationSavingService: LocationSavingServiceProtocol {
             if bestSavedAt[item.spot_id] == nil {
                 bestSavedAt[item.spot_id] = savedAt
             }
-            if let listType = listTypeByListId[item.list_id] {
-                listTypesPerSpot[item.spot_id, default: []].insert(listType)
+            if let kind = kindByListId[item.list_id] {
+                kindsPerSpot[item.spot_id, default: []].insert(kind)
             }
         }
 
@@ -484,8 +494,8 @@ class LocationSavingService: LocationSavingServiceProtocol {
         let result: [SpotWithMetadata] = uniquePlaceIds
             .compactMap { placeId -> SpotWithMetadata? in
                 guard let spot = spotsMap[placeId], let savedAt = bestSavedAt[placeId] else { return nil }
-                let listTypes = listTypesPerSpot[placeId] ?? []
-                return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: listTypes)
+                let kinds = kindsPerSpot[placeId] ?? []
+                return SpotWithMetadata(spot: spot, savedAt: savedAt, listKinds: kinds)
             }
             .sorted { $0.savedAt > $1.savedAt }
 
@@ -517,10 +527,10 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
         guard !allItems.isEmpty else { return [] }
 
-        let listTypeByListId: [String: ListType] = Dictionary(
-            uniqueKeysWithValues: userLists.compactMap { list -> (String, ListType)? in
-                guard let listType = Self.resolveListType(for: list) else { return nil }
-                return (list.id.uuidString, listType)
+        let kindByListId: [String: ListKind] = Dictionary(
+            uniqueKeysWithValues: userLists.compactMap { list -> (String, ListKind)? in
+                guard let kind = Self.resolveSystemKind(for: list) else { return nil }
+                return (list.id.uuidString, kind)
             }
         )
 
@@ -573,49 +583,47 @@ class LocationSavingService: LocationSavingServiceProtocol {
         }
 
         var bestSavedAt: [String: Date] = [:]
-        var listTypesPerSpot: [String: Set<ListType>] = [:]
+        var kindsPerSpot: [String: Set<ListKind>] = [:]
 
         for item in allItems {
             guard let savedAt = SharedFormatters.date(from: item.saved_at) else { continue }
             if bestSavedAt[item.spot_id] == nil {
                 bestSavedAt[item.spot_id] = savedAt
             }
-            if let listType = listTypeByListId[item.list_id] {
-                listTypesPerSpot[item.spot_id, default: []].insert(listType)
+            if let kind = kindByListId[item.list_id] {
+                kindsPerSpot[item.spot_id, default: []].insert(kind)
             }
         }
 
         return uniquePlaceIds
             .compactMap { placeId -> SpotWithMetadata? in
                 guard let spot = spotsMap[placeId], let savedAt = bestSavedAt[placeId] else { return nil }
-                let listTypes = listTypesPerSpot[placeId] ?? []
-                return SpotWithMetadata(spot: spot, savedAt: savedAt, listTypes: listTypes)
+                let kinds = kindsPerSpot[placeId] ?? []
+                return SpotWithMetadata(spot: spot, savedAt: savedAt, listKinds: kinds)
             }
             .sorted { $0.savedAt > $1.savedAt }
     }
 
-    /// Resolves a canonical ListType for a user list. Uses list_type when present;
-    /// otherwise infers from list name so default lists always map to a type for
-    /// marker icon resolution in All Spots map. Accepts current display names
-    /// (Iteration 2: Favorites / Liked / Want to Go) and legacy names from prior
-    /// iterations (Iter 1: Top Spots; v0: Starred / Bucket List) so rows seeded
-    /// under any past label still resolve correctly.
+    /// Resolves a system kind (favorites / liked / wantToGo) for a list. If
+    /// the list's `kind` is itself a system kind, returns it directly. Custom
+    /// lists named after a system kind (e.g. user created a list literally
+    /// named "Favorites") fall back to a name match so marker icons resolve
+    /// correctly. Returns nil for genuinely-custom / trip / date_plan lists,
+    /// which don't contribute to system marker icons.
     ///
-    /// Note on the "favorites" string: it now resolves to `.starred` (the elite
-    /// tier under Iteration 2 labels) rather than `.favorites` (which used to
-    /// be the elite tier label under v0/v1). Fresh data dominates legacy data
-    /// for this fallback path, which only fires for custom-named lists with
-    /// null `list_type` — narrow blast radius.
-    private static func resolveListType(for list: UserList) -> ListType? {
-        if let listType = list.listType { return listType }
+    /// Pre-Phase-1 the legacy display labels included "Top Spots", "Starred",
+    /// and "Bucket List" — those names are preserved in the fallback for any
+    /// custom-named rows seeded under older iterations.
+    private static func resolveSystemKind(for list: UserList) -> ListKind? {
+        if list.kind.isSystemKind { return list.kind }
         guard let name = list.name?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return nil }
         let lower = name.lowercased()
-        // Elite tier (.starred case): current "Favorites", legacy "Top Spots"/"Starred"
-        if lower == "favorites" || lower == "top spots" || lower == "starred" { return .starred }
-        // Mid tier (.favorites case): current "Liked"
-        if lower == "liked" { return .favorites }
-        // Wishlist tier (.bucketList case): current "Want to Go", legacy "Bucket List"
-        if lower == "want to go" || lower == "bucket list" { return .bucketList }
+        // Elite love tier: current "Favorites", legacy "Top Spots"/"Starred".
+        if lower == "favorites" || lower == "top spots" || lower == "starred" { return .favorites }
+        // Mid love tier: current "Liked".
+        if lower == "liked" { return .liked }
+        // Wishlist tier: current "Want to Go", legacy "Bucket List".
+        if lower == "want to go" || lower == "bucket list" { return .wantToGo }
         return nil
     }
 
@@ -912,14 +920,15 @@ class LocationSavingService: LocationSavingServiceProtocol {
         return nil
     }
 
-    /// Unique count of spots in the current user's Starred and Favorites lists (spot in both counts once).
-    func getUniqueSpotCountInStarredAndFavorites() async throws -> Int {
+    /// Unique count of spots in the current user's Favorites + Liked lists
+    /// (the two love tiers; a spot in both counts once).
+    func getUniqueSpotCountInFavoritesAndLiked() async throws -> Int {
         try await ensureDefaultListsForCurrentUser()
-        let starredList = try await getListByType(.starred)
-        let favoritesList = try await getListByType(.favorites)
-        let starred: [String] = if let list = starredList { try await getSpotIdsInList(listId: list.id) } else { [] }
-        let favorites: [String] = if let list = favoritesList { try await getSpotIdsInList(listId: list.id) } else { [] }
-        return Set(starred + favorites).count
+        let favoritesList = try await getListByKind(.favorites)
+        let likedList = try await getListByKind(.liked)
+        let favoriteIds: [String] = if let list = favoritesList { try await getSpotIdsInList(listId: list.id) } else { [] }
+        let likedIds: [String] = if let list = likedList { try await getSpotIdsInList(listId: list.id) } else { [] }
+        return Set(favoriteIds + likedIds).count
     }
 
     // MARK: - Saving/Removing Spots
@@ -979,6 +988,57 @@ class LocationSavingService: LocationSavingServiceProtocol {
             .execute()
         ProfileSnapshotCache.shared.markStale()
     }
+
+    /// Atomically moves a spot between lists via the `move_spot_between_lists`
+    /// RPC (decision E4). The RPC also logs the transition into `list_moves`
+    /// for Newsfeed activities and Phase 3 AI planner training — log failure
+    /// never aborts the move, by design.
+    ///
+    /// Pass `fromListId: nil` for a pure-add, or `toListId: nil` for a pure-remove.
+    /// At least one of the two must be non-nil; passing both nil throws.
+    func moveSpotBetweenLists(
+        placeId: String,
+        fromListId: UUID?,
+        toListId: UUID?,
+        source: SpotSaveSource = .manual
+    ) async throws {
+        struct MoveParams: Encodable {
+            let p_spot_id: String
+            let p_from_list_id: String?
+            let p_to_list_id: String?
+            let p_source: String
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(p_spot_id, forKey: .p_spot_id)
+                if let from = p_from_list_id {
+                    try c.encode(from, forKey: .p_from_list_id)
+                } else {
+                    try c.encodeNil(forKey: .p_from_list_id)
+                }
+                if let to = p_to_list_id {
+                    try c.encode(to, forKey: .p_to_list_id)
+                } else {
+                    try c.encodeNil(forKey: .p_to_list_id)
+                }
+                try c.encode(p_source, forKey: .p_source)
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case p_spot_id, p_from_list_id, p_to_list_id, p_source
+            }
+        }
+
+        let params = MoveParams(
+            p_spot_id: placeId,
+            p_from_list_id: fromListId?.uuidString,
+            p_to_list_id: toListId?.uuidString,
+            p_source: source.rawValue
+        )
+
+        try await supabase.rpc("move_spot_between_lists", params: params).execute()
+        ProfileSnapshotCache.shared.markStale()
+    }
     
     /// Check which lists contain a spot
     func getListsContainingSpot(placeId: String) async throws -> [UUID] {
@@ -996,21 +1056,17 @@ class LocationSavingService: LocationSavingServiceProtocol {
         return response.compactMap { UUID(uuidString: $0.list_id) }
     }
     
-    /// Check which place IDs are already in the bucketlist
+    /// Check which place IDs are already in the user's Want to Go list.
     /// - Parameter placeIds: Array of place IDs to check
-    /// - Returns: Set of place IDs that are already in the bucketlist
-    func checkPlacesInBucketlist(_ placeIds: [String]) async throws -> Set<String> {
-        // Get the bucketlist
-        guard let bucketList = try await getListByType(.bucketList) else {
-            // No bucketlist exists yet, so none of the places are in it
+    /// - Returns: Set of place IDs that are already in Want to Go
+    func checkPlacesInWantToGo(_ placeIds: [String]) async throws -> Set<String> {
+        guard let wantToGoList = try await getListByKind(.wantToGo) else {
             return Set<String>()
         }
-        
-        // Get all spots in the bucketlist
-        let spotsInList = try await getSpotsInList(listId: bucketList.id, listType: .bucketList)
+
+        let spotsInList = try await getSpotsInList(listId: wantToGoList.id, kind: .wantToGo)
         let existingPlaceIds = Set(spotsInList.map { $0.spot.placeId })
-        
-        // Return intersection of provided placeIds and existing placeIds
+
         return Set(placeIds).intersection(existingPlaceIds)
     }
     
