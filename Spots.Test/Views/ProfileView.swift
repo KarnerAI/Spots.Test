@@ -159,14 +159,14 @@ struct ProfileView: View {
     private func refreshAllSpotsForTravelMap() async {
         do {
             let service = LocationSavingService.shared
-            let starred = try await service.getListByType(.starred)
-            let favorites = try await service.getListByType(.favorites)
-            let bucket = try await service.getListByType(.bucketList)
+            let starred = try await service.getListByKind(.favorites)
+            let favorites = try await service.getListByKind(.liked)
+            let bucket = try await service.getListByKind(.wantToGo)
 
             var collected: [SpotWithMetadata] = []
-            if let id = starred?.id { collected += try await service.getSpotsInList(listId: id, listType: .starred) }
-            if let id = favorites?.id { collected += try await service.getSpotsInList(listId: id, listType: .favorites) }
-            if let id = bucket?.id { collected += try await service.getSpotsInList(listId: id, listType: .bucketList) }
+            if let id = starred?.id { collected += try await service.getSpotsInList(listId: id, kind: .favorites) }
+            if let id = favorites?.id { collected += try await service.getSpotsInList(listId: id, kind: .liked) }
+            if let id = bucket?.id { collected += try await service.getSpotsInList(listId: id, kind: .wantToGo) }
 
             // Dedupe by placeId — a spot in two lists must only count once.
             var unique: [String: Spot] = [:]

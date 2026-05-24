@@ -41,7 +41,7 @@ struct SpotsBottomSheetView: View {
     let isLoading: Bool
     let hasMorePages: Bool
     let errorMessage: String?
-    let spotListTypeMap: [String: ListType]
+    let spotListKindMap: [String: ListKind]
     let hasLoadedSavedPlaces: Bool
     
     // Callbacks
@@ -128,7 +128,7 @@ struct SpotsBottomSheetView: View {
             spots: spots,
             isLoading: isLoading,
             hasMorePages: hasMorePages,
-            spotListTypeMap: spotListTypeMap,
+            spotListKindMap: spotListKindMap,
             hasLoadedSavedPlaces: hasLoadedSavedPlaces,
             onBookmarkTap: onBookmarkTap,
             onCardTap: onCardTap,
@@ -212,7 +212,7 @@ struct SpotsBottomSheetView: View {
                 isLoading: false,
                 hasMorePages: true,
                 errorMessage: nil,
-                spotListTypeMap: ["1": .starred, "2": .bucketList],
+                spotListKindMap: ["1": .favorites, "2": .wantToGo],
                 hasLoadedSavedPlaces: true,
                 onBookmarkTap: { _ in },
                 onCardTap: { _ in },
@@ -236,7 +236,7 @@ struct SpotsBottomSheetView: View {
                 isLoading: false,
                 hasMorePages: false,
                 errorMessage: nil,
-                spotListTypeMap: [:],
+                spotListKindMap: [:],
                 hasLoadedSavedPlaces: false,
                 onBookmarkTap: { _ in },
                 onCardTap: { _ in },
@@ -260,7 +260,7 @@ struct SpotsBottomSheetView: View {
                 isLoading: true,
                 hasMorePages: false,
                 errorMessage: nil,
-                spotListTypeMap: [:],
+                spotListKindMap: [:],
                 hasLoadedSavedPlaces: false,
                 onBookmarkTap: { _ in },
                 onCardTap: { _ in },

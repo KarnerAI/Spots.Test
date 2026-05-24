@@ -12,9 +12,9 @@
 //  │   path = []           → screen 1 (Welcome / profile)             │
 //  │   path = [.bucket]    → screen 2 (Build your bucket list)        │
 //  │   path = [.bucket,                                               │
-//  │           .favorites] → screen 3 (What do you love?)             │
+//  │           .liked] → screen 3 (What do you love?)             │
 //  │   path = [.bucket,                                               │
-//  │           .favorites,                                            │
+//  │           .liked,                                            │
 //  │           .followFounder] → screen 4 (Follow the founder)        │
 //  │                                                                  │
 //  │  furthestStep tracks the highest step ever reached (1..4).        │
@@ -170,8 +170,8 @@ final class OnboardingViewModel: ObservableObject {
         switch step {
         case 1: path = []
         case 2: path = [.bucket]
-        case 3: path = [.bucket, .favorites]
-        case 4: path = [.bucket, .favorites, .followFounder]
+        case 3: path = [.bucket, .liked]
+        case 4: path = [.bucket, .liked, .followFounder]
         default: path = []
         }
     }
@@ -184,10 +184,10 @@ final class OnboardingViewModel: ObservableObject {
     func hydrateSelectionsIfNeeded() async {
         do {
             if bucketListId == nil {
-                bucketListId = try await savingService.getListByType(.bucketList)?.id
+                bucketListId = try await savingService.getListByKind(.wantToGo)?.id
             }
             if favoritesListId == nil {
-                favoritesListId = try await savingService.getListByType(.starred)?.id
+                favoritesListId = try await savingService.getListByKind(.favorites)?.id
             }
         } catch {
             print("OnboardingViewModel: hydrate listIds failed: \(error)")
@@ -390,7 +390,7 @@ final class OnboardingViewModel: ObservableObject {
         do {
             // Lazily resolve the list id on first use.
             if bucketListId == nil {
-                bucketListId = try await savingService.getListByType(.bucketList)?.id
+                bucketListId = try await savingService.getListByKind(.wantToGo)?.id
             }
             guard let listId = bucketListId else {
                 throw OnboardingError.missingDefaultList
@@ -418,7 +418,7 @@ final class OnboardingViewModel: ObservableObject {
 
         do {
             if favoritesListId == nil {
-                favoritesListId = try await savingService.getListByType(.starred)?.id
+                favoritesListId = try await savingService.getListByKind(.favorites)?.id
             }
             guard let listId = favoritesListId else {
                 throw OnboardingError.missingDefaultList
@@ -517,7 +517,7 @@ final class OnboardingViewModel: ObservableObject {
     private func pushNextRoute(after step: Int) {
         switch step {
         case 1: path.append(.bucket)
-        case 2: path.append(.favorites)
+        case 2: path.append(.liked)
         case 3: path.append(.followFounder)
         case 4: break // Done is handled by completeOnboarding()
         default: break

@@ -503,7 +503,7 @@ struct UserProfileView: View {
         // Captured into a local so each closure shares one snapshot of the
         // tile list — the destinations need the target user's UserLists to
         // drill into a city/country filtered view without falling back to
-        // the current user's `getListByType`.
+        // the current user's `getListByKind`.
         let userLists = listTiles.compactMap { $0.userList }
         return ProfileTravelSection(
             spots: allSpots,

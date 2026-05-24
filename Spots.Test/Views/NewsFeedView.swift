@@ -211,16 +211,16 @@ struct NewsFeedView: View {
         // Saved-places state from the single-source-of-truth VM. The card
         // shows whichever default list (Favorites / Top Spots / Want to Go)
         // the viewer has the spot saved to, or a generic bookmark if none.
-        let listType: ListType? = {
+        let kind: ListKind? = {
             guard let placeId = spot?.placeId else { return nil }
-            return locationSavingVM.spotListTypeMap[placeId]
+            return locationSavingVM.spotListKindMap[placeId]
         }()
 
         return FeedItemCardView(
             item: item,
             actor: actor,
             spot: spot,
-            listType: listType,
+            kind: kind,
             hasLoadedSavedPlaces: locationSavingVM.hasLoadedSavedPlacesOnce,
             onTapActor: {
                 navigationPath.append(FeedRoute.user(item.actorId))

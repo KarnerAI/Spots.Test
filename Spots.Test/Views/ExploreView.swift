@@ -148,7 +148,7 @@ struct ExploreView: View {
                         isLoading: viewModel.isLoadingNearbySpots,
                         hasMorePages: viewModel.hasMorePages,
                         errorMessage: viewModel.nearbyErrorMessage,
-                        spotListTypeMap: viewModel.spotListTypeMap,
+                        spotListKindMap: viewModel.spotListKindMap,
                         hasLoadedSavedPlaces: viewModel.hasLoadedSavedPlacesOnce,
                         onBookmarkTap: { spot in
                             spotForSaving = spot
@@ -179,7 +179,7 @@ struct ExploreView: View {
                     Spacer()
                     SpotCardView(
                         spot: selected,
-                        spotListTypeMap: viewModel.spotListTypeMap,
+                        spotListKindMap: viewModel.spotListKindMap,
                         hasLoadedSavedPlaces: viewModel.hasLoadedSavedPlacesOnce,
                         onBookmarkTap: { spotForSaving = selected },
                         onCardTap: { spotToOpenInMaps = selected }

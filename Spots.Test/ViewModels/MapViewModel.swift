@@ -31,14 +31,14 @@ class MapViewModel: ObservableObject {
     // MARK: - Saved-places state (lives on LocationSavingViewModel; MapViewModel passes through)
     //
     // Single source of truth — both Explore and Newsfeed read from
-    // `locationSavingVM.spotListTypeMap` so saving on either tab updates the
+    // `locationSavingVM.spotListKindMap` so saving on either tab updates the
     // bookmark icon on both without a round-trip. Existing call sites that
-    // still go through `viewModel.spotListTypeMap` etc. work unchanged via
+    // still go through `viewModel.spotListKindMap` etc. work unchanged via
     // the computed-property passthroughs below.
     private let locationSavingVM: LocationSavingViewModel
 
     var savedPlaces: [SpotWithMetadata] { locationSavingVM.savedPlaces }
-    var spotListTypeMap: [String: ListType] { locationSavingVM.spotListTypeMap }
+    var spotListKindMap: [String: ListKind] { locationSavingVM.spotListKindMap }
     var hasLoadedSavedPlacesOnce: Bool { locationSavingVM.hasLoadedSavedPlacesOnce }
     
     // Pagination state
@@ -817,7 +817,7 @@ class MapViewModel: ObservableObject {
             marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
             
             // Get base icon
-            var icon = iconForListTypes(placeWithMetadata.listTypes)
+            var icon = iconForListKinds(placeWithMetadata.listKinds)
             
             // Scale up if this marker is selected
             if let selectedSpot = selectedSpot,
@@ -860,8 +860,8 @@ class MapViewModel: ObservableObject {
     }
 
     /// Returns the appropriate icon based on list membership. Delegates to MarkerIconHelper.
-    private func iconForListTypes(_ listTypes: Set<ListType>) -> UIImage? {
-        MarkerIconHelper.iconForListTypes(listTypes, cache: &cachedMarkerIcons)
+    private func iconForListKinds(_ listKinds: Set<ListKind>) -> UIImage? {
+        MarkerIconHelper.iconForListKinds(listKinds, cache: &cachedMarkerIcons)
     }
 
     private func createCustomMarkerIcon(systemName: String, color: UIColor) -> UIImage? {
@@ -903,21 +903,21 @@ class MapViewModel: ObservableObject {
 // MARK: - UIColor Extension for List Colors
 //
 // Constant names are tier-stable INTERNAL identifiers tied to the underlying
-// `ListType` enum case, NOT to the current display label or icon. They keep
+// `ListKind` enum case, NOT to the current display label or icon. They keep
 // their original names across UI rename iterations so callsites never churn.
 //
 // Current tier mapping (Iteration 2 — Favorites/Liked/Want to Go):
-//   ListType.starred    → "Favorites"  → red heart
-//   ListType.favorites  → "Liked"      → blue thumbs-up
-//   ListType.bucketList → "Want to Go" → emerald flag
+//   ListKind.favorites    → "Favorites"  → red heart
+//   ListKind.liked  → "Liked"      → blue thumbs-up
+//   ListKind.wantToGo → "Want to Go" → emerald flag
 extension UIColor {
-    /// Tint for the elite love tier (`ListType.starred` / "Favorites" / heart).
+    /// Tint for the elite love tier (`ListKind.favorites` / "Favorites" / heart).
     static let listStarred = UIColor(red: 0.94, green: 0.27, blue: 0.27, alpha: 1.0)  // #EF4444 red
 
-    /// Tint for the mid love tier (`ListType.favorites` / "Liked" / thumbs-up).
+    /// Tint for the mid love tier (`ListKind.liked` / "Liked" / thumbs-up).
     static let listFavorites = UIColor(red: 0.23, green: 0.51, blue: 0.96, alpha: 1.0)  // #3B82F6 blue
 
-    /// Tint for the wishlist tier (`ListType.bucketList` / "Want to Go" / flag).
+    /// Tint for the wishlist tier (`ListKind.wantToGo` / "Want to Go" / flag).
     static let listBucketList = UIColor(red: 0.06, green: 0.73, blue: 0.51, alpha: 1.0)  // #10B981 emerald
 }
 

@@ -8,7 +8,7 @@
 //
 //   - headline copy ("Where will you go next?" vs "What do you love?")
 //   - subhead copy
-//   - which list a tap writes to (.bucketList vs .starred)
+//   - which list a tap writes to (.wantToGo vs .favorites)
 //   - the icon overlay (emerald flag vs red heart)
 //   - the VM selection set the card reads from (bucket vs favorites)
 //
@@ -28,7 +28,7 @@ struct OnboardingCuratedGridStep: View {
     let stepNumber: Int
     let headline: String
     let subhead: String
-    let category: ListType
+    let category: ListKind
     let primaryTitle: String
 
     private static let columns: [GridItem] = [
@@ -113,19 +113,19 @@ struct OnboardingCuratedGridStep: View {
 
     private func isSelected(_ placeId: String) -> Bool {
         switch category {
-        case .bucketList: return vm.bucketSelections.contains(placeId)
-        case .starred:    return vm.favoriteSelections.contains(placeId)
-        case .favorites:  return false // not used by onboarding
+        case .wantToGo: return vm.bucketSelections.contains(placeId)
+        case .favorites:    return vm.favoriteSelections.contains(placeId)
+        case .liked:  return false // not used by onboarding
         }
     }
 
     private func toggle(spot: Spot) async {
         switch category {
-        case .bucketList:
+        case .wantToGo:
             await vm.toggleBucket(placeId: spot.placeId, displayName: spot.name)
-        case .starred:
-            await vm.toggleFavorite(placeId: spot.placeId, displayName: spot.name)
         case .favorites:
+            await vm.toggleFavorite(placeId: spot.placeId, displayName: spot.name)
+        case .liked:
             break
         }
     }

@@ -38,8 +38,8 @@ struct CuratedSpotCard: View {
     /// The DB-backed spot row. `spot.placeId` is the join key.
     let spot: Spot
     /// Which list this card writes to when tapped. Screen 2 passes
-    /// `.bucketList` (emerald flag); screen 3 passes `.starred` (red heart).
-    let category: ListType
+    /// `.wantToGo` (emerald flag); screen 3 passes `.favorites` (red heart).
+    let category: ListKind
     /// True when the spot is currently in the user's `category` list.
     let isSelected: Bool
     /// Tap action. Awaits the VM toggle so the parent can manage
@@ -124,7 +124,7 @@ struct CuratedSpotCard: View {
         Button(action: handleTap) {
             SaveSpotButton(
                 placeId: spot.placeId,
-                listType: isSelected ? category : nil,
+                kind: isSelected ? category : nil,
                 hasLoadedSavedPlaces: true,
                 onTap: {} // owning Button intercepts the tap
             )
@@ -214,7 +214,7 @@ struct CuratedSpotCard: View {
     )
     return CuratedSpotCard(
         spot: preview,
-        category: .bucketList,
+        category: .wantToGo,
         isSelected: false,
         onToggle: {}
     )
@@ -232,7 +232,7 @@ struct CuratedSpotCard: View {
     )
     return CuratedSpotCard(
         spot: preview,
-        category: .starred,
+        category: .favorites,
         isSelected: true,
         onToggle: {}
     )

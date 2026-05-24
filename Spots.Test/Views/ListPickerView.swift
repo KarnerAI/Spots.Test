@@ -23,7 +23,7 @@ struct ListPickerView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    /// Bumped each time the user toggles the elite love tier (`.starred` /
+    /// Bumped each time the user toggles the elite love tier (`.favorites` /
     /// "Favorites") ON via `toggle(_:)`. Bound to `.symbolEffect(.bounce, value:)`
     /// on the Favorites row's heart icon so only user-initiated additions fire
     /// the celebration — initial pre-selection from existing membership and
@@ -207,11 +207,11 @@ struct ListPickerView: View {
     private func listRow(_ list: UserList) -> some View {
         let isSelected = selectedListIds.contains(list.id)
         let count = listCounts[list.id] ?? 0
-        let isFavorites = list.listType == .starred  // .starred enum case = "Favorites" display label
+        let isFavorites = list.kind == .favorites  // elite love tier
 
         return HStack(spacing: 12) {
-            Image(systemName: list.listType?.iconName ?? "list.bullet")
-                .foregroundColor(list.listType?.iconColor ?? Color.spotsTeal)
+            Image(systemName: list.kind.iconName)
+                .foregroundColor(list.kind.isSystemKind ? list.kind.iconColor : Color.spotsTeal)
                 .frame(width: 20, height: 20)
                 // Bind the bounce only to the Favorites row so unrelated
                 // toggles don't animate it. `favoritesBouncePulse` only ever
@@ -311,9 +311,9 @@ struct ListPickerView: View {
             // "one default list per spot" invariant at the UI layer; the
             // VM also coerces in saveSpotToLists as belt-and-suspenders.
             let toggledList = viewModel.userLists.first(where: { $0.id == id })
-            if toggledList?.listType != nil {
+            if toggledList?.kind.isSystemKind == true {
                 let otherDefaultIds = viewModel.userLists
-                    .filter { $0.listType != nil && $0.id != id }
+                    .filter { $0.kind.isSystemKind && $0.id != id }
                     .map(\.id)
                 for otherId in otherDefaultIds {
                     selectedListIds.remove(otherId)
@@ -324,8 +324,7 @@ struct ListPickerView: View {
             // Favorites is the elite tier — celebrate user adds with a bounce
             // + light haptic. Fires only here (user toggle-on), never on
             // initial pre-selection from existing membership or on remove.
-            // The .starred enum case maps to the "Favorites" display label.
-            if toggledList?.listType == .starred {
+            if toggledList?.kind == .favorites {
                 favoritesBouncePulse &+= 1
                 lightHaptic.impactOccurred()
             }
