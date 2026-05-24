@@ -12,9 +12,9 @@
 //  │   path = []           → screen 1 (Welcome / profile)             │
 //  │   path = [.bucket]    → screen 2 (Build your bucket list)        │
 //  │   path = [.bucket,                                               │
-//  │           .liked] → screen 3 (What do you love?)             │
+//  │           .favorites] → screen 3 (What do you love?)             │
 //  │   path = [.bucket,                                               │
-//  │           .liked,                                            │
+//  │           .favorites,                                            │
 //  │           .followFounder] → screen 4 (Follow the founder)        │
 //  │                                                                  │
 //  │  furthestStep tracks the highest step ever reached (1..4).        │
@@ -170,8 +170,8 @@ final class OnboardingViewModel: ObservableObject {
         switch step {
         case 1: path = []
         case 2: path = [.bucket]
-        case 3: path = [.bucket, .liked]
-        case 4: path = [.bucket, .liked, .followFounder]
+        case 3: path = [.bucket, .favorites]
+        case 4: path = [.bucket, .favorites, .followFounder]
         default: path = []
         }
     }
@@ -517,7 +517,7 @@ final class OnboardingViewModel: ObservableObject {
     private func pushNextRoute(after step: Int) {
         switch step {
         case 1: path.append(.bucket)
-        case 2: path.append(.liked)
+        case 2: path.append(.favorites)
         case 3: path.append(.followFounder)
         case 4: break // Done is handled by completeOnboarding()
         default: break

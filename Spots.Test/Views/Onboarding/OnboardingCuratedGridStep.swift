@@ -114,8 +114,9 @@ struct OnboardingCuratedGridStep: View {
     private func isSelected(_ placeId: String) -> Bool {
         switch category {
         case .wantToGo: return vm.bucketSelections.contains(placeId)
-        case .favorites:    return vm.favoriteSelections.contains(placeId)
-        case .liked:  return false // not used by onboarding
+        case .favorites: return vm.favoriteSelections.contains(placeId)
+        case .liked, .custom, .trip, .datePlan:
+            return false  // not used by onboarding — only wantToGo + favorites grids ship
         }
     }
 
@@ -125,8 +126,8 @@ struct OnboardingCuratedGridStep: View {
             await vm.toggleBucket(placeId: spot.placeId, displayName: spot.name)
         case .favorites:
             await vm.toggleFavorite(placeId: spot.placeId, displayName: spot.name)
-        case .liked:
-            break
+        case .liked, .custom, .trip, .datePlan:
+            break  // not used by onboarding
         }
     }
 
