@@ -372,13 +372,26 @@ extension Font {
 
 // MARK: - Preview
 
-#Preview("Empty") {
+#Preview("CreateListView (interactive)") {
+    // The preview is interactive in the canvas — tap the Name field to type,
+    // tap an emoji in the grid, tap visibility rows. Save lights up cool blue
+    // once the name is non-empty.
     CreateListView { _ in }
         .environmentObject(LocationSavingViewModel())
 }
 
-#Preview("Filled") {
-    let view = CreateListView { _ in }
-    return view
-        .environmentObject(LocationSavingViewModel())
+#Preview("CreateListView in a sheet (presentation context)") {
+    // Mimics the real entry point: presented as a sheet from a host screen.
+    // Useful for checking the half-sheet detents + drag-to-dismiss feel.
+    struct Host: View {
+        @State private var presented = true
+        var body: some View {
+            Color.white.ignoresSafeArea()
+                .sheet(isPresented: $presented) {
+                    CreateListView { _ in presented = false }
+                        .environmentObject(LocationSavingViewModel())
+                }
+        }
+    }
+    return Host()
 }

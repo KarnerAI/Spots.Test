@@ -155,3 +155,39 @@ Deferred work items captured during planning + reviews. Each item is self-contai
 **Effort:** Human ~1hr / CC ~15min. Touch points: `Views/ProfileView.swift`, `Views/CoverPhotoPickerView.swift`.
 
 **Priority:** P3.
+
+---
+
+## P2 — List Detail hero header redesign (cover overlay + reactive refresh)
+
+**What:** Replace the existing `.navigationTitle(title)` / scrollable spots-list layout in `ListDetailView` with the hero-header pattern shown in the Figma T21 mockup (section 5B/5C): a 180–200pt header showing the effective cover image (or emoji fallback for empty/photo-less states), the list name as a large overlaid title, and a "Cover from [spot name]" badge when the cover is auto-derived. Plus a Combine pipeline so the header re-renders when the most-recent spot in the list changes (add / remove / cover-override / clear-override).
+
+**Why:** T21 acceptance criteria explicitly include this header style. T21.6 shipped the minimum viable wiring (⋯ menu → ListSettingsSheet) but kept the existing nav-title chrome to avoid restructuring the search bar / sort controls / list+map switching in the same PR. The full hero is a meaningful polish moment — Maya tapping into "Mexico City 2026" should feel like landing on a place page, not on a generic list.
+
+**Pros:** Matches the locked design intent. Surfaces the auto-cover work (D-T21.1) prominently. Closes the failure-mode gap captured in /plan-eng-review (List Detail header reactivity when deleting the most-recent spot).
+
+**Cons:** Real structural restructure of `ListDetailView`. Touches search bar position, sort controls placement, scroll behavior when the map mode is active, navigation title visibility logic. Risk of regression on the existing flows.
+
+**Context:** Originally captured as T21.8 in `/plan-eng-review` (2026-05-25). De-scoped from the T21 PR after T21.6 shipped the minimum-viable settings entry point. The hero header is best done as its own focused PR with proper QA on both `.list` and `.map` `viewStyle` paths.
+
+**Effort:** Human ~3hr / CC ~30min. Touch points: `Views/ListDetailView.swift` (~150 LOC for the header + reactive subscription), `Services/LocationSavingService.swift` (already returns `effective_cover_*` fields from `get_list_tile_summaries` RPC — no service change needed).
+
+**Priority:** P2. **Depends on:** none. Can ship any time after T21 lands.
+
+---
+
+## P3 — Paginate AllListsView at 500+ lists
+
+**What:** The "View all" / `AllListsView` screen renders every list in a single `LazyVStack`. Fine up to ~100 lists. Becomes a memory + scroll-perf concern around 500+. Add cursor-based pagination via a new `get_lists_paginated(p_limit, p_after_created_at)` RPC + an infinite-scroll trigger on the last visible row.
+
+**Why:** Maya in v1 won't have 500 lists. Power users in Phase 3 (when AI Trip Planner spawns trip lists per planned trip) might. Capture now so we don't ship a "feels slow on my power-user account" complaint later.
+
+**Pros:** Future-proofs the list-of-lists for power users without changing the v1 happy path.
+
+**Cons:** Adds a new RPC + Swift pagination state machine. Out of scope for v1 since the threshold isn't reachable yet.
+
+**Context:** Surfaced in `/plan-eng-review` on 2026-05-25 (T21.9). Eng review verdict: P3 — only relevant at 500+ lists, which no user is anywhere close to.
+
+**Effort:** Human ~half day / CC ~1hr. Touch points: `SQL/<new>_get_lists_paginated_rpc.sql`, `Services/LocationSavingService.swift`, `Views/AllListsView.swift`.
+
+**Priority:** P3. **Depends on:** T21 (AllListsView exists).
