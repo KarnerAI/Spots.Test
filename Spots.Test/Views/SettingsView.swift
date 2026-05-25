@@ -89,6 +89,10 @@ struct SettingsView: View {
                     .padding(.top, sectionHeaderTopPadding)
                 preferencesSection
 
+                sectionHeader("YOUR LISTS")
+                    .padding(.top, sectionHeaderTopPadding)
+                listsSection
+
                 sectionHeader("SUPPORT")
                     .padding(.top, sectionHeaderTopPadding)
                 settingsSection(rows: supportRows) { config in
@@ -168,6 +172,31 @@ struct SettingsView: View {
 
             NavigationLink(destination: PrivacySettingsView()) {
                 settingsRow(preferencesRows[1])
+            }
+            .buttonStyle(.plain)
+        }
+        .background(Color.white)
+    }
+
+    /// T21 QA round 3 follow-up: surfaces the "Recently deleted lists" entry
+    /// promised by the delete-confirmation copy ("You can recover this list
+    /// for 30 days from Settings"). Tap → DeletedListsView, which lists
+    /// tombstoned lists with days_remaining + a Restore button per row.
+    private var recentlyDeletedRow: SettingsRowConfig {
+        SettingsRowConfig(
+            iconName: "trash.slash",
+            iconBg: SettingsColors.iconBgGray,
+            title: "Recently deleted lists",
+            subtitle: "Restore lists you deleted in the last 30 days",
+            showChevron: true,
+            titleColor: SettingsColors.primaryText
+        )
+    }
+
+    private var listsSection: some View {
+        VStack(spacing: 0) {
+            NavigationLink(destination: DeletedListsView()) {
+                settingsRow(recentlyDeletedRow)
             }
             .buttonStyle(.plain)
         }
