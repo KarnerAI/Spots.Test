@@ -9,7 +9,7 @@ import SwiftUI
 
 struct SpotCardView: View {
     let spot: NearbySpot
-    var spotListTypeMap: [String: ListType] = [:]
+    var spotListKindMap: [String: ListKind] = [:]
     var hasLoadedSavedPlaces: Bool = false
     let onBookmarkTap: () -> Void
     let onCardTap: () -> Void
@@ -160,7 +160,7 @@ struct SpotCardView: View {
     private var bookmarkButton: some View {
         SaveSpotButton(
             placeId: spot.placeId,
-            listType: spotListTypeMap[spot.placeId],
+            kind: spotListKindMap[spot.placeId],
             hasLoadedSavedPlaces: hasLoadedSavedPlaces,
             onTap: onBookmarkTap
         )
@@ -194,7 +194,7 @@ extension SpotCardView {
 
     SpotCardView(
         spot: mockSpot,
-        spotListTypeMap: ["test123": .starred],
+        spotListKindMap: ["test123": .favorites],
         hasLoadedSavedPlaces: true,
         onBookmarkTap: { print("Bookmark tapped") },
         onCardTap: { print("Card tapped") }

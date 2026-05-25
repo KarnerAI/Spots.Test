@@ -184,10 +184,10 @@ final class OnboardingViewModel: ObservableObject {
     func hydrateSelectionsIfNeeded() async {
         do {
             if bucketListId == nil {
-                bucketListId = try await savingService.getListByType(.bucketList)?.id
+                bucketListId = try await savingService.getListByKind(.wantToGo)?.id
             }
             if favoritesListId == nil {
-                favoritesListId = try await savingService.getListByType(.starred)?.id
+                favoritesListId = try await savingService.getListByKind(.favorites)?.id
             }
         } catch {
             print("OnboardingViewModel: hydrate listIds failed: \(error)")
@@ -390,7 +390,7 @@ final class OnboardingViewModel: ObservableObject {
         do {
             // Lazily resolve the list id on first use.
             if bucketListId == nil {
-                bucketListId = try await savingService.getListByType(.bucketList)?.id
+                bucketListId = try await savingService.getListByKind(.wantToGo)?.id
             }
             guard let listId = bucketListId else {
                 throw OnboardingError.missingDefaultList
@@ -418,7 +418,7 @@ final class OnboardingViewModel: ObservableObject {
 
         do {
             if favoritesListId == nil {
-                favoritesListId = try await savingService.getListByType(.starred)?.id
+                favoritesListId = try await savingService.getListByKind(.favorites)?.id
             }
             guard let listId = favoritesListId else {
                 throw OnboardingError.missingDefaultList

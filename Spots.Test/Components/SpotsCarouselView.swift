@@ -11,7 +11,7 @@ struct SpotsCarouselView: View {
     let spots: [NearbySpot]
     let isLoading: Bool
     let hasMorePages: Bool
-    let spotListTypeMap: [String: ListType]
+    let spotListKindMap: [String: ListKind]
     let hasLoadedSavedPlaces: Bool
     let onBookmarkTap: (NearbySpot) -> Void
     let onCardTap: (NearbySpot) -> Void
@@ -83,7 +83,7 @@ struct SpotsCarouselView: View {
                     ForEach(Array(spots.enumerated()), id: \.element.id) { index, spot in
                         SpotCardView(
                             spot: spot,
-                            spotListTypeMap: spotListTypeMap,
+                            spotListKindMap: spotListKindMap,
                             hasLoadedSavedPlaces: hasLoadedSavedPlaces,
                             onBookmarkTap: { onBookmarkTap(spot) },
                             onCardTap: { onCardTap(spot) }
@@ -171,7 +171,7 @@ struct SpotsCarouselView: View {
             spots: mockSpots,
             isLoading: false,
             hasMorePages: true,
-            spotListTypeMap: ["1": .starred, "2": .favorites, "3": .bucketList],
+            spotListKindMap: ["1": .favorites, "2": .liked, "3": .wantToGo],
             hasLoadedSavedPlaces: true,
             onBookmarkTap: { spot in print("Bookmark: \(spot.name)") },
             onCardTap: { spot in print("Card: \(spot.name)") },
@@ -186,7 +186,7 @@ struct SpotsCarouselView: View {
         spots: [],
         isLoading: true,
         hasMorePages: false,
-        spotListTypeMap: [:],
+        spotListKindMap: [:],
         hasLoadedSavedPlaces: false,
         onBookmarkTap: { _ in },
         onCardTap: { _ in },
@@ -200,7 +200,7 @@ struct SpotsCarouselView: View {
         spots: [],
         isLoading: false,
         hasMorePages: false,
-        spotListTypeMap: [:],
+        spotListKindMap: [:],
         hasLoadedSavedPlaces: true,
         onBookmarkTap: { _ in },
         onCardTap: { _ in },
@@ -214,7 +214,7 @@ struct SpotsCarouselView: View {
         spots: [],
         isLoading: false,
         hasMorePages: false,
-        spotListTypeMap: [:],
+        spotListKindMap: [:],
         hasLoadedSavedPlaces: false,
         onBookmarkTap: { _ in },
         onCardTap: { _ in },

@@ -18,7 +18,7 @@ struct FeedItemCardView: View {
     /// viewer* has saved this spot to, if any. Drives the SaveSpotButton's
     /// icon so the user can tell at a glance whether they've already saved
     /// the spot from the feed.
-    let listType: ListType?
+    let kind: ListKind?
     /// True once `LocationSavingViewModel.loadSavedPlaces` has populated the
     /// map at least once. While false, the button shows a generic bookmark
     /// (no false negatives — we don't claim "not saved" until we know).
@@ -33,7 +33,7 @@ struct FeedItemCardView: View {
         item: FeedItem,
         actor: UserProfile?,
         spot: Spot?,
-        listType: ListType? = nil,
+        kind: ListKind? = nil,
         hasLoadedSavedPlaces: Bool = false,
         onTapActor: @escaping () -> Void,
         onTap: @escaping () -> Void,
@@ -42,7 +42,7 @@ struct FeedItemCardView: View {
         self.item = item
         self.actor = actor
         self.spot = spot
-        self.listType = listType
+        self.kind = kind
         self.hasLoadedSavedPlaces = hasLoadedSavedPlaces
         self.onTapActor = onTapActor
         self.onTap = onTap
@@ -137,16 +137,17 @@ struct FeedItemCardView: View {
     /// Verb stands alone in the header (the spot name is rendered separately
     /// over the hero image below). Each phrase must read as a complete clause
     /// without an immediately following object.
-    /// Tier mapping (Iteration 2): .starred = elite "Favorites", .favorites =
-    /// mid "Liked", .bucketList = wishlist "Want to Go". Verbs follow tier
+    /// Tier mapping (Iteration 2): .favorites = elite "Favorites", .liked =
+    /// mid "Liked", .wantToGo = wishlist "Want to Go". Verbs follow tier
     /// semantics — "favorited" reads as the strongest love verb, "liked" as
     /// the lighter approval verb.
     private func spotSaveVerb(payload: FeedItemPayload.SpotSavePayload) -> String {
-        switch payload.listType {
-        case .starred:    return "favorited"
-        case .favorites:  return "liked"
-        case .bucketList: return "wants to go"
-        case .none:       return "saved to \(payload.listDisplayName)"
+        switch payload.listKind {
+        case .favorites:    return "favorited"
+        case .liked:        return "liked"
+        case .wantToGo:     return "wants to go"
+        case .custom, .trip, .datePlan, .none:
+            return "saved to \(payload.listDisplayName)"
         }
     }
 
@@ -328,7 +329,7 @@ struct FeedItemCardView: View {
             // the feed. Tap still opens the same ListPickerSheet via onTapSpot.
             SaveSpotButton(
                 placeId: spot?.placeId ?? "",
-                listType: listType,
+                kind: kind,
                 hasLoadedSavedPlaces: hasLoadedSavedPlaces,
                 onTap: onTapSpot
             )

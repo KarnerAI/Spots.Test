@@ -21,23 +21,23 @@ enum MarkerIconHelper {
     /// user-facing labels are Favorites (heart) / Liked (thumbs-up) / Want to Go (flag).
     /// Only spots that belong to at least one of these three list types get a custom
     /// icon; spots in no list or in other list types use the default teal pin.
-    static func iconForListTypes(
-        _ listTypes: Set<ListType>,
+    static func iconForListKinds(
+        _ listKinds: Set<ListKind>,
         cache: inout [String: UIImage]
     ) -> UIImage? {
         let cacheKey: String
         let systemName: String
         let color: UIColor
 
-        if listTypes.contains(.starred) {
+        if listKinds.contains(.favorites) {
             cacheKey = "starred"
             systemName = "heart.fill"          // elite tier, displayed as "Favorites"
             color = .listStarred                // red
-        } else if listTypes.contains(.favorites) {
+        } else if listKinds.contains(.liked) {
             cacheKey = "favorites"
             systemName = "hand.thumbsup.fill"  // mid tier, displayed as "Liked"
             color = .listFavorites              // blue
-        } else if listTypes.contains(.bucketList) {
+        } else if listKinds.contains(.wantToGo) {
             cacheKey = "bucketList"
             systemName = "flag.fill"            // wishlist, displayed as "Want to Go"
             color = .listBucketList             // emerald

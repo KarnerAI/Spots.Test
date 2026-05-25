@@ -202,16 +202,16 @@ enum ProfileTileBuilder {
     /// Round-trips: 1 RPC for per-list summaries + 1 batch SELECT for cover
     /// spot rows = 2 total. (Was ~8 sequential round-trips pre-perf-pass.)
     static func buildTiles(from userLists: [UserList]) async throws -> (tiles: [ListTileData], totalCount: Int) {
-        let configs: [(type: ListType, title: String, color: Color)] = [
-            (.starred,    ListType.starred.displayName,    ListTileData.color(forTitle: ListType.starred.displayName)),
-            (.favorites,  ListType.favorites.displayName,  ListTileData.color(forTitle: ListType.favorites.displayName)),
-            (.bucketList, ListType.bucketList.displayName, ListTileData.color(forTitle: ListType.bucketList.displayName)),
+        let configs: [(type: ListKind, title: String, color: Color)] = [
+            (.favorites,    ListKind.favorites.displayName,    ListTileData.color(forTitle: ListKind.favorites.displayName)),
+            (.liked,  ListKind.liked.displayName,  ListTileData.color(forTitle: ListKind.liked.displayName)),
+            (.wantToGo, ListKind.wantToGo.displayName, ListTileData.color(forTitle: ListKind.wantToGo.displayName)),
         ]
 
         // Map list-type → user's owned list, if it exists.
-        let resolvedConfigs: [(config: (type: ListType, title: String, color: Color), list: UserList?)] =
+        let resolvedConfigs: [(config: (type: ListKind, title: String, color: Color), list: UserList?)] =
             configs.map { config in
-                (config, userLists.first { $0.listType == config.type })
+                (config, userLists.first { $0.kind == config.type })
             }
 
         // Step 1: one RPC for tile summaries across all present system lists.

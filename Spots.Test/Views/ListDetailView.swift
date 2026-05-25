@@ -16,7 +16,7 @@ enum ListDetailMode {
     case allSpots
     /// Same as `.allSpots` but driven by an explicit list of `UserList`s — used
     /// when viewing another user's profile so we don't fall back to the current
-    /// user's lists via `getListByType`.
+    /// user's lists via `getListByKind`.
     case allSpotsForLists([UserList])
     /// All of the current user's saved spots, filtered to a single city by name.
     /// Comparison is trimmed + case-insensitive (see `LocationGrouping.matchesCity`).
@@ -24,7 +24,7 @@ enum ListDetailMode {
     /// All of the current user's saved spots, filtered to a single country by name.
     case allSpotsInCountry(String)
     /// City-filtered drill-down when viewing another user's profile — uses the
-    /// supplied lists rather than `getListByType` (which is current-user only).
+    /// supplied lists rather than `getListByKind` (which is current-user only).
     case allSpotsInCityForLists(String, [UserList])
     /// Country-filtered drill-down for another user's profile.
     case allSpotsInCountryForLists(String, [UserList])
@@ -71,17 +71,17 @@ struct ListDetailView: View {
     @State private var shouldCenterWhenLocationArrives = false
 
     // Cached derived data (updated only when spots, searchText, or sortOrder change)
-    @State private var cachedSpotListTypeMap: [String: ListType] = [:]
+    @State private var cachedSpotListTypeMap: [String: ListKind] = [:]
     @State private var cachedFilteredAndSortedSpots: [SpotWithMetadata] = []
 
     // MARK: - Computed (delegate to cache)
-    private var spotListTypeMap: [String: ListType] { cachedSpotListTypeMap }
+    private var spotListKindMap: [String: ListKind] { cachedSpotListTypeMap }
     private var filteredAndSortedSpots: [SpotWithMetadata] { cachedFilteredAndSortedSpots }
 
     private func updateCachedSpots() {
         cachedSpotListTypeMap = Dictionary(
             uniqueKeysWithValues: spots.compactMap { s in
-                s.listTypes.first.map { (s.spot.placeId, $0) }
+                s.listKinds.first.map { (s.spot.placeId, $0) }
             }
         )
         let filtered = searchText.isEmpty
@@ -362,7 +362,7 @@ struct ListDetailView: View {
                     let nearby = spot.toNearbySpot()
                     SpotCardView(
                         spot: nearby,
-                        spotListTypeMap: spotListTypeMap,
+                        spotListKindMap: spotListKindMap,
                         hasLoadedSavedPlaces: true,
                         onBookmarkTap: { spotForSaving = nearby },
                         onCardTap: { spotToOpenInMaps = nearby }
@@ -429,18 +429,18 @@ struct ListDetailView: View {
             case .singleList(let list):
                 spots = try await LocationSavingService.shared.getSpotsInList(
                     listId: list.id,
-                    listType: list.listType ?? .starred
+                    kind: list.kind
                 )
             case .allSpots:
                 let service = LocationSavingService.shared
-                let starredList = try await service.getListByType(.starred)
-                let favoritesList = try await service.getListByType(.favorites)
-                let bucketList = try await service.getListByType(.bucketList)
+                let starredList = try await service.getListByKind(.favorites)
+                let favoritesList = try await service.getListByKind(.liked)
+                let bucketList = try await service.getListByKind(.wantToGo)
 
                 var allPlaces: [SpotWithMetadata] = []
-                if let id = starredList?.id { allPlaces += try await service.getSpotsInList(listId: id, listType: .starred) }
-                if let id = favoritesList?.id { allPlaces += try await service.getSpotsInList(listId: id, listType: .favorites) }
-                if let id = bucketList?.id { allPlaces += try await service.getSpotsInList(listId: id, listType: .bucketList) }
+                if let id = starredList?.id { allPlaces += try await service.getSpotsInList(listId: id, kind: .favorites) }
+                if let id = favoritesList?.id { allPlaces += try await service.getSpotsInList(listId: id, kind: .liked) }
+                if let id = bucketList?.id { allPlaces += try await service.getSpotsInList(listId: id, kind: .wantToGo) }
 
                 spots = Self.dedupedAndSorted(allPlaces)
 
@@ -448,8 +448,7 @@ struct ListDetailView: View {
                 let service = LocationSavingService.shared
                 var allPlaces: [SpotWithMetadata] = []
                 for list in lists {
-                    guard let type = list.listType else { continue }
-                    allPlaces += try await service.getSpotsInList(listId: list.id, listType: type)
+                    allPlaces += try await service.getSpotsInList(listId: list.id, kind: list.kind)
                 }
                 spots = Self.dedupedAndSorted(allPlaces)
 
@@ -488,13 +487,12 @@ struct ListDetailView: View {
 
     /// Fetch deduped spots across the supplied lists. Used for other-user
     /// drill-downs where we already hold the target user's `UserList`s, so we
-    /// must not fall back to current-user's `getListByType`.
+    /// must not fall back to current-user's `getListByKind`.
     private static func loadAllSpotsForLists(_ lists: [UserList]) async throws -> [SpotWithMetadata] {
         let service = LocationSavingService.shared
         var all: [SpotWithMetadata] = []
         for list in lists {
-            guard let type = list.listType else { continue }
-            all += try await service.getSpotsInList(listId: list.id, listType: type)
+            all += try await service.getSpotsInList(listId: list.id, kind: list.kind)
         }
         return dedupedAndSorted(all)
     }
@@ -503,14 +501,14 @@ struct ListDetailView: View {
     /// matching the dedupe rules used by `.allSpots`. Returns deduped metadata.
     private static func loadAllOwnedSpots() async throws -> [SpotWithMetadata] {
         let service = LocationSavingService.shared
-        let starred = try await service.getListByType(.starred)
-        let favorites = try await service.getListByType(.favorites)
-        let bucket = try await service.getListByType(.bucketList)
+        let starred = try await service.getListByKind(.favorites)
+        let favorites = try await service.getListByKind(.liked)
+        let bucket = try await service.getListByKind(.wantToGo)
 
         var all: [SpotWithMetadata] = []
-        if let id = starred?.id { all += try await service.getSpotsInList(listId: id, listType: .starred) }
-        if let id = favorites?.id { all += try await service.getSpotsInList(listId: id, listType: .favorites) }
-        if let id = bucket?.id { all += try await service.getSpotsInList(listId: id, listType: .bucketList) }
+        if let id = starred?.id { all += try await service.getSpotsInList(listId: id, kind: .favorites) }
+        if let id = favorites?.id { all += try await service.getSpotsInList(listId: id, kind: .liked) }
+        if let id = bucket?.id { all += try await service.getSpotsInList(listId: id, kind: .wantToGo) }
         return dedupedAndSorted(all)
     }
 
@@ -522,7 +520,7 @@ struct ListDetailView: View {
         source.filter { predicate($0.spot) }
     }
 
-    /// Dedupe by placeId, union listTypes, keep the most recent savedAt; sort newest first.
+    /// Dedupe by placeId, union listKinds, keep the most recent savedAt; sort newest first.
     private static func dedupedAndSorted(_ allPlaces: [SpotWithMetadata]) -> [SpotWithMetadata] {
         var unique: [String: SpotWithMetadata] = [:]
         for place in allPlaces {
@@ -530,7 +528,7 @@ struct ListDetailView: View {
                 unique[place.spot.placeId] = SpotWithMetadata(
                     spot: existing.spot,
                     savedAt: max(existing.savedAt, place.savedAt),
-                    listTypes: existing.listTypes.union(place.listTypes)
+                    listKinds: existing.listKinds.union(place.listKinds)
                 )
             } else {
                 unique[place.spot.placeId] = place
@@ -555,8 +553,8 @@ struct ListDetailView: View {
             marker.snippet = spot.address
             marker.userData = spotWithMetadata
             marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
-            marker.icon = MarkerIconHelper.iconForListTypes(
-                spotWithMetadata.listTypes,
+            marker.icon = MarkerIconHelper.iconForListKinds(
+                spotWithMetadata.listKinds,
                 cache: &markerIconCache
             )
             return marker

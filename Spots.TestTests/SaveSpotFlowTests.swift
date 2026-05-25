@@ -26,7 +26,7 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
     // Configurable behavior
     var listsContainingSpot: [String: [UUID]] = [:]
     var userListsResult: [UserList] = []
-    var listsByType: [ListType: UserList] = [:]
+    var listsByType: [ListKind: UserList] = [:]
     var spotsInListResult: [UUID: [SpotWithMetadata]] = [:]
     var spotCountResult: [UUID: Int] = [:]
 
@@ -56,11 +56,11 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
         return userListsResult
     }
 
-    func getListByType(_ listType: ListType) async throws -> UserList? {
-        return listsByType[listType]
+    func getListByKind(_ kind: ListKind) async throws -> UserList? {
+        return listsByType[kind]
     }
 
-    func getSpotsInList(listId: UUID, listType: ListType) async throws -> [SpotWithMetadata] {
+    func getSpotsInList(listId: UUID, kind: ListKind) async throws -> [SpotWithMetadata] {
         return spotsInListResult[listId] ?? []
     }
 
@@ -126,6 +126,17 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
         if let err = upsertShouldThrow { throw err }
         upsertSpotCalls.append((placeId, name))
     }
+
+    var moveSpotCalls: [(placeId: String, from: UUID?, to: UUID?, source: SpotSaveSource)] = []
+
+    func moveSpotBetweenLists(
+        placeId: String,
+        fromListId: UUID?,
+        toListId: UUID?,
+        source: SpotSaveSource
+    ) async throws {
+        moveSpotCalls.append((placeId, fromListId, toListId, source))
+    }
 }
 
 // MARK: - Fixtures
@@ -133,25 +144,25 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
 @MainActor
 private struct Fixtures {
     static let userId = UUID()
+    static let likedId = UUID()
     static let favoritesId = UUID()
-    static let starredId = UUID()
-    static let bucketListId = UUID()
+    static let wantToGoId = UUID()
     static let customListId = UUID()
 
     static let favoritesList = UserList(
-        id: favoritesId, userId: userId, listType: .favorites,
+        id: likedId, userId: userId, kind: .liked,
         name: nil, createdAt: nil, updatedAt: nil
     )
     static let starredList = UserList(
-        id: starredId, userId: userId, listType: .starred,
+        id: favoritesId, userId: userId, kind: .favorites,
         name: nil, createdAt: nil, updatedAt: nil
     )
     static let bucketList = UserList(
-        id: bucketListId, userId: userId, listType: .bucketList,
+        id: wantToGoId, userId: userId, kind: .wantToGo,
         name: nil, createdAt: nil, updatedAt: nil
     )
     static let customList = UserList(
-        id: customListId, userId: userId, listType: nil,
+        id: customListId, userId: userId, kind: .custom,
         name: "My Custom", createdAt: nil, updatedAt: nil
     )
 
@@ -193,44 +204,44 @@ struct CoerceToSingleDefaultTests {
 
     @Test func passThroughWhenExactlyOneDefault() {
         let result = LocationSavingViewModel.coerceToSingleDefault(
-            [Fixtures.favoritesId, Fixtures.customListId],
+            [Fixtures.likedId, Fixtures.customListId],
             userLists: Fixtures.allLists
         )
-        #expect(result == [Fixtures.favoritesId, Fixtures.customListId])
+        #expect(result == [Fixtures.likedId, Fixtures.customListId])
     }
 
     @Test func dropsExtraDefaultsKeepingBucketListWinner() {
-        // bucketList wins per priority order (matches displayListType resolver).
+        // bucketList wins per priority order (matches displayKind resolver).
         let result = LocationSavingViewModel.coerceToSingleDefault(
-            [Fixtures.favoritesId, Fixtures.starredId, Fixtures.bucketListId],
+            [Fixtures.likedId, Fixtures.favoritesId, Fixtures.wantToGoId],
             userLists: Fixtures.allLists
         )
-        #expect(result == [Fixtures.bucketListId])
+        #expect(result == [Fixtures.wantToGoId])
     }
 
     @Test func dropsExtraDefaultsKeepingStarredOverFavorites() {
         let result = LocationSavingViewModel.coerceToSingleDefault(
-            [Fixtures.favoritesId, Fixtures.starredId],
+            [Fixtures.likedId, Fixtures.favoritesId],
             userLists: Fixtures.allLists
         )
-        #expect(result == [Fixtures.starredId])
+        #expect(result == [Fixtures.favoritesId])
     }
 
     @Test func keepsCustomListAlongsideCoercedDefault() {
         let result = LocationSavingViewModel.coerceToSingleDefault(
-            [Fixtures.favoritesId, Fixtures.bucketListId, Fixtures.customListId],
+            [Fixtures.likedId, Fixtures.wantToGoId, Fixtures.customListId],
             userLists: Fixtures.allLists
         )
-        #expect(result == [Fixtures.bucketListId, Fixtures.customListId])
+        #expect(result == [Fixtures.wantToGoId, Fixtures.customListId])
     }
 }
 
-// MARK: - listType helper
+// MARK: - kind helper
 
 @MainActor
 struct ListTypeHelperTests {
     @Test func returnsNilWhenNoDefaultSelected() {
-        let result = LocationSavingViewModel.listType(
+        let result = LocationSavingViewModel.kind(
             for: [Fixtures.customListId],
             userLists: Fixtures.allLists
         )
@@ -238,11 +249,11 @@ struct ListTypeHelperTests {
     }
 
     @Test func returnsTheDefaultListTypeWhenOneSelected() {
-        let result = LocationSavingViewModel.listType(
-            for: [Fixtures.favoritesId],
+        let result = LocationSavingViewModel.kind(
+            for: [Fixtures.likedId],
             userLists: Fixtures.allLists
         )
-        #expect(result == .favorites)
+        #expect(result == .liked)
     }
 }
 
@@ -256,10 +267,10 @@ struct SaveSpotToListsTests {
         let vm = Fixtures.makeVM(service: svc)
         let placeId = "place-1"
 
-        try await vm.saveSpotToLists(spotData: Fixtures.spotData(placeId: placeId), listIds: [Fixtures.favoritesId])
+        try await vm.saveSpotToLists(spotData: Fixtures.spotData(placeId: placeId), listIds: [Fixtures.likedId])
 
-        #expect(vm.spotListTypeMap[placeId] == .favorites)
-        #expect(svc.saveSpotToListCalls.contains(where: { $0.listId == Fixtures.favoritesId }))
+        #expect(vm.spotListKindMap[placeId] == .liked)
+        #expect(svc.saveSpotToListCalls.contains(where: { $0.listId == Fixtures.likedId }))
         #expect(vm.lastSaveError == nil)
     }
 
@@ -272,17 +283,17 @@ struct SaveSpotToListsTests {
         // must coerce so only one default ends up in saveSpotToList calls.
         try await vm.saveSpotToLists(
             spotData: Fixtures.spotData(placeId: placeId),
-            listIds: [Fixtures.favoritesId, Fixtures.bucketListId]
+            listIds: [Fixtures.likedId, Fixtures.wantToGoId]
         )
 
         // bucketList wins per priority. Optimistic map reflects the winner.
-        #expect(vm.spotListTypeMap[placeId] == .bucketList)
+        #expect(vm.spotListKindMap[placeId] == .wantToGo)
         // Only one default add hits the service.
         let defaultAdds = svc.saveSpotToListCalls.filter { call in
-            call.listId == Fixtures.favoritesId || call.listId == Fixtures.bucketListId
+            call.listId == Fixtures.likedId || call.listId == Fixtures.wantToGoId
         }
         #expect(defaultAdds.count == 1)
-        #expect(defaultAdds.first?.listId == Fixtures.bucketListId)
+        #expect(defaultAdds.first?.listId == Fixtures.wantToGoId)
     }
 
     @Test func addFails_revertsMapAndSetsError() async throws {
@@ -291,16 +302,16 @@ struct SaveSpotToListsTests {
         let vm = Fixtures.makeVM(service: svc)
         let placeId = "place-1"
         // Pre-populate so we can assert rollback restores the prior state, not nil.
-        vm.spotListTypeMap[placeId] = .starred
+        vm.spotListKindMap[placeId] = .favorites
 
         await #expect(throws: Error.self) {
             try await vm.saveSpotToLists(
                 spotData: Fixtures.spotData(placeId: placeId),
-                listIds: [Fixtures.favoritesId]
+                listIds: [Fixtures.likedId]
             )
         }
 
-        #expect(vm.spotListTypeMap[placeId] == .starred)         // rolled back
+        #expect(vm.spotListKindMap[placeId] == .favorites)         // rolled back
         #expect(vm.lastSaveError != nil)
     }
 
@@ -312,20 +323,20 @@ struct SaveSpotToListsTests {
         // cleans up on next loadSavedPlaces.
         let svc = MockLocationSavingService()
         let placeId = "place-1"
-        svc.listsContainingSpot[placeId] = [Fixtures.favoritesId]
-        svc.removeSpotFromListShouldThrowOnceForListId = Fixtures.favoritesId
+        svc.listsContainingSpot[placeId] = [Fixtures.likedId]
+        svc.removeSpotFromListShouldThrowOnceForListId = Fixtures.likedId
         let vm = Fixtures.makeVM(service: svc)
 
         try await vm.saveSpotToLists(
             spotData: Fixtures.spotData(placeId: placeId),
-            listIds: [Fixtures.bucketListId]
+            listIds: [Fixtures.wantToGoId]
         )
 
-        #expect(vm.spotListTypeMap[placeId] == .bucketList)      // optimistic flip stuck
+        #expect(vm.spotListKindMap[placeId] == .wantToGo)      // optimistic flip stuck
         #expect(vm.lastSaveError == nil)                         // remove failure is swallowed
         // Add was called, remove was attempted but threw.
-        #expect(svc.saveSpotToListCalls.contains { $0.listId == Fixtures.bucketListId })
-        #expect(svc.removeSpotFromListCalls.contains { $0.listId == Fixtures.favoritesId })
+        #expect(svc.saveSpotToListCalls.contains { $0.listId == Fixtures.wantToGoId })
+        #expect(svc.removeSpotFromListCalls.contains { $0.listId == Fixtures.likedId })
     }
 
     @Test func unsave_clearsMap() async throws {
@@ -333,17 +344,17 @@ struct SaveSpotToListsTests {
         // Diff: toAdd = [], toRemove = favorites. Map should clear.
         let svc = MockLocationSavingService()
         let placeId = "place-1"
-        svc.listsContainingSpot[placeId] = [Fixtures.favoritesId]
+        svc.listsContainingSpot[placeId] = [Fixtures.likedId]
         let vm = Fixtures.makeVM(service: svc)
-        vm.spotListTypeMap[placeId] = .favorites
+        vm.spotListKindMap[placeId] = .liked
 
         try await vm.saveSpotToLists(
             spotData: Fixtures.spotData(placeId: placeId),
             listIds: []
         )
 
-        #expect(vm.spotListTypeMap[placeId] == nil)
-        #expect(svc.removeSpotFromListCalls.contains { $0.listId == Fixtures.favoritesId })
+        #expect(vm.spotListKindMap[placeId] == nil)
+        #expect(svc.removeSpotFromListCalls.contains { $0.listId == Fixtures.likedId })
     }
 
     @Test func concurrentSavesSerialize() async throws {
@@ -356,21 +367,21 @@ struct SaveSpotToListsTests {
 
         async let first: Void = vm.saveSpotToLists(
             spotData: Fixtures.spotData(placeId: placeId),
-            listIds: [Fixtures.favoritesId]
+            listIds: [Fixtures.likedId]
         )
         async let second: Void = vm.saveSpotToLists(
             spotData: Fixtures.spotData(placeId: placeId),
-            listIds: [Fixtures.starredId]
+            listIds: [Fixtures.favoritesId]
         )
 
         try await first
         try await second
 
-        // The second save should win — final state is .starred, the spot is
+        // The second save should win — final state is .favorites, the spot is
         // in the starred list, and is no longer in favorites.
-        #expect(vm.spotListTypeMap[placeId] == .starred)
-        #expect(svc.listsContainingSpot[placeId]?.contains(Fixtures.starredId) == true)
-        #expect(svc.listsContainingSpot[placeId]?.contains(Fixtures.favoritesId) != true)
+        #expect(vm.spotListKindMap[placeId] == .favorites)
+        #expect(svc.listsContainingSpot[placeId]?.contains(Fixtures.favoritesId) == true)
+        #expect(svc.listsContainingSpot[placeId]?.contains(Fixtures.likedId) != true)
     }
 }
 
@@ -383,11 +394,11 @@ struct RemoveSpotTests {
         let svc = MockLocationSavingService()
         let placeId = "place-1"
         let vm = Fixtures.makeVM(service: svc)
-        vm.spotListTypeMap[placeId] = .favorites
+        vm.spotListKindMap[placeId] = .liked
 
-        try await vm.removeSpot(placeId: placeId, fromListId: Fixtures.favoritesId)
+        try await vm.removeSpot(placeId: placeId, fromListId: Fixtures.likedId)
 
-        #expect(vm.spotListTypeMap[placeId] == nil)
+        #expect(vm.spotListKindMap[placeId] == nil)
         #expect(vm.lastSaveError == nil)
     }
 
@@ -396,13 +407,13 @@ struct RemoveSpotTests {
         svc.removeSpotFromListShouldThrow = NSError(domain: "test", code: 5)
         let placeId = "place-1"
         let vm = Fixtures.makeVM(service: svc)
-        vm.spotListTypeMap[placeId] = .favorites
+        vm.spotListKindMap[placeId] = .liked
 
         await #expect(throws: Error.self) {
-            try await vm.removeSpot(placeId: placeId, fromListId: Fixtures.favoritesId)
+            try await vm.removeSpot(placeId: placeId, fromListId: Fixtures.likedId)
         }
 
-        #expect(vm.spotListTypeMap[placeId] == .favorites)       // restored
+        #expect(vm.spotListKindMap[placeId] == .liked)       // restored
         #expect(vm.lastSaveError != nil)
     }
 }

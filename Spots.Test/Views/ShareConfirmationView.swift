@@ -195,7 +195,7 @@ struct ShareConfirmationView: View {
         
         do {
             let placeIds = places.map { $0.placeId }
-            existingPlaceIds = try await locationSavingService.checkPlacesInBucketlist(placeIds)
+            existingPlaceIds = try await locationSavingService.checkPlacesInWantToGo(placeIds)
             
             // Pre-select all places that aren't already in bucketlist
             selectedPlaceIds = Set(places.filter { !existingPlaceIds.contains($0.placeId) }.map { $0.placeId })

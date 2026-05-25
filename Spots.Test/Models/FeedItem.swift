@@ -20,15 +20,19 @@ enum FeedItemPayload: Equatable, Hashable {
 
     struct SpotSavePayload: Equatable, Hashable {
         let listId: UUID
-        let listType: ListType?
+        /// System / custom kind of the destination list. Comes from the feed
+        /// RPC's `list_kind` field (renamed from `list_type` in Phase 1).
+        let listKind: ListKind?
         let listName: String?
         let spotId: String
         let otherSaversCount: Int
         let otherSavers: [OtherSaver]
 
-        /// Display label for the destination list ("Favorites", or the custom list's name).
+        /// Display label for the destination list ("Favorites", or the custom
+        /// list's name). System kinds use their canonical label; custom kinds
+        /// fall back to the user-supplied name.
         var listDisplayName: String {
-            if let listType { return listType.displayName }
+            if let listKind, listKind.isSystemKind { return listKind.displayName }
             return listName ?? "a list"
         }
     }
@@ -91,7 +95,7 @@ extension FeedItem: Decodable {
             let raw = try SpotSaveRaw(from: payloadDecoder)
             payload = .spotSave(.init(
                 listId: raw.list_id,
-                listType: raw.list_type,
+                listKind: raw.list_kind,
                 listName: raw.list_name,
                 spotId: raw.spot_id,
                 otherSaversCount: raw.other_savers_count ?? 0,
@@ -114,7 +118,11 @@ extension FeedItem: Decodable {
 
     private struct SpotSaveRaw: Decodable {
         let list_id: UUID
-        let list_type: ListType?
+        /// `list_kind` field on the feed RPC payload (renamed from
+        /// `list_type` in the Phase 1 / Ticket T2 migration). Nullable so a
+        /// payload missing the field (legacy clients reading new-server data
+        /// or vice versa) decodes as nil rather than throwing.
+        let list_kind: ListKind?
         let list_name: String?
         let spot_id: String
         let other_savers_count: Int?
