@@ -191,3 +191,21 @@ Deferred work items captured during planning + reviews. Each item is self-contai
 **Effort:** Human ~half day / CC ~1hr. Touch points: `SQL/<new>_get_lists_paginated_rpc.sql`, `Services/LocationSavingService.swift`, `Views/AllListsView.swift`.
 
 **Priority:** P3. **Depends on:** T21 (AllListsView exists).
+
+---
+
+## P3 — Emoji keyboard fallback when emoji mode is disabled
+
+**What:** `EmojiKeyboardField` overrides `textInputMode` to return iOS's emoji input mode. If a user has disabled the emoji keyboard in iOS Settings (rare but possible), `UITextInputMode.activeInputModes.first { $0.primaryLanguage == "emoji" }` returns nil and iOS silently falls back to the user's primary language keyboard. Maya taps "Choose emoji" → regular keyboard rises. Not a crash, but misleading affordance.
+
+**Why:** Defensive UX. Adds a one-line check + inline hint when emoji mode is unavailable: "Pick from the suggestions below" with the keyboard CTA hidden.
+
+**Pros:** Eliminates a confusing degraded state. Cheap to add (one onAppear check on EmojiKeyboardField init).
+
+**Cons:** The async availability check may cause a brief flicker. Edge case affects a tiny fraction of users.
+
+**Context:** Surfaced in eng-review round 2 on 2026-05-25. User chose to ship as-is and capture this for later. The 12-emoji starter grid in CreateListView + ChangeCoverEmojiSheet already serves as a functional fallback — the only loss is the affordance hint.
+
+**Effort:** Human ~15min / CC ~3min. Touch points: `Components/EmojiKeyboardField.swift`, callers in `CreateListView.swift` and `ListSettingsSheet.swift`.
+
+**Priority:** P3. **Depends on:** none.

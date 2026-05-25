@@ -356,47 +356,9 @@ struct CreateListView: View {
     }
 }
 
-// MARK: - Design tokens (DESIGN.md, Direction D — Modern + Utility)
-
-extension Color {
-    /// Cool blue accent #2563EB.
-    static let spotsAccent = Color(red: 0.145, green: 0.388, blue: 0.922)
-    /// Accent-tinted background for pickers, hints, soft surfaces. #EFF4FE.
-    static let spotsAccentSoft = Color(red: 0.937, green: 0.957, blue: 0.996)
-    /// Primary text #0A0A0A.
-    static let spotsText = Color(red: 0.039, green: 0.039, blue: 0.039)
-    /// Secondary text #6B6B6B.
-    static let spotsTextMuted = Color(red: 0.42, green: 0.42, blue: 0.42)
-    /// Tertiary text / placeholder #9B9B9B.
-    static let spotsTextSubtle = Color(red: 0.608, green: 0.608, blue: 0.608)
-    /// Hairline divider / default border #EEEEEE.
-    static let spotsBorder = Color(red: 0.933, green: 0.933, blue: 0.933)
-    /// Stronger border, input focus #D1D5DB.
-    static let spotsBorderStrong = Color(red: 0.82, green: 0.835, blue: 0.859)
-    /// Error / destructive #DC2626.
-    static let spotsError = Color(red: 0.863, green: 0.149, blue: 0.149)
-}
-
-// MARK: - Geist font helpers
-//
-// DESIGN.md calls for Geist + Geist Mono, but the .ttf/.otf files aren't
-// bundled yet (no UIAppFonts entry in Info.plist). Using .system() with
-// matching weights keeps these helpers compatible and visually close until
-// Geist is bundled. TODO: bundle Geist Variable + Geist Mono Variable,
-// register in Info.plist UIAppFonts, then swap the implementations below
-// back to .custom("Geist-...") without changing call sites.
-
-extension Font {
-    /// Display / body font. Will switch to Geist once fonts are bundled.
-    static func geist(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .default)
-    }
-
-    /// Monospace variant for tabular numerals (char counters, timestamps).
-    static func geistMono(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
-    }
-}
+// Design tokens (Color.spots* + Font.geist*) live in Helpers/DesignTokens.swift
+// since they're shared across CreateListView, ListSettingsSheet, AllListsView,
+// and ListPickerView. Lifted in the eng-review round 2 polish pass.
 
 // MARK: - Preview
 

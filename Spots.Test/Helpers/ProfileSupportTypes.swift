@@ -201,6 +201,22 @@ enum ProfileTileBuilder {
     ///
     /// Round-trips: 1 RPC for per-list summaries + 1 batch SELECT for cover
     /// spot rows = 2 total. (Was ~8 sequential round-trips pre-perf-pass.)
+    /// Pure helper extracted from `buildTiles` so the new T21 custom-list
+    /// inclusion (newest-first ordering, system-kind filter) can be unit-tested
+    /// without hitting the live `LocationSavingService.shared` singleton. The
+    /// regression we want to guard against: a future edit removes this filter
+    /// and Maya's custom lists silently disappear from the Profile carousel
+    /// again — the exact bug that motivated the polish-pass fix in 2026-05-25.
+    static func customListsInDisplayOrder(from userLists: [UserList]) -> [UserList] {
+        userLists
+            .filter { !$0.kind.isSystemKind }
+            .sorted { (lhs, rhs) in
+                let lDate = lhs.createdAt ?? Date.distantPast
+                let rDate = rhs.createdAt ?? Date.distantPast
+                return lDate > rDate
+            }
+    }
+
     static func buildTiles(from userLists: [UserList]) async throws -> (tiles: [ListTileData], totalCount: Int) {
         let systemConfigs: [(type: ListKind, title: String, color: Color)] = [
             (.favorites,    ListKind.favorites.displayName,    ListTileData.color(forTitle: ListKind.favorites.displayName)),
@@ -218,13 +234,7 @@ enum ProfileTileBuilder {
         // the Profile carousel, sorted newest-first. Without this, Maya creates
         // "Mexico City 2026" and it never shows up on the profile until she
         // taps View all — which broke the discoverability we just shipped.
-        let customLists: [UserList] = userLists
-            .filter { !$0.kind.isSystemKind }
-            .sorted { (lhs, rhs) in
-                let lDate = lhs.createdAt ?? Date.distantPast
-                let rDate = rhs.createdAt ?? Date.distantPast
-                return lDate > rDate
-            }
+        let customLists: [UserList] = Self.customListsInDisplayOrder(from: userLists)
 
         // Step 1: one RPC for tile summaries across ALL present lists (system + custom).
         let presentListIds: [UUID] =
