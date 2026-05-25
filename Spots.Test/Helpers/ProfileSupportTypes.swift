@@ -201,32 +201,60 @@ enum ProfileTileBuilder {
     ///
     /// Round-trips: 1 RPC for per-list summaries + 1 batch SELECT for cover
     /// spot rows = 2 total. (Was ~8 sequential round-trips pre-perf-pass.)
+    /// Pure helper extracted from `buildTiles` so the new T21 custom-list
+    /// inclusion (newest-first ordering, system-kind filter) can be unit-tested
+    /// without hitting the live `LocationSavingService.shared` singleton. The
+    /// regression we want to guard against: a future edit removes this filter
+    /// and Maya's custom lists silently disappear from the Profile carousel
+    /// again — the exact bug that motivated the polish-pass fix in 2026-05-25.
+    static func customListsInDisplayOrder(from userLists: [UserList]) -> [UserList] {
+        userLists
+            .filter { !$0.kind.isSystemKind }
+            .sorted { (lhs, rhs) in
+                let lDate = lhs.createdAt ?? Date.distantPast
+                let rDate = rhs.createdAt ?? Date.distantPast
+                return lDate > rDate
+            }
+    }
+
     static func buildTiles(from userLists: [UserList]) async throws -> (tiles: [ListTileData], totalCount: Int) {
-        let configs: [(type: ListKind, title: String, color: Color)] = [
+        let systemConfigs: [(type: ListKind, title: String, color: Color)] = [
             (.favorites,    ListKind.favorites.displayName,    ListTileData.color(forTitle: ListKind.favorites.displayName)),
             (.liked,  ListKind.liked.displayName,  ListTileData.color(forTitle: ListKind.liked.displayName)),
             (.wantToGo, ListKind.wantToGo.displayName, ListTileData.color(forTitle: ListKind.wantToGo.displayName)),
         ]
 
-        // Map list-type → user's owned list, if it exists.
+        // Map system-kind config → user's owned list, if it exists.
         let resolvedConfigs: [(config: (type: ListKind, title: String, color: Color), list: UserList?)] =
-            configs.map { config in
+            systemConfigs.map { config in
                 (config, userLists.first { $0.kind == config.type })
             }
 
-        // Step 1: one RPC for tile summaries across all present system lists.
-        let presentListIds = resolvedConfigs.compactMap { $0.list?.id }
+        // T21.6 follow-up: custom lists (kind not in systemKinds) also belong on
+        // the Profile carousel, sorted newest-first. Without this, Maya creates
+        // "Mexico City 2026" and it never shows up on the profile until she
+        // taps View all — which broke the discoverability we just shipped.
+        let customLists: [UserList] = Self.customListsInDisplayOrder(from: userLists)
+
+        // Step 1: one RPC for tile summaries across ALL present lists (system + custom).
+        let presentListIds: [UUID] =
+            resolvedConfigs.compactMap { $0.list?.id }
+            + customLists.map { $0.id }
         let summaries = try await LocationSavingService.shared.getListTileSummaries(listIds: presentListIds)
         let summaryByListId: [UUID: LocationSavingService.ListTileSummary] =
             Dictionary(uniqueKeysWithValues: summaries.map { ($0.listId, $0) })
 
-        // Step 2: one batch SELECT for the (up to 4) cover spot rows.
+        // Step 2: one batch SELECT for the (up to N) cover spot rows.
         // - Per-list cover = summary.mostRecentSpotId for each present list
-        // - All-Spots cover = the most-recent saved across all lists (pick by max savedAt)
+        // - All-Spots cover = the most-recent saved across SYSTEM lists only
+        //   (custom lists don't contribute to the All Spots dedup count;
+        //   they're an independent organization layer per E4)
         let perListCoverIds = summaries.compactMap { $0.mostRecentSpotId }
+        let systemListIds = Set(resolvedConfigs.compactMap { $0.list?.id })
         let allSpotsCoverId = summaries
             .compactMap { summary -> (id: String, savedAt: Date)? in
-                guard let id = summary.mostRecentSpotId,
+                guard systemListIds.contains(summary.listId),
+                      let id = summary.mostRecentSpotId,
                       let savedAt = summary.mostRecentSavedAt else { return nil }
                 return (id, savedAt)
             }
@@ -238,7 +266,7 @@ enum ProfileTileBuilder {
         let spotByPlaceId: [String: Spot] =
             Dictionary(uniqueKeysWithValues: coverSpots.map { ($0.placeId, $0) })
 
-        // Step 3: assemble tiles in memory — no further round-trips.
+        // Step 3a: system tiles (Favorites / Liked / Want to go) in canonical order.
         var systemTiles: [ListTileData] = []
         var totalCount = 0
 
@@ -269,6 +297,24 @@ enum ProfileTileBuilder {
             ))
         }
 
+        // Step 3b: custom tiles in newest-first order. The title comes from
+        // list.displayName (which falls back to kind for system kinds but
+        // returns the user-supplied name for custom kinds).
+        let customTiles: [ListTileData] = customLists.map { list in
+            let summary = summaryByListId[list.id]
+            let count = summary?.spotCount ?? 0
+            let coverSpot = summary?.mostRecentSpotId.flatMap { spotByPlaceId[$0] }
+            return ListTileData(
+                title: list.displayName,
+                count: count,
+                fallbackColor: ListTileData.color(forTitle: list.displayName),
+                coverImageUrl: coverSpot?.photoUrl,
+                coverPhotoReference: coverSpot?.photoReference,
+                userList: list,
+                isAllSpots: false
+            )
+        }
+
         let allSpotsSpot = allSpotsCoverId.flatMap { spotByPlaceId[$0] }
         let allSpotsTile = ListTileData(
             title: "All Spots",
@@ -280,6 +326,7 @@ enum ProfileTileBuilder {
             isAllSpots: true
         )
 
-        return ([allSpotsTile] + systemTiles, totalCount)
+        // Order: All Spots → system lists → custom lists (newest first).
+        return ([allSpotsTile] + systemTiles + customTiles, totalCount)
     }
 }

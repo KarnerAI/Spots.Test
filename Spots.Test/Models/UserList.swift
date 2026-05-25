@@ -59,6 +59,20 @@ enum ListKind: String, Codable, CaseIterable {
         }
     }
 
+    /// Hardcoded description shown on the system default lists. Maya can't
+    /// edit these (they're auto-set by the system) but they surface in
+    /// places that show a list's description (e.g. List Detail header,
+    /// possibly Discover surface in Phase 2). Custom kinds return nil so
+    /// the caller falls back to the user-supplied description.
+    var defaultDescription: String? {
+        switch self {
+        case .favorites: return "Spots you love."
+        case .liked: return "Spots you've enjoyed."
+        case .wantToGo: return "Places you want to visit."
+        case .custom, .trip, .datePlan: return nil
+        }
+    }
+
     /// Tint color for the icon. Matches iconName semantically.
     var iconColor: Color {
         switch self {
@@ -80,11 +94,38 @@ enum ListKind: String, Codable, CaseIterable {
 
 // MARK: - List Visibility
 
-/// Whether a list is privately scoped to the owner+editors or readable
-/// publicly via its `shareSlug`. Default `.private`.
+/// Who can see this list. Three-state per E1 revised 2026-05-25.
+///
+/// - `.private`: only the owner sees it. Default.
+/// - `.shared`: owner + invited collaborators (rows in `list_editors`).
+///   Not publicly discoverable. Coupled in UX with `list_editors` —
+///   a list with non-empty `list_editors` displays as "Shared" in the UI
+///   regardless of the underlying enum value (T4 owns that derivation).
+/// - `.public`: visible via share link to anyone; surfaces in Discover (T18).
+///   Independent of `list_editors` — a list can be `.public` without any
+///   collaborators, or `.shared` without being publicly findable.
 enum ListVisibility: String, Codable, CaseIterable {
     case `private` = "private"
+    case shared = "shared"
     case `public` = "public"
+
+    /// User-facing label for the visibility pill on List Settings.
+    var displayName: String {
+        switch self {
+        case .private: return "Private"
+        case .shared: return "Shared"
+        case .public: return "Public"
+        }
+    }
+
+    /// One-line description shown under the visibility pill on Create / Settings.
+    var description: String {
+        switch self {
+        case .private: return "Only you can view and edit."
+        case .shared: return "You and people you invite can view and add spots."
+        case .public: return "Anyone on Spots can find and follow this list."
+        }
+    }
 }
 
 // MARK: - Display Kind Resolver
@@ -140,6 +181,8 @@ struct ListIconView: View {
 ///     cover_emoji     -> coverEmoji          (nullable)
 ///     created_at      -> createdAt
 ///     updated_at      -> updatedAt
+///     deleted_at      -> deletedAt           (soft-delete tombstone; T21.1)
+///     description     -> description         (user-supplied; T21 QA round 2)
 struct UserList: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let userId: UUID
@@ -154,6 +197,21 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
     let coverEmoji: String?
     let createdAt: Date?
     let updatedAt: Date?
+    /// Soft-delete tombstone. NULL when active, non-nil when the user
+    /// tapped Delete. The `active_user_lists` view filters these out
+    /// so normal UI reads never see them — only the restore RPC and
+    /// `getDeletedLists()` surface them. Hard-purged after 30 days.
+    let deletedAt: Date?
+    /// User-supplied description. Only meaningful for custom kinds; system
+    /// kinds use `kind.defaultDescription` instead. Max 500 chars enforced
+    /// at the service layer.
+    let description: String?
+
+    /// Resolved display description. System kinds return their hardcoded copy;
+    /// custom kinds return whatever the user typed (or nil).
+    var displayDescription: String? {
+        kind.defaultDescription ?? description
+    }
 
     /// Resolved display name. System kinds use their canonical label;
     /// custom kinds use the user-supplied `name`.
@@ -178,6 +236,8 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         case coverEmoji = "cover_emoji"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case deletedAt = "deleted_at"
+        case description
     }
 
     /// Custom decoder so existing rows (pre-Phase-1) and forward-compat
@@ -198,6 +258,8 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         self.coverEmoji = try c.decodeIfPresent(String.self, forKey: .coverEmoji)
         self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
         self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
+        self.deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+        self.description = try c.decodeIfPresent(String.self, forKey: .description)
     }
 
     /// Explicit memberwise initializer used by tests and callers.
@@ -214,7 +276,9 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         coverImageUrl: String? = nil,
         coverEmoji: String? = nil,
         createdAt: Date? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        deletedAt: Date? = nil,
+        description: String? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -229,5 +293,7 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         self.coverEmoji = coverEmoji
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
+        self.description = description
     }
 }

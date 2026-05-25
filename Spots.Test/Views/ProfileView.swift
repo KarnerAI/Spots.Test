@@ -42,6 +42,29 @@ struct ProfileView: View {
     /// and refreshed when the profile data refreshes from network.
     @State private var allSpots: [Spot] = []
 
+    /// T21.6: presentation flag for the "+ New list" sheet wired into the
+    /// Lists carousel tile and (in the empty-state case) the "Create your
+    /// first list" CTA.
+    @State private var showingCreateList = false
+
+    /// T21.6: shared VM injection so the carousel tile + CreateListView can
+    /// reach the optimistic-update CRUD methods on LocationSavingViewModel.
+    @EnvironmentObject var locationSavingVM: LocationSavingViewModel
+
+    /// Refreshes the tile data after a list is created/renamed/deleted from
+    /// the Profile entry points. Calls the same loader the initial appear path
+    /// uses so the carousel re-flows with the new lineup.
+    private func refreshLists() async {
+        do {
+            try await LocationSavingService.shared.ensureDefaultListsForCurrentUser()
+            let userLists = try await LocationSavingService.shared.getUserLists()
+            let (tiles, _) = try await ProfileTileBuilder.buildTiles(from: userLists)
+            await MainActor.run { self.listTiles = tiles }
+        } catch {
+            print("ProfileView.refreshLists failed: \(error)")
+        }
+    }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             ZStack(alignment: .top) {
@@ -524,9 +547,13 @@ struct ProfileView: View {
 
                 Spacer()
 
-                Button("View all") {}
-                    .font(.system(size: 14))
-                    .foregroundColor(.spotsTeal)
+                // T21.6: View all now navigates to AllListsView (was a no-op).
+                NavigationLink(destination: AllListsView()) {
+                    Text("View all")
+                        .font(.system(size: 14))
+                        .foregroundColor(.spotsTeal)
+                }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
 
@@ -538,8 +565,53 @@ struct ProfileView: View {
                         }
                         .buttonStyle(.plain)
                     }
+
+                    // T21.6: "+ New list" tile lives at the end of the carousel
+                    // so it's always reachable. Opens CreateListView as a sheet.
+                    // Per design decision (keep both entry points), this stays
+                    // even after Maya has custom lists.
+                    Button {
+                        showingCreateList = true
+                    } label: {
+                        newListTile
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Create a new list")
                 }
                 .padding(.horizontal, 20)
+            }
+        }
+        .sheet(isPresented: $showingCreateList) {
+            CreateListView { _ in
+                // After create, refresh tiles so the new list shows up in the
+                // carousel right away.
+                Task { await refreshLists() }
+            }
+            .environmentObject(locationSavingVM)
+        }
+    }
+
+    /// Dashed "+ New list" tile shown at the end of the Lists carousel.
+    /// Matches the 140x150 dimensions of the other list cards so the row
+    /// has a consistent rhythm.
+    private var newListTile: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
+                    .strokeBorder(
+                        Color.spotsBorderStrong,
+                        style: StrokeStyle(lineWidth: 1.5, dash: [4, 4])
+                    )
+                Image(systemName: "plus")
+                    .font(.system(size: 26, weight: .regular))
+                    .foregroundColor(Color.spotsAccent)
+            }
+            .frame(width: 140, height: 150)
+            .overlay(alignment: .bottom) {
+                Text("New list")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Color.spotsAccent)
+                    .padding(.bottom, 14)
             }
         }
     }

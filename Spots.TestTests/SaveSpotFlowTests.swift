@@ -137,6 +137,108 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
     ) async throws {
         moveSpotCalls.append((placeId, fromListId, toListId, source))
     }
+
+    // MARK: - T21 Custom Lists CRUD mocks
+    //
+    // Configurable: set createListResult / renameListResult / etc. to control
+    // what each method returns. Set the corresponding ShouldThrow to make the
+    // method throw instead. Call recorders capture inputs for assertions.
+
+    var createListCalls: [(name: String, visibility: ListVisibility, coverEmoji: String?)] = []
+    var createListResult: UserList?
+    var createListShouldThrow: Error?
+
+    var renameListCalls: [(id: UUID, newName: String)] = []
+    var renameListResult: UserList?
+    var renameListShouldThrow: Error?
+
+    var setListVisibilityCalls: [(id: UUID, visibility: ListVisibility)] = []
+    var setListVisibilityResult: UserList?
+    var setListVisibilityShouldThrow: Error?
+
+    var setListCoverEmojiCalls: [(id: UUID, emoji: String?)] = []
+    var setListCoverEmojiResult: UserList?
+    var setListCoverEmojiShouldThrow: Error?
+
+    var setListCoverImageUrlCalls: [(id: UUID, imageUrl: String?)] = []
+    var setListCoverImageUrlResult: UserList?
+    var setListCoverImageUrlShouldThrow: Error?
+
+    var setListDescriptionCalls: [(id: UUID, description: String?)] = []
+    var setListDescriptionResult: UserList?
+    var setListDescriptionShouldThrow: Error?
+
+    var deleteListCalls: [UUID] = []
+    var deleteListResult: UserList?
+    var deleteListShouldThrow: Error?
+
+    var restoreListCalls: [UUID] = []
+    var restoreListResult: UserList?
+    var restoreListShouldThrow: Error?
+
+    var getDeletedListsCalls: Int = 0
+    var getDeletedListsResult: [DeletedListSummary] = []
+    var getDeletedListsShouldThrow: Error?
+
+    func createList(name: String, visibility: ListVisibility, coverEmoji: String?) async throws -> UserList {
+        createListCalls.append((name, visibility, coverEmoji))
+        if let err = createListShouldThrow { throw err }
+        return createListResult ?? UserList(
+            id: UUID(), userId: UUID(), kind: .custom,
+            name: name, visibility: visibility, coverEmoji: coverEmoji
+        )
+    }
+
+    func renameList(id: UUID, newName: String) async throws -> UserList {
+        renameListCalls.append((id, newName))
+        if let err = renameListShouldThrow { throw err }
+        return renameListResult ?? UserList(id: id, userId: UUID(), kind: .custom, name: newName)
+    }
+
+    func setListVisibility(id: UUID, visibility: ListVisibility) async throws -> UserList {
+        setListVisibilityCalls.append((id, visibility))
+        if let err = setListVisibilityShouldThrow { throw err }
+        return setListVisibilityResult ?? UserList(id: id, userId: UUID(), kind: .custom, name: "List", visibility: visibility)
+    }
+
+    func setListCoverEmoji(id: UUID, emoji: String?) async throws -> UserList {
+        setListCoverEmojiCalls.append((id, emoji))
+        if let err = setListCoverEmojiShouldThrow { throw err }
+        return setListCoverEmojiResult ?? UserList(id: id, userId: UUID(), kind: .custom, name: "List", coverEmoji: emoji)
+    }
+
+    func setListCoverImageUrl(id: UUID, imageUrl: String?) async throws -> UserList {
+        setListCoverImageUrlCalls.append((id, imageUrl))
+        if let err = setListCoverImageUrlShouldThrow { throw err }
+        return setListCoverImageUrlResult ?? UserList(id: id, userId: UUID(), kind: .custom, name: "List", coverImageUrl: imageUrl)
+    }
+
+    func setListDescription(id: UUID, description: String?) async throws -> UserList {
+        setListDescriptionCalls.append((id, description))
+        if let err = setListDescriptionShouldThrow { throw err }
+        return setListDescriptionResult ?? UserList(id: id, userId: UUID(), kind: .custom, name: "List", description: description)
+    }
+
+    func deleteList(id: UUID) async throws -> UserList {
+        deleteListCalls.append(id)
+        if let err = deleteListShouldThrow { throw err }
+        return deleteListResult ?? UserList(
+            id: id, userId: UUID(), kind: .custom, name: "List",
+            deletedAt: Date()
+        )
+    }
+
+    func restoreList(id: UUID) async throws -> UserList {
+        restoreListCalls.append(id)
+        if let err = restoreListShouldThrow { throw err }
+        return restoreListResult ?? UserList(id: id, userId: UUID(), kind: .custom, name: "List")
+    }
+
+    func getDeletedLists() async throws -> [DeletedListSummary] {
+        getDeletedListsCalls += 1
+        if let err = getDeletedListsShouldThrow { throw err }
+        return getDeletedListsResult
+    }
 }
 
 // MARK: - Fixtures

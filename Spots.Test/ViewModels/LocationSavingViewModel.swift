@@ -76,6 +76,134 @@ class LocationSavingViewModel: ObservableObject {
         isLoading = false
     }
 
+    // MARK: - Custom Lists CRUD (T21)
+    //
+    // All methods are optimistic where it's safe: createList appends on success,
+    // deleteList removes from userLists on success (rolls back on failure), and
+    // the field-updating methods (rename / setVisibility / setCoverEmoji /
+    // setCoverImageUrl) replace the row in-place on success.
+    //
+    // Views call these via @EnvironmentObject locationSavingVM. Errors surface
+    // through errorMessage so the caller can show a toast or inline error.
+
+    /// Create a new custom list. Appends to `userLists` on success and returns
+    /// the inserted row so the caller (CreateListView) can dismiss + scroll the
+    /// new list into view. Marks ProfileSnapshotCache stale so the Profile
+    /// carousel rebuilds on next appear (otherwise the cached tiles render
+    /// without the new list — the QA-round-2 regression we just hit).
+    func createList(
+        name: String,
+        visibility: ListVisibility = .private,
+        coverEmoji: String? = nil
+    ) async throws -> UserList {
+        let inserted = try await service.createList(
+            name: name,
+            visibility: visibility,
+            coverEmoji: coverEmoji
+        )
+        userLists.append(inserted)
+        userListsLastLoadedAt = Date()
+        ProfileSnapshotCache.shared.markStale()
+        return inserted
+    }
+
+    /// Rename a list. Replaces the row in-place on success.
+    func renameList(id: UUID, newName: String) async throws -> UserList {
+        let updated = try await service.renameList(id: id, newName: newName)
+        replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
+        return updated
+    }
+
+    /// Change visibility (private / shared / public). Replaces the row in-place.
+    func setListVisibility(id: UUID, visibility: ListVisibility) async throws -> UserList {
+        let updated = try await service.setListVisibility(id: id, visibility: visibility)
+        replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
+        return updated
+    }
+
+    /// Set the emoji shown when the list has no auto-cover photo. Pass nil to clear.
+    func setListCoverEmoji(id: UUID, emoji: String?) async throws -> UserList {
+        let updated = try await service.setListCoverEmoji(id: id, emoji: emoji)
+        replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
+        return updated
+    }
+
+    /// Override the auto-cover with a specific image URL. Pass nil to clear the
+    /// override and resume auto-cover from the most-recent spot.
+    func setListCoverImageUrl(id: UUID, imageUrl: String?) async throws -> UserList {
+        let updated = try await service.setListCoverImageUrl(id: id, imageUrl: imageUrl)
+        replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
+        return updated
+    }
+
+    /// Set or clear a user-supplied description for a custom list. Trimming +
+    /// length validation happens at the service layer. Default lists ignore
+    /// this column (UI hides the edit affordance).
+    func setListDescription(id: UUID, description: String?) async throws -> UserList {
+        let updated = try await service.setListDescription(id: id, description: description)
+        replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
+        return updated
+    }
+
+    /// Soft-delete a custom list. Removes optimistically from `userLists`,
+    /// rolls back on failure (e.g. RLS rejects deleting a default list).
+    /// Returns the tombstoned row so the caller can show "Undo" / restore copy.
+    @discardableResult
+    func deleteList(id: UUID) async throws -> UserList {
+        let priorIndex = userLists.firstIndex(where: { $0.id == id })
+        let priorList = priorIndex.map { userLists[$0] }
+
+        // Optimistic remove
+        if let idx = priorIndex {
+            userLists.remove(at: idx)
+        }
+
+        do {
+            let tombstoned = try await service.deleteList(id: id)
+            userListsLastLoadedAt = Date()
+            ProfileSnapshotCache.shared.markStale()
+            return tombstoned
+        } catch {
+            // Roll back the optimistic remove
+            if let idx = priorIndex, let prior = priorList {
+                userLists.insert(prior, at: min(idx, userLists.count))
+            }
+            throw error
+        }
+    }
+
+    /// Restore a soft-deleted list within the 30-day window. Re-inserts the
+    /// restored row into `userLists` on success.
+    @discardableResult
+    func restoreList(id: UUID) async throws -> UserList {
+        let restored = try await service.restoreList(id: id)
+        // Avoid double-inserting if already present (e.g. concurrent refresh).
+        if !userLists.contains(where: { $0.id == restored.id }) {
+            userLists.append(restored)
+        }
+        userListsLastLoadedAt = Date()
+        ProfileSnapshotCache.shared.markStale()
+        return restored
+    }
+
+    /// Fetch tombstoned lists within the 30-day recovery window. Powers the
+    /// "Recently deleted" section in Settings. Does not mutate userLists.
+    func getDeletedLists() async throws -> [DeletedListSummary] {
+        try await service.getDeletedLists()
+    }
+
+    /// Replace a list in `userLists` by id. No-op if the id isn't present.
+    private func replaceList(_ list: UserList) {
+        if let idx = userLists.firstIndex(where: { $0.id == list.id }) {
+            userLists[idx] = list
+        }
+    }
+
     // MARK: - Load Saved Places
     //
     // Pulls every spot in the three default lists, dedupes by placeId merging

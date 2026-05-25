@@ -31,6 +31,12 @@ struct ListPickerView: View {
     @State private var favoritesBouncePulse: Int = 0
     private let lightHaptic = UIImpactFeedbackGenerator(style: .light)
 
+    /// Presentation flag for the "+ New list" CreateListView sheet (T21.6).
+    /// When the user finishes Create successfully, the new list is appended to
+    /// `viewModel.userLists` by `LocationSavingViewModel.createList(...)` and
+    /// we auto-select it here so the save flow continues without an extra tap.
+    @State private var showingCreateList = false
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -56,18 +62,56 @@ struct ListPickerView: View {
         }
         .background(Color.white)
         .task { await loadInitialData() }
+        .sheet(isPresented: $showingCreateList) {
+            // T21.6 wiring: + New list pill opens CreateListView. The created
+            // list lands in viewModel.userLists; we pre-select its id so the
+            // in-flight save flow includes it without forcing Maya to scroll
+            // and tap the new row.
+            CreateListView { created in
+                selectedListIds.insert(created.id)
+            }
+            .environmentObject(viewModel)
+        }
     }
 
     // MARK: - Header
+    //
+    // Per T21 design (Google Maps / Instagram inspired): title on the left,
+    // "+ New list" pill on the right. Keeps the create entry-point a thumb
+    // away no matter where the user is in the picker sheet.
 
     private var header: some View {
-        Text("Save to lists")
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundColor(.gray900)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
+        HStack(spacing: 8) {
+            Text("Save to lists")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(.gray900)
+
+            Spacer()
+
+            Button {
+                lightHaptic.impactOccurred()
+                showingCreateList = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("New list")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundColor(Color.spotsAccent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule()
+                        .fill(Color.spotsAccentSoft)
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Create a new list")
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
     }
 
     // MARK: - Place context (Iteration 3 — Variant B)

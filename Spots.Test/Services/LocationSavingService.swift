@@ -40,6 +40,64 @@ protocol LocationSavingServiceProtocol: AnyObject {
         photoReference: String?,
         rating: Double?
     ) async throws
+
+    // MARK: Custom-Lists CRUD (T21)
+    func createList(name: String, visibility: ListVisibility, coverEmoji: String?) async throws -> UserList
+    func renameList(id: UUID, newName: String) async throws -> UserList
+    func setListVisibility(id: UUID, visibility: ListVisibility) async throws -> UserList
+    func setListCoverEmoji(id: UUID, emoji: String?) async throws -> UserList
+    func setListCoverImageUrl(id: UUID, imageUrl: String?) async throws -> UserList
+    func setListDescription(id: UUID, description: String?) async throws -> UserList
+    func deleteList(id: UUID) async throws -> UserList
+    func restoreList(id: UUID) async throws -> UserList
+    func getDeletedLists() async throws -> [DeletedListSummary]
+}
+
+// MARK: - Custom-Lists CRUD errors (T21)
+
+enum CustomListError: LocalizedError {
+    case emptyName
+    case nameTooLong(maxLength: Int)
+    case descriptionTooLong(maxLength: Int)
+    case noUpdatesProvided
+    case rpcReturnedNoRow
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyName:
+            return "List name cannot be empty."
+        case .nameTooLong(let maxLength):
+            return "List name must be \(maxLength) characters or fewer."
+        case .descriptionTooLong(let maxLength):
+            return "Description must be \(maxLength) characters or fewer."
+        case .noUpdatesProvided:
+            return "No fields to update."
+        case .rpcReturnedNoRow:
+            return "The server returned no row for the requested operation. The list may not exist, may not be yours, or may be outside the recovery window."
+        }
+    }
+}
+
+/// Summary row returned by `list_deleted_lists` RPC for the "Recently deleted"
+/// UI in Settings. Includes computed `daysRemaining` so the row can show urgency.
+struct DeletedListSummary: Codable, Identifiable {
+    let id: UUID
+    let name: String?
+    let kind: String
+    let coverEmoji: String?
+    let coverImageUrl: String?
+    let deletedAt: Date
+    let daysRemaining: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case kind
+        case coverEmoji = "cover_emoji"
+        case coverImageUrl = "cover_image_url"
+        case deletedAt = "deleted_at"
+        case daysRemaining = "days_remaining"
+    }
 }
 
 class LocationSavingService: LocationSavingServiceProtocol {
@@ -54,12 +112,14 @@ class LocationSavingService: LocationSavingServiceProtocol {
     
     // MARK: - Lists
     
-    /// Get all lists for the current user
+    /// Get all lists for the current user. Reads from `active_user_lists` view
+    /// so soft-deleted (tombstoned) rows are filtered out automatically (T21.2 /
+    /// D-T21.2). For restore flows, use `getDeletedLists()` instead.
     func getUserLists() async throws -> [UserList] {
         let userId = try await getCurrentUserId()
 
         var response: [UserList] = try await supabase
-            .from("user_lists")
+            .from("active_user_lists")
             .select()
             .eq("user_id", value: userId.uuidString)
             .order("kind", ascending: true)
@@ -69,7 +129,7 @@ class LocationSavingService: LocationSavingServiceProtocol {
         if response.isEmpty {
             try await ensureDefaultListsForCurrentUser()
             response = try await supabase
-                .from("user_lists")
+                .from("active_user_lists")
                 .select()
                 .eq("user_id", value: userId.uuidString)
                 .order("kind", ascending: true)
@@ -80,10 +140,11 @@ class LocationSavingService: LocationSavingServiceProtocol {
         return response
     }
 
-    /// Get all lists belonging to an arbitrary user. Read-only — no default-list creation.
+    /// Get all lists belonging to an arbitrary user. Read-only — no default-list
+    /// creation. Reads from `active_user_lists` view (excludes tombstoned).
     func getUserLists(userId: UUID) async throws -> [UserList] {
         try await supabase
-            .from("user_lists")
+            .from("active_user_lists")
             .select()
             .eq("user_id", value: userId.uuidString)
             .order("kind", ascending: true)
@@ -93,12 +154,12 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
     /// Get a specific list by kind. For system kinds (favorites/liked/want_to_go)
     /// each user has at most one row (enforced by partial unique index); for
-    /// custom kinds the first match is returned.
+    /// custom kinds the first match is returned. Reads from `active_user_lists`.
     func getListByKind(_ kind: ListKind) async throws -> UserList? {
         let userId = try await getCurrentUserId()
 
         let response: [UserList] = try await supabase
-            .from("user_lists")
+            .from("active_user_lists")
             .select()
             .eq("user_id", value: userId.uuidString)
             .eq("kind", value: kind.rawValue)
@@ -118,7 +179,211 @@ class LocationSavingService: LocationSavingServiceProtocol {
         let userId = try await getCurrentUserId()
         try await supabase.rpc("create_default_lists_for_user", params: ["p_user_id": userId.uuidString]).execute()
     }
-    
+
+    // MARK: - Custom Lists CRUD (T21)
+    //
+    // Naming: Maya types a name (required, ≤50 chars). Validation happens
+    // client-side here AND server-side via the user_lists_name_required_for_custom_check
+    // constraint shipped in T2.
+    //
+    // Cover: emoji at create. Server-side auto-cover (via get_list_tile_summaries
+    // RPC) will swap to most-recently-added spot's photo as soon as the list has
+    // ≥1 spot. The user can override at any time via setListCoverImageUrl(),
+    // and clear the override (back to auto) by passing imageUrl=nil.
+    //
+    // Delete: soft-delete via soft_delete_list RPC (sets deleted_at, hides from
+    // active_user_lists view). 30-day restore window enforced by restore_list RPC.
+    // Default lists (favorites/liked/want_to_go) are rejected at the RPC layer.
+
+    /// Maximum allowed length of a list name. Matches the Figma CreateListView
+    /// char counter and the eng-review acceptance criterion.
+    static let maxListNameLength = 50
+
+    /// Create a new custom list owned by the current user. Returns the inserted row.
+    ///
+    /// - Parameters:
+    ///   - name: Required, non-empty after trimming, ≤50 chars.
+    ///   - visibility: Defaults to `.private`. `.public` requires an explicit
+    ///     opt-in tap in the UI.
+    ///   - coverEmoji: Optional. Shown until the list has a spot with a photo
+    ///     (auto-cover takes over once a spot is added).
+    /// - Returns: The freshly-inserted `UserList`.
+    /// - Throws: `CustomListError.emptyName` / `.nameTooLong` on validation
+    ///   failure; Supabase/PostgrestClient errors bubble up otherwise.
+    func createList(
+        name: String,
+        visibility: ListVisibility = .private,
+        coverEmoji: String? = nil
+    ) async throws -> UserList {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw CustomListError.emptyName }
+        guard trimmed.count <= LocationSavingService.maxListNameLength else {
+            throw CustomListError.nameTooLong(maxLength: LocationSavingService.maxListNameLength)
+        }
+        let userId = try await getCurrentUserId()
+
+        struct InsertPayload: Codable {
+            let user_id: String
+            let kind: String
+            let name: String
+            let visibility: String
+            let cover_emoji: String?
+        }
+
+        let payload = InsertPayload(
+            user_id: userId.uuidString,
+            kind: ListKind.custom.rawValue,
+            name: trimmed,
+            visibility: visibility.rawValue,
+            cover_emoji: coverEmoji
+        )
+
+        let inserted: [UserList] = try await supabase
+            .from("user_lists")
+            .insert(payload)
+            .select()
+            .execute()
+            .value
+
+        guard let list = inserted.first else { throw CustomListError.rpcReturnedNoRow }
+        return list
+    }
+
+    /// Rename a list. Server-side RLS blocks renaming default lists.
+    func renameList(id: UUID, newName: String) async throws -> UserList {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw CustomListError.emptyName }
+        guard trimmed.count <= LocationSavingService.maxListNameLength else {
+            throw CustomListError.nameTooLong(maxLength: LocationSavingService.maxListNameLength)
+        }
+        return try await updateListColumns(id: id, payload: ["name": .string(trimmed)])
+    }
+
+    /// Change visibility (private / shared / public).
+    func setListVisibility(id: UUID, visibility: ListVisibility) async throws -> UserList {
+        try await updateListColumns(id: id, payload: ["visibility": .string(visibility.rawValue)])
+    }
+
+    /// Set the emoji shown when the list has no auto-cover photo. Pass nil to clear.
+    func setListCoverEmoji(id: UUID, emoji: String?) async throws -> UserList {
+        let value: PartialColumnValue = (emoji == nil) ? .null : .string(emoji!)
+        return try await updateListColumns(id: id, payload: ["cover_emoji": value])
+    }
+
+    /// Override the auto-cover with a specific image URL. Pass nil to clear the
+    /// override (the list will resume auto-cover from the most-recent spot).
+    func setListCoverImageUrl(id: UUID, imageUrl: String?) async throws -> UserList {
+        let value: PartialColumnValue = (imageUrl == nil) ? .null : .string(imageUrl!)
+        return try await updateListColumns(id: id, payload: ["cover_image_url": value])
+    }
+
+    /// Maximum description length. Mirrors the service-layer guard documented
+    /// on the user_lists.description column.
+    static let maxListDescriptionLength = 500
+
+    /// Set the user-supplied description for a list. Pass nil to clear.
+    /// System kinds (favorites/liked/want_to_go) can have their column set
+    /// but the UI hides the edit affordance — they show `kind.defaultDescription`
+    /// instead. Trimmed; empty-after-trim normalizes to nil.
+    func setListDescription(id: UUID, description: String?) async throws -> UserList {
+        let normalized: String?
+        if let raw = description?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            guard raw.count <= LocationSavingService.maxListDescriptionLength else {
+                throw CustomListError.descriptionTooLong(maxLength: LocationSavingService.maxListDescriptionLength)
+            }
+            normalized = raw
+        } else {
+            normalized = nil
+        }
+        let value: PartialColumnValue = (normalized == nil) ? .null : .string(normalized!)
+        return try await updateListColumns(id: id, payload: ["description": value])
+    }
+
+    /// Soft-delete a custom list (sets `deleted_at = NOW()` via SECURITY DEFINER
+    /// RPC). The 30-day restore window is enforced server-side. Default lists
+    /// (favorites/liked/want_to_go) are rejected. Returns the now-tombstoned row.
+    func deleteList(id: UUID) async throws -> UserList {
+        let result: UserList = try await supabase
+            .rpc("soft_delete_list", params: ["p_list_id": id.uuidString])
+            .execute()
+            .value
+        return result
+    }
+
+    /// Restore a soft-deleted list within the 30-day window. After the window
+    /// the nightly purge cron has hard-deleted the row and restore returns an error.
+    func restoreList(id: UUID) async throws -> UserList {
+        let result: UserList = try await supabase
+            .rpc("restore_list", params: ["p_list_id": id.uuidString])
+            .execute()
+            .value
+        return result
+    }
+
+    /// Returns the current user's tombstoned lists within the 30-day recovery
+    /// window. Powers the "Recently deleted" section in Settings.
+    func getDeletedLists() async throws -> [DeletedListSummary] {
+        try await supabase
+            .rpc("list_deleted_lists")
+            .execute()
+            .value
+    }
+
+    // MARK: - Custom-Lists update helpers
+
+    /// Partial-column update value. `.null` encodes JSON null so the column is
+    /// cleared rather than left unchanged.
+    private enum PartialColumnValue: Encodable {
+        case string(String)
+        case null
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            switch self {
+            case .string(let s): try c.encode(s)
+            case .null: try c.encodeNil()
+            }
+        }
+    }
+
+    /// Single-column-or-few-columns update applied via PostgREST UPDATE. Used
+    /// internally by rename / setCover / setVisibility. RLS on user_lists ensures
+    /// only the owner (or editors, who can't change metadata anyway per the RLS
+    /// policy from T2 step 8) can perform the write.
+    private func updateListColumns(id: UUID, payload: [String: PartialColumnValue]) async throws -> UserList {
+        guard !payload.isEmpty else { throw CustomListError.noUpdatesProvided }
+
+        // PostgrestClient's update() accepts Encodable. Wrap the dict in a
+        // dynamic-coding-key Encodable shim so we can encode only the changed columns.
+        struct DynamicUpdate: Encodable {
+            let payload: [String: PartialColumnValue]
+            struct DynKey: CodingKey {
+                var stringValue: String
+                init(_ s: String) { self.stringValue = s; self.intValue = nil }
+                init?(stringValue: String) { self.stringValue = stringValue; self.intValue = nil }
+                init?(intValue: Int) { return nil }
+                var intValue: Int?
+            }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: DynKey.self)
+                for (k, v) in payload {
+                    try c.encode(v, forKey: DynKey(k))
+                }
+            }
+        }
+        let update = DynamicUpdate(payload: payload)
+
+        let updated: [UserList] = try await supabase
+            .from("user_lists")
+            .update(update)
+            .eq("id", value: id.uuidString)
+            .select()
+            .execute()
+            .value
+
+        guard let list = updated.first else { throw CustomListError.rpcReturnedNoRow }
+        return list
+    }
+
     // MARK: - Spots
     
     /// Upsert a spot (insert or update)
@@ -727,17 +992,31 @@ class LocationSavingService: LocationSavingServiceProtocol {
 
     /// Per-list summary returned by `get_list_tile_summaries` RPC.
     /// `mostRecentSpotId` / `mostRecentSavedAt` are nil when the list is empty.
+    ///
+    /// Effective cover fields (added T21.2 / 2026-05-25):
+    /// - `effectiveCoverUrl`: `COALESCE(user_lists.cover_image_url, latest_spot.photo_url)`.
+    ///   Nil if neither is set — UI falls back to `coverEmoji`.
+    /// - `effectiveCoverSourceName` / `effectiveCoverSourceSpotId`: populated only
+    ///   when the cover is auto-derived from a spot (i.e. user did not set
+    ///   `cover_image_url` explicitly). Used to render the "Cover from X" badge
+    ///   on List Detail header without a second fetch.
     struct ListTileSummary: Codable {
         let listId: UUID
         let spotCount: Int
         let mostRecentSpotId: String?
         let mostRecentSavedAt: Date?
+        let effectiveCoverUrl: String?
+        let effectiveCoverSourceName: String?
+        let effectiveCoverSourceSpotId: String?
 
         enum CodingKeys: String, CodingKey {
             case listId = "list_id"
             case spotCount = "spot_count"
             case mostRecentSpotId = "most_recent_spot_id"
             case mostRecentSavedAt = "most_recent_saved_at"
+            case effectiveCoverUrl = "effective_cover_url"
+            case effectiveCoverSourceName = "effective_cover_source_name"
+            case effectiveCoverSourceSpotId = "effective_cover_source_spot_id"
         }
     }
 

@@ -77,8 +77,12 @@ final class ProfileSnapshotCache {
     /// stale labels carry over across upgrades.
     /// v2: list tile titles renamed (Starred → Top Spots, Bucket List → Want to Go).
     /// v3: list tile titles renamed again (Top Spots → Favorites, Favorites → Liked).
-    private static let diskFilename = "ProfileSnapshot.v3.json"
-    private static let legacyFilenames = ["ProfileSnapshot.json", "ProfileSnapshot.v2.json"]
+    /// v4: T21 — custom lists (Mexico City etc.) now belong on the Profile
+    ///     carousel. v3 caches only ever stored system tiles; force a one-time
+    ///     refresh so existing users see their custom lists immediately rather
+    ///     than waiting for a stale-marking action to trigger a rebuild.
+    private static let diskFilename = "ProfileSnapshot.v4.json"
+    private static let legacyFilenames = ["ProfileSnapshot.json", "ProfileSnapshot.v2.json", "ProfileSnapshot.v3.json"]
 
     private init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
