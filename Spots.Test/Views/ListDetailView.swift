@@ -70,9 +70,23 @@ struct ListDetailView: View {
     @State private var spotToOpenInMaps: NearbySpot? = nil
     @State private var shouldCenterWhenLocationArrives = false
 
+    /// T21.6: Settings sheet presentation flag. Shown only for `.singleList`
+    /// mode; the all-spots / city / country variants don't map to a single
+    /// list and so have nothing to configure.
+    @State private var showingListSettings = false
+    @State private var listSettingsTarget: UserList? = nil
+    @Environment(\.dismiss) private var dismiss
+
     // Cached derived data (updated only when spots, searchText, or sortOrder change)
     @State private var cachedSpotListTypeMap: [String: ListKind] = [:]
     @State private var cachedFilteredAndSortedSpots: [SpotWithMetadata] = []
+
+    /// The single UserList this view is showing, if any. Used to wire the ⋯
+    /// menu to ListSettingsSheet for rename/cover/visibility/delete.
+    private var singleListIfAny: UserList? {
+        if case .singleList(let list) = mode { return list }
+        return nil
+    }
 
     // MARK: - Computed (delegate to cache)
     private var spotListKindMap: [String: ListKind] { cachedSpotListTypeMap }
@@ -170,6 +184,40 @@ struct ListDetailView: View {
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease")
                 }
+
+                // T21.6: Settings menu (⋯). Visible only for single-list mode
+                // because the all-spots / city / country variants don't have a
+                // single underlying list to configure. Opens ListSettingsSheet.
+                if let list = singleListIfAny {
+                    Button {
+                        listSettingsTarget = list
+                        showingListSettings = true
+                    } label: {
+                        Image(systemName: "ellipsis")
+                    }
+                    .accessibilityLabel("List settings")
+                }
+            }
+        }
+        .sheet(isPresented: $showingListSettings) {
+            if let list = listSettingsTarget {
+                ListSettingsSheet(
+                    list: list,
+                    onDeleted: {
+                        // The list is now tombstoned — pop this screen so the
+                        // navigation stack doesn't dangle on a deleted resource.
+                        showingListSettings = false
+                        dismiss()
+                    },
+                    onUpdated: { updated in
+                        // Refresh the in-flight target so subsequent reopens
+                        // of the sheet reflect the latest cover/name/visibility.
+                        listSettingsTarget = updated
+                    }
+                )
+                .environmentObject(locationSavingVM)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
         }
         .confirmationDialog("Sort by", isPresented: $showSortDialog, titleVisibility: .visible) {
