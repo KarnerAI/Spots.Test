@@ -42,6 +42,10 @@ extension Color {
     /// Hairline divider, default border. #EEEEEE.
     static let spotsBorder = Color(red: 0.933, green: 0.933, blue: 0.933)
 
+    /// Even softer divider for crowded surfaces (settings rows etc.) where the
+    /// default border feels too heavy. #F4F4F4. Lifted in QA round 3 polish.
+    static let spotsBorderSoft = Color(red: 0.957, green: 0.957, blue: 0.957)
+
     /// Stronger border for input focus or extra separation. #D1D5DB.
     static let spotsBorderStrong = Color(red: 0.82, green: 0.835, blue: 0.859)
 

@@ -186,14 +186,21 @@ struct CreateListView: View {
             // Quick-tap shortcuts.
             emojiGrid
                 .padding(.top, 4)
-        }
-        .sheet(isPresented: $emojiKeyboardFocused) {
-            EmojiPickerSheet(picked: Binding(
-                get: { coverEmoji },
-                set: { if let new = $0 { coverEmoji = new } }
-            ))
-            .presentationDetents([.height(380)])
-            .presentationDragIndicator(.visible)
+
+            // Invisible UIKit bridge that receives the emoji-keyboard
+            // selection. Off-screen at 1pt so it never takes layout space.
+            // Tapping "Choose emoji" focuses this and the iOS emoji keyboard
+            // rises directly (no extra sheet wrapper — QA round 3 feedback).
+            EmojiKeyboardField(
+                emoji: Binding(
+                    get: { coverEmoji },
+                    set: { if let new = $0 { coverEmoji = new } }
+                ),
+                isFocused: $emojiKeyboardFocused
+            )
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .accessibilityHidden(true)
         }
     }
 

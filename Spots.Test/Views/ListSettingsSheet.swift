@@ -88,22 +88,15 @@ struct ListSettingsSheet: View {
                             .padding(.top, 12)
                     }
                 }
+                .padding(.top, 8)
+                .padding(.bottom, 24)
             }
             .background(Color.white)
             .navigationTitle("List settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color.spotsTextMuted)
-                    }
-                    .accessibilityLabel("Close")
-                }
-            }
+            // X close button removed in QA round 3 — drag-down dismiss is
+            // discoverable enough (drag indicator on the sheet handles this),
+            // and removing the X cuts visual clutter from the title row.
             // Confirmation modal — destructive Delete
             .alert("Delete \"\(list.displayName)\"?", isPresented: $showingDeleteConfirm) {
                 Button("Cancel", role: .cancel) {}
@@ -127,10 +120,16 @@ struct ListSettingsSheet: View {
                 .presentationDetents([.height(380)])
                 .presentationDragIndicator(.visible)
             }
-            // Edit description
+            // Edit description — passes an async throws save closure so the
+            // sub-sheet can surface errors inline (e.g. missing description
+            // column if the SQL migration hasn't been applied yet).
             .sheet(isPresented: $showingEditDescription) {
                 EditDescriptionSheet(currentDescription: list.description) { newDescription in
-                    performSetDescription(newDescription)
+                    let updated = try await locationSavingVM.setListDescription(
+                        id: list.id,
+                        description: newDescription
+                    )
+                    onUpdated?(updated)
                 }
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -157,70 +156,84 @@ struct ListSettingsSheet: View {
             .padding(.bottom, 12)
     }
 
+    /// Row layout (QA round 3 reorder):
+    ///   Identity:    Name, Description
+    ///   Appearance:  Icon, Cover photo
+    ///   Access:      Visibility, Collaborators
+    ///   Destructive: Delete
+    /// 8pt spacer between groups for visual rhythm without adding more
+    /// divider lines (lighter than the previous "every row separated by a
+    /// hairline" look — QA round 3 feedback).
     @ViewBuilder
     private var settingsRows: some View {
-        // Rename — disabled on default lists.
+        // ── Identity ──────────────────────────────────────────────
+        // Name — disabled on default lists (system kinds use their canonical
+        // displayName like "Favorites", not user-editable).
         settingsRow(
             icon: "textformat",
             iconColor: Color.spotsTextMuted,
-            title: "Rename",
+            title: "Name",
             metaText: isDefault ? "Default list" : list.displayName,
             disabled: isDefault,
             action: { showingRename = true }
         )
 
-        // Change list icon — custom lists only. Default lists (Favorites /
-        // Liked / Want to go) render their canonical SF Symbol everywhere
-        // (per QA round 2 consistency feedback), so there's no icon to change.
-        if !isDefault {
-            settingsRow(
-                icon: "face.smiling",
-                iconColor: Color.spotsTextMuted,
-                title: "Change list icon",
-                metaEmoji: list.coverEmoji,
-                action: { showingChangeEmoji = true }
-            )
-        }
-
-        // Set photo cover from spot — only meaningful for non-empty custom lists.
-        // The action route lands in T21.6 when we wire it to a spot picker.
-        if !isDefault {
-            settingsRow(
-                icon: "photo.on.rectangle.angled",
-                iconColor: Color.spotsTextMuted,
-                title: "Set photo cover from spot",
-                metaText: list.coverImageUrl == nil ? "Auto" : "Manual",
-                action: { /* T21.6 routes to spot-picker; placeholder for now */ }
-            )
-        }
-
-        // Visibility — 3-state pill toggle.
-        visibilityRow
-
-        // Edit description — custom lists only. Default lists use
-        // `kind.defaultDescription` (e.g. "Spots you love" for Favorites)
-        // which is set by the system and not user-editable.
+        // Description — custom lists only. Default lists use the hardcoded
+        // copy from ListKind.defaultDescription.
         if !isDefault {
             settingsRow(
                 icon: "text.alignleft",
                 iconColor: Color.spotsTextMuted,
-                title: "Edit description",
+                title: "Description",
                 metaText: descriptionPreview,
                 action: { showingEditDescription = true }
             )
         }
 
-        // Manage collaborators — visible always; stub for T4.
+        groupSpacer
+
+        // ── Appearance ────────────────────────────────────────────
+        // Icon — custom lists only. Default lists render their canonical
+        // SF Symbol everywhere; no emoji to swap.
+        if !isDefault {
+            settingsRow(
+                icon: "face.smiling",
+                iconColor: Color.spotsTextMuted,
+                title: "Icon",
+                metaEmoji: list.coverEmoji,
+                action: { showingChangeEmoji = true }
+            )
+        }
+
+        // Cover photo — custom lists only. Placeholder action; T21.6 routes
+        // to a spot-picker.
+        if !isDefault {
+            settingsRow(
+                icon: "photo.on.rectangle.angled",
+                iconColor: Color.spotsTextMuted,
+                title: "Cover photo",
+                metaText: list.coverImageUrl == nil ? "Auto" : "Manual",
+                action: { /* P2 — spot-picker wiring */ }
+            )
+        }
+
+        if !isDefault { groupSpacer }
+
+        // ── Access ────────────────────────────────────────────────
+        visibilityRow
+
+        // Collaborators — visible always; stub for T4.
         settingsRow(
             icon: "person.2",
             iconColor: Color.spotsTextMuted,
-            title: "Manage collaborators",
+            title: "Collaborators",
             metaText: "Coming soon",
             action: { showingCollaboratorsPlaceholder = true }
         )
 
-        // Delete list — destructive, hidden on default lists.
+        // ── Destructive ───────────────────────────────────────────
         if !isDefault {
+            groupSpacer
             settingsRow(
                 icon: "trash",
                 iconColor: Color.spotsError,
@@ -229,6 +242,12 @@ struct ListSettingsSheet: View {
                 action: { showingDeleteConfirm = true }
             )
         }
+    }
+
+    /// Small vertical gap between row groups. Replaces what would be a heavier
+    /// divider with a 12pt breath — less visual noise per QA round 3.
+    private var groupSpacer: some View {
+        Color.clear.frame(height: 12)
     }
 
     /// Visibility row uses a two-row layout (label + subtext on row 1, full-width
@@ -257,7 +276,7 @@ struct ListSettingsSheet: View {
         .padding(.vertical, 12)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Color.spotsBorder)
+                .fill(Color.spotsBorderSoft)
                 .frame(height: 1)
                 .padding(.leading, 48)
         }
@@ -353,7 +372,7 @@ struct ListSettingsSheet: View {
         .disabled(disabled || pendingAction != nil)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Color.spotsBorder)
+                .fill(Color.spotsBorderSoft)
                 .frame(height: 1)
                 .padding(.leading, 48)
         }
@@ -411,23 +430,6 @@ struct ListSettingsSheet: View {
                 showingChangeEmoji = false
             } catch {
                 errorMessage = "Couldn't change the emoji. Try again."
-                pendingAction = nil
-            }
-        }
-    }
-
-    private func performSetDescription(_ newDescription: String?) {
-        pendingAction = .description
-        errorMessage = nil
-        Task { @MainActor in
-            do {
-                let updated = try await locationSavingVM.setListDescription(id: list.id, description: newDescription)
-                onUpdated?(updated)
-                pendingAction = nil
-                showingEditDescription = false
-            } catch {
-                errorMessage = (error as? CustomListError)?.errorDescription
-                    ?? "Couldn't save the description. Try again."
                 pendingAction = nil
             }
         }
@@ -626,19 +628,24 @@ private struct ChangeCoverEmojiSheet: View {
                     }
                 }
 
+                // Invisible bridge that captures the emoji-keyboard selection.
+                // QA round 3: revert to direct inline keyboard (no extra sheet).
+                EmojiKeyboardField(
+                    emoji: Binding(
+                        get: { draft },
+                        set: { if let new = $0 { draft = new } }
+                    ),
+                    isFocused: $keyboardFocused
+                )
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .accessibilityHidden(true)
+
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 16)
-            .sheet(isPresented: $keyboardFocused) {
-                EmojiPickerSheet(picked: Binding(
-                    get: { draft },
-                    set: { if let new = $0 { draft = new } }
-                ))
-                .presentationDetents([.height(380)])
-                .presentationDragIndicator(.visible)
-            }
             .navigationTitle("List icon")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -660,15 +667,21 @@ private struct ChangeCoverEmojiSheet: View {
 
 private struct EditDescriptionSheet: View {
     let currentDescription: String?
-    let onCommit: (String?) -> Void
+    /// Async throws closure — owner of the sheet handles the actual persist.
+    /// We surface errors inline so the user sees feedback (the previous
+    /// version's error lived on the hidden parent ListSettingsSheet, making
+    /// Save feel like a no-op).
+    let onSave: (String?) async throws -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var draft: String
+    @State private var isSaving: Bool = false
+    @State private var errorMessage: String? = nil
     @FocusState private var focused: Bool
 
-    init(currentDescription: String?, onCommit: @escaping (String?) -> Void) {
+    init(currentDescription: String?, onSave: @escaping (String?) async throws -> Void) {
         self.currentDescription = currentDescription
-        self.onCommit = onCommit
+        self.onSave = onSave
         self._draft = State(initialValue: currentDescription ?? "")
     }
 
@@ -677,7 +690,7 @@ private struct EditDescriptionSheet: View {
     private var canCommit: Bool {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let original = currentDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed != original && draft.count <= Self.maxLength
+        return trimmed != original && draft.count <= Self.maxLength && !isSaving
     }
 
     var body: some View {
@@ -724,6 +737,14 @@ private struct EditDescriptionSheet: View {
                         .font(.geistMono(size: 11))
                         .foregroundStyle(Color.spotsTextSubtle)
                 }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.geist(size: 13))
+                        .foregroundStyle(Color.spotsError)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
             }
             .padding(20)
             .navigationTitle("Description")
@@ -732,12 +753,17 @@ private struct EditDescriptionSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .foregroundStyle(Color.spotsAccent)
+                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { commit() }
-                        .font(.geist(size: 15, weight: .semibold))
-                        .foregroundStyle(canCommit ? Color.spotsAccent : Color.spotsTextSubtle)
-                        .disabled(!canCommit)
+                    if isSaving {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button("Save") { commit() }
+                            .font(.geist(size: 15, weight: .semibold))
+                            .foregroundStyle(canCommit ? Color.spotsAccent : Color.spotsTextSubtle)
+                            .disabled(!canCommit)
+                    }
                 }
             }
             .onAppear { focused = true }
@@ -747,7 +773,31 @@ private struct EditDescriptionSheet: View {
     private func commit() {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         // Empty → nil so the column gets cleared rather than storing an empty string.
-        onCommit(trimmed.isEmpty ? nil : trimmed)
+        let payload: String? = trimmed.isEmpty ? nil : trimmed
+        isSaving = true
+        errorMessage = nil
+        Task { @MainActor in
+            do {
+                try await onSave(payload)
+                isSaving = false
+                dismiss()
+            } catch {
+                isSaving = false
+                errorMessage = (error as? CustomListError)?.errorDescription
+                    ?? friendlyError(for: error)
+            }
+        }
+    }
+
+    /// Translate common Supabase / Postgrest errors into copy Maya can act on.
+    /// The most likely failure today is "column user_lists.description does not
+    /// exist" — surfaces when the new SQL migration hasn't been applied yet.
+    private func friendlyError(for error: Error) -> String {
+        let desc = error.localizedDescription.lowercased()
+        if desc.contains("description") && desc.contains("does not exist") {
+            return "Description column not found. Apply the 2026-05-25_lists_add_description.sql migration in Supabase and try again."
+        }
+        return "Couldn't save the description. Check your connection and try again."
     }
 }
 
