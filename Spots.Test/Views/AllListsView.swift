@@ -219,26 +219,30 @@ struct AllListsView: View {
             .environmentObject(locationSavingVM)
     }
 
-    /// Emoji-only thumbnail. Uses list.coverEmoji if set; otherwise a sane
-    /// per-kind default (❤️ Favorites, 👍 Liked, 🚩 Want to go, 📋 custom).
+    /// Thumbnail rendering. System kinds (Favorites/Liked/Want to go) use
+    /// their canonical SF Symbol + tint from ListKind so they match the
+    /// List Picker rows and the rest of the app. Custom kinds use the
+    /// user's chosen emoji. This is the QA-round-2 consistency fix:
+    /// default lists no longer render as emoji on a soft-blue tile.
+    @ViewBuilder
     private func emojiThumbnail(for list: UserList) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.spotsAccentSoft)
                 .frame(width: 48, height: 48)
-            Text(list.coverEmoji ?? defaultEmoji(for: list.kind))
-                .font(.system(size: 24))
-        }
-    }
-
-    private func defaultEmoji(for kind: ListKind) -> String {
-        switch kind {
-        case .favorites: return "❤️"
-        case .liked: return "👍"
-        case .wantToGo: return "🚩"
-        case .custom: return "📋"
-        case .trip: return "✈️"
-        case .datePlan: return "📅"
+            if list.kind.isSystemKind {
+                Image(systemName: list.kind.iconName)
+                    .font(.system(size: 22))
+                    .foregroundColor(list.kind.iconColor)
+            } else if let emoji = list.coverEmoji {
+                Text(emoji)
+                    .font(.system(size: 24))
+            } else {
+                // Custom kind without a chosen emoji — fall back to a neutral icon.
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 20))
+                    .foregroundColor(Color.spotsAccent)
+            }
         }
     }
 

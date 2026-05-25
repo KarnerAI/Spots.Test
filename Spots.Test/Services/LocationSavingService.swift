@@ -47,6 +47,7 @@ protocol LocationSavingServiceProtocol: AnyObject {
     func setListVisibility(id: UUID, visibility: ListVisibility) async throws -> UserList
     func setListCoverEmoji(id: UUID, emoji: String?) async throws -> UserList
     func setListCoverImageUrl(id: UUID, imageUrl: String?) async throws -> UserList
+    func setListDescription(id: UUID, description: String?) async throws -> UserList
     func deleteList(id: UUID) async throws -> UserList
     func restoreList(id: UUID) async throws -> UserList
     func getDeletedLists() async throws -> [DeletedListSummary]
@@ -57,6 +58,7 @@ protocol LocationSavingServiceProtocol: AnyObject {
 enum CustomListError: LocalizedError {
     case emptyName
     case nameTooLong(maxLength: Int)
+    case descriptionTooLong(maxLength: Int)
     case noUpdatesProvided
     case rpcReturnedNoRow
 
@@ -66,6 +68,8 @@ enum CustomListError: LocalizedError {
             return "List name cannot be empty."
         case .nameTooLong(let maxLength):
             return "List name must be \(maxLength) characters or fewer."
+        case .descriptionTooLong(let maxLength):
+            return "Description must be \(maxLength) characters or fewer."
         case .noUpdatesProvided:
             return "No fields to update."
         case .rpcReturnedNoRow:
@@ -271,6 +275,28 @@ class LocationSavingService: LocationSavingServiceProtocol {
     func setListCoverImageUrl(id: UUID, imageUrl: String?) async throws -> UserList {
         let value: PartialColumnValue = (imageUrl == nil) ? .null : .string(imageUrl!)
         return try await updateListColumns(id: id, payload: ["cover_image_url": value])
+    }
+
+    /// Maximum description length. Mirrors the service-layer guard documented
+    /// on the user_lists.description column.
+    static let maxListDescriptionLength = 500
+
+    /// Set the user-supplied description for a list. Pass nil to clear.
+    /// System kinds (favorites/liked/want_to_go) can have their column set
+    /// but the UI hides the edit affordance — they show `kind.defaultDescription`
+    /// instead. Trimmed; empty-after-trim normalizes to nil.
+    func setListDescription(id: UUID, description: String?) async throws -> UserList {
+        let normalized: String?
+        if let raw = description?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            guard raw.count <= LocationSavingService.maxListDescriptionLength else {
+                throw CustomListError.descriptionTooLong(maxLength: LocationSavingService.maxListDescriptionLength)
+            }
+            normalized = raw
+        } else {
+            normalized = nil
+        }
+        let value: PartialColumnValue = (normalized == nil) ? .null : .string(normalized!)
+        return try await updateListColumns(id: id, payload: ["description": value])
     }
 
     /// Soft-delete a custom list (sets `deleted_at = NOW()` via SECURITY DEFINER

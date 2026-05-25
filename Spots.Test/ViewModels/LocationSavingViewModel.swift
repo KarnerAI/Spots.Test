@@ -88,7 +88,9 @@ class LocationSavingViewModel: ObservableObject {
 
     /// Create a new custom list. Appends to `userLists` on success and returns
     /// the inserted row so the caller (CreateListView) can dismiss + scroll the
-    /// new list into view.
+    /// new list into view. Marks ProfileSnapshotCache stale so the Profile
+    /// carousel rebuilds on next appear (otherwise the cached tiles render
+    /// without the new list — the QA-round-2 regression we just hit).
     func createList(
         name: String,
         visibility: ListVisibility = .private,
@@ -101,6 +103,7 @@ class LocationSavingViewModel: ObservableObject {
         )
         userLists.append(inserted)
         userListsLastLoadedAt = Date()
+        ProfileSnapshotCache.shared.markStale()
         return inserted
     }
 
@@ -108,6 +111,7 @@ class LocationSavingViewModel: ObservableObject {
     func renameList(id: UUID, newName: String) async throws -> UserList {
         let updated = try await service.renameList(id: id, newName: newName)
         replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
         return updated
     }
 
@@ -115,6 +119,7 @@ class LocationSavingViewModel: ObservableObject {
     func setListVisibility(id: UUID, visibility: ListVisibility) async throws -> UserList {
         let updated = try await service.setListVisibility(id: id, visibility: visibility)
         replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
         return updated
     }
 
@@ -122,6 +127,7 @@ class LocationSavingViewModel: ObservableObject {
     func setListCoverEmoji(id: UUID, emoji: String?) async throws -> UserList {
         let updated = try await service.setListCoverEmoji(id: id, emoji: emoji)
         replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
         return updated
     }
 
@@ -130,6 +136,17 @@ class LocationSavingViewModel: ObservableObject {
     func setListCoverImageUrl(id: UUID, imageUrl: String?) async throws -> UserList {
         let updated = try await service.setListCoverImageUrl(id: id, imageUrl: imageUrl)
         replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
+        return updated
+    }
+
+    /// Set or clear a user-supplied description for a custom list. Trimming +
+    /// length validation happens at the service layer. Default lists ignore
+    /// this column (UI hides the edit affordance).
+    func setListDescription(id: UUID, description: String?) async throws -> UserList {
+        let updated = try await service.setListDescription(id: id, description: description)
+        replaceList(updated)
+        ProfileSnapshotCache.shared.markStale()
         return updated
     }
 
@@ -149,6 +166,7 @@ class LocationSavingViewModel: ObservableObject {
         do {
             let tombstoned = try await service.deleteList(id: id)
             userListsLastLoadedAt = Date()
+            ProfileSnapshotCache.shared.markStale()
             return tombstoned
         } catch {
             // Roll back the optimistic remove
@@ -169,6 +187,7 @@ class LocationSavingViewModel: ObservableObject {
             userLists.append(restored)
         }
         userListsLastLoadedAt = Date()
+        ProfileSnapshotCache.shared.markStale()
         return restored
     }
 

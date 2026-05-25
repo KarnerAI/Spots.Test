@@ -140,9 +140,10 @@ struct CreateListView: View {
                 .foregroundStyle(Color.spotsTextMuted)
                 .padding(.horizontal, 16)
 
-            // Tile + CTA — both tap targets raise the iOS emoji keyboard
-            // with built-in search. The 12-emoji grid below stays as
-            // quick-tap shortcuts for the most common picks.
+            // Tile + CTA — tapping either opens an EmojiPickerSheet (rounded
+            // top corners, drag handle), inside which the iOS emoji keyboard
+            // rises. Matches the iMessage emoji-panel visual treatment. The
+            // 12-emoji grid below stays as quick-tap shortcuts for common picks.
             Button {
                 emojiKeyboardFocused = true
             } label: {
@@ -185,19 +186,14 @@ struct CreateListView: View {
             // Quick-tap shortcuts.
             emojiGrid
                 .padding(.top, 4)
-
-            // Invisible UIKit bridge that receives the emoji-keyboard
-            // selection. Off-screen at 1pt so it never takes layout space.
-            EmojiKeyboardField(
-                emoji: Binding(
-                    get: { coverEmoji },
-                    set: { if let new = $0 { coverEmoji = new } }
-                ),
-                isFocused: $emojiKeyboardFocused
-            )
-            .frame(width: 1, height: 1)
-            .opacity(0.01)
-            .accessibilityHidden(true)
+        }
+        .sheet(isPresented: $emojiKeyboardFocused) {
+            EmojiPickerSheet(picked: Binding(
+                get: { coverEmoji },
+                set: { if let new = $0 { coverEmoji = new } }
+            ))
+            .presentationDetents([.height(380)])
+            .presentationDragIndicator(.visible)
         }
     }
 

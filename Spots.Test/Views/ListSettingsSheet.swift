@@ -38,6 +38,7 @@ struct ListSettingsSheet: View {
 
     @State private var showingRename = false
     @State private var showingChangeEmoji = false
+    @State private var showingEditDescription = false
     @State private var showingDeleteConfirm = false
     @State private var showingCollaboratorsPlaceholder = false
     @State private var pendingAction: PendingAction? = nil
@@ -47,10 +48,22 @@ struct ListSettingsSheet: View {
         case rename
         case visibility(ListVisibility)
         case coverEmoji(String?)
+        case description
         case delete
     }
 
     private var isDefault: Bool { list.kind.isSystemKind }
+
+    /// Preview line for the Edit description row. Shows a single-line preview
+    /// of the current description, or "Add" if empty, so Maya knows whether
+    /// tapping will create or edit.
+    private var descriptionPreview: String {
+        if let desc = list.description?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty {
+            return desc
+        }
+        return "Add"
+    }
+
     private var spotCountText: String {
         // Without a fresh count we use the optimistic "N spots will stay saved"
         // copy in the delete modal. Real count comes from the tile-summaries RPC;
@@ -114,6 +127,14 @@ struct ListSettingsSheet: View {
                 .presentationDetents([.height(380)])
                 .presentationDragIndicator(.visible)
             }
+            // Edit description
+            .sheet(isPresented: $showingEditDescription) {
+                EditDescriptionSheet(currentDescription: list.description) { newDescription in
+                    performSetDescription(newDescription)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
             // Collaborators placeholder (T4 fills this in)
             .sheet(isPresented: $showingCollaboratorsPlaceholder) {
                 CollaboratorsPlaceholderSheet()
@@ -148,14 +169,18 @@ struct ListSettingsSheet: View {
             action: { showingRename = true }
         )
 
-        // Change list icon — opens emoji keyboard sheet (full system picker + search).
-        settingsRow(
-            icon: "face.smiling",
-            iconColor: Color.spotsTextMuted,
-            title: "Change list icon",
-            metaEmoji: list.coverEmoji,
-            action: { showingChangeEmoji = true }
-        )
+        // Change list icon — custom lists only. Default lists (Favorites /
+        // Liked / Want to go) render their canonical SF Symbol everywhere
+        // (per QA round 2 consistency feedback), so there's no icon to change.
+        if !isDefault {
+            settingsRow(
+                icon: "face.smiling",
+                iconColor: Color.spotsTextMuted,
+                title: "Change list icon",
+                metaEmoji: list.coverEmoji,
+                action: { showingChangeEmoji = true }
+            )
+        }
 
         // Set photo cover from spot — only meaningful for non-empty custom lists.
         // The action route lands in T21.6 when we wire it to a spot picker.
@@ -172,14 +197,18 @@ struct ListSettingsSheet: View {
         // Visibility — 3-state pill toggle.
         visibilityRow
 
-        // Edit description — placeholder. Description column doesn't ship in v1
-        // but the row is in the Figma mockup as a stub.
-        settingsRow(
-            icon: "text.alignleft",
-            iconColor: Color.spotsTextMuted,
-            title: "Edit description",
-            action: { /* P2 — description column not yet in schema */ }
-        )
+        // Edit description — custom lists only. Default lists use
+        // `kind.defaultDescription` (e.g. "Spots you love" for Favorites)
+        // which is set by the system and not user-editable.
+        if !isDefault {
+            settingsRow(
+                icon: "text.alignleft",
+                iconColor: Color.spotsTextMuted,
+                title: "Edit description",
+                metaText: descriptionPreview,
+                action: { showingEditDescription = true }
+            )
+        }
 
         // Manage collaborators — visible always; stub for T4.
         settingsRow(
@@ -387,6 +416,23 @@ struct ListSettingsSheet: View {
         }
     }
 
+    private func performSetDescription(_ newDescription: String?) {
+        pendingAction = .description
+        errorMessage = nil
+        Task { @MainActor in
+            do {
+                let updated = try await locationSavingVM.setListDescription(id: list.id, description: newDescription)
+                onUpdated?(updated)
+                pendingAction = nil
+                showingEditDescription = false
+            } catch {
+                errorMessage = (error as? CustomListError)?.errorDescription
+                    ?? "Couldn't save the description. Try again."
+                pendingAction = nil
+            }
+        }
+    }
+
     private func performDelete() {
         pendingAction = .delete
         errorMessage = nil
@@ -513,7 +559,9 @@ private struct ChangeCoverEmojiSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
-                // Tile + CTA — single tap target raises the emoji keyboard.
+                // Tile + CTA — single tap target raises the EmojiPickerSheet
+                // (rounded-top sheet hosting the iOS emoji keyboard, matches
+                // iMessage's visual treatment).
                 Button {
                     keyboardFocused = true
                 } label: {
@@ -578,23 +626,19 @@ private struct ChangeCoverEmojiSheet: View {
                     }
                 }
 
-                // Invisible bridge that captures the keyboard's emoji selection.
-                EmojiKeyboardField(
-                    emoji: Binding(
-                        get: { draft },
-                        set: { if let new = $0 { draft = new } }
-                    ),
-                    isFocused: $keyboardFocused
-                )
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
-                .accessibilityHidden(true)
-
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 16)
+            .sheet(isPresented: $keyboardFocused) {
+                EmojiPickerSheet(picked: Binding(
+                    get: { draft },
+                    set: { if let new = $0 { draft = new } }
+                ))
+                .presentationDetents([.height(380)])
+                .presentationDragIndicator(.visible)
+            }
             .navigationTitle("List icon")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -609,6 +653,101 @@ private struct ChangeCoverEmojiSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Edit-description sub-sheet
+
+private struct EditDescriptionSheet: View {
+    let currentDescription: String?
+    let onCommit: (String?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: String
+    @FocusState private var focused: Bool
+
+    init(currentDescription: String?, onCommit: @escaping (String?) -> Void) {
+        self.currentDescription = currentDescription
+        self.onCommit = onCommit
+        self._draft = State(initialValue: currentDescription ?? "")
+    }
+
+    private static let maxLength = LocationSavingService.maxListDescriptionLength
+
+    private var canCommit: Bool {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let original = currentDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed != original && draft.count <= Self.maxLength
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Add a description")
+                    .font(.geist(size: 13, weight: .medium))
+                    .foregroundStyle(Color.spotsTextMuted)
+
+                ZStack(alignment: .topLeading) {
+                    if draft.isEmpty {
+                        Text("e.g. \"Best taquerias on Calle Madero\" or \"Trip planning for August 2026\"")
+                            .font(.geist(size: 15))
+                            .foregroundStyle(Color.spotsTextSubtle)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .allowsHitTesting(false)
+                    }
+                    TextEditor(text: $draft)
+                        .focused($focused)
+                        .font(.geist(size: 15))
+                        .foregroundStyle(Color.spotsText)
+                        .scrollContentBackground(.hidden)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .frame(minHeight: 140)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.spotsBorder, lineWidth: 1)
+                        )
+                        .onChange(of: draft) { _, newValue in
+                            if newValue.count > Self.maxLength {
+                                draft = String(newValue.prefix(Self.maxLength))
+                            }
+                        }
+                }
+
+                HStack {
+                    Text("Tell others what this list is about. Optional.")
+                        .font(.geist(size: 12))
+                        .foregroundStyle(Color.spotsTextMuted)
+                    Spacer()
+                    Text("\(draft.count) / \(Self.maxLength)")
+                        .font(.geistMono(size: 11))
+                        .foregroundStyle(Color.spotsTextSubtle)
+                }
+            }
+            .padding(20)
+            .navigationTitle("Description")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundStyle(Color.spotsAccent)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { commit() }
+                        .font(.geist(size: 15, weight: .semibold))
+                        .foregroundStyle(canCommit ? Color.spotsAccent : Color.spotsTextSubtle)
+                        .disabled(!canCommit)
+                }
+            }
+            .onAppear { focused = true }
+        }
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Empty → nil so the column gets cleared rather than storing an empty string.
+        onCommit(trimmed.isEmpty ? nil : trimmed)
     }
 }
 

@@ -164,6 +164,10 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
     var setListCoverImageUrlResult: UserList?
     var setListCoverImageUrlShouldThrow: Error?
 
+    var setListDescriptionCalls: [(id: UUID, description: String?)] = []
+    var setListDescriptionResult: UserList?
+    var setListDescriptionShouldThrow: Error?
+
     var deleteListCalls: [UUID] = []
     var deleteListResult: UserList?
     var deleteListShouldThrow: Error?
@@ -207,6 +211,12 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
         setListCoverImageUrlCalls.append((id, imageUrl))
         if let err = setListCoverImageUrlShouldThrow { throw err }
         return setListCoverImageUrlResult ?? UserList(id: id, userId: UUID(), kind: .custom, name: "List", coverImageUrl: imageUrl)
+    }
+
+    func setListDescription(id: UUID, description: String?) async throws -> UserList {
+        setListDescriptionCalls.append((id, description))
+        if let err = setListDescriptionShouldThrow { throw err }
+        return setListDescriptionResult ?? UserList(id: id, userId: UUID(), kind: .custom, name: "List", description: description)
     }
 
     func deleteList(id: UUID) async throws -> UserList {

@@ -59,6 +59,20 @@ enum ListKind: String, Codable, CaseIterable {
         }
     }
 
+    /// Hardcoded description shown on the system default lists. Maya can't
+    /// edit these (they're auto-set by the system) but they surface in
+    /// places that show a list's description (e.g. List Detail header,
+    /// possibly Discover surface in Phase 2). Custom kinds return nil so
+    /// the caller falls back to the user-supplied description.
+    var defaultDescription: String? {
+        switch self {
+        case .favorites: return "Spots you love."
+        case .liked: return "Spots you've enjoyed."
+        case .wantToGo: return "Places you want to visit."
+        case .custom, .trip, .datePlan: return nil
+        }
+    }
+
     /// Tint color for the icon. Matches iconName semantically.
     var iconColor: Color {
         switch self {
@@ -168,6 +182,7 @@ struct ListIconView: View {
 ///     created_at      -> createdAt
 ///     updated_at      -> updatedAt
 ///     deleted_at      -> deletedAt           (soft-delete tombstone; T21.1)
+///     description     -> description         (user-supplied; T21 QA round 2)
 struct UserList: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let userId: UUID
@@ -187,6 +202,16 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
     /// so normal UI reads never see them — only the restore RPC and
     /// `getDeletedLists()` surface them. Hard-purged after 30 days.
     let deletedAt: Date?
+    /// User-supplied description. Only meaningful for custom kinds; system
+    /// kinds use `kind.defaultDescription` instead. Max 500 chars enforced
+    /// at the service layer.
+    let description: String?
+
+    /// Resolved display description. System kinds return their hardcoded copy;
+    /// custom kinds return whatever the user typed (or nil).
+    var displayDescription: String? {
+        kind.defaultDescription ?? description
+    }
 
     /// Resolved display name. System kinds use their canonical label;
     /// custom kinds use the user-supplied `name`.
@@ -212,6 +237,7 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case deletedAt = "deleted_at"
+        case description
     }
 
     /// Custom decoder so existing rows (pre-Phase-1) and forward-compat
@@ -233,6 +259,7 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
         self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
         self.deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+        self.description = try c.decodeIfPresent(String.self, forKey: .description)
     }
 
     /// Explicit memberwise initializer used by tests and callers.
@@ -250,7 +277,8 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         coverEmoji: String? = nil,
         createdAt: Date? = nil,
         updatedAt: Date? = nil,
-        deletedAt: Date? = nil
+        deletedAt: Date? = nil,
+        description: String? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -266,5 +294,6 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
+        self.description = description
     }
 }
