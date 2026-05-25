@@ -80,11 +80,38 @@ enum ListKind: String, Codable, CaseIterable {
 
 // MARK: - List Visibility
 
-/// Whether a list is privately scoped to the owner+editors or readable
-/// publicly via its `shareSlug`. Default `.private`.
+/// Who can see this list. Three-state per E1 revised 2026-05-25.
+///
+/// - `.private`: only the owner sees it. Default.
+/// - `.shared`: owner + invited collaborators (rows in `list_editors`).
+///   Not publicly discoverable. Coupled in UX with `list_editors` —
+///   a list with non-empty `list_editors` displays as "Shared" in the UI
+///   regardless of the underlying enum value (T4 owns that derivation).
+/// - `.public`: visible via share link to anyone; surfaces in Discover (T18).
+///   Independent of `list_editors` — a list can be `.public` without any
+///   collaborators, or `.shared` without being publicly findable.
 enum ListVisibility: String, Codable, CaseIterable {
     case `private` = "private"
+    case shared = "shared"
     case `public` = "public"
+
+    /// User-facing label for the visibility pill on List Settings.
+    var displayName: String {
+        switch self {
+        case .private: return "Private"
+        case .shared: return "Shared"
+        case .public: return "Public"
+        }
+    }
+
+    /// One-line description shown under the visibility pill on Create / Settings.
+    var description: String {
+        switch self {
+        case .private: return "Only you can view and edit."
+        case .shared: return "You and people you invite can view and add spots."
+        case .public: return "Anyone on Spots can find and follow this list."
+        }
+    }
 }
 
 // MARK: - Display Kind Resolver
@@ -140,6 +167,7 @@ struct ListIconView: View {
 ///     cover_emoji     -> coverEmoji          (nullable)
 ///     created_at      -> createdAt
 ///     updated_at      -> updatedAt
+///     deleted_at      -> deletedAt           (soft-delete tombstone; T21.1)
 struct UserList: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let userId: UUID
@@ -154,6 +182,11 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
     let coverEmoji: String?
     let createdAt: Date?
     let updatedAt: Date?
+    /// Soft-delete tombstone. NULL when active, non-nil when the user
+    /// tapped Delete. The `active_user_lists` view filters these out
+    /// so normal UI reads never see them — only the restore RPC and
+    /// `getDeletedLists()` surface them. Hard-purged after 30 days.
+    let deletedAt: Date?
 
     /// Resolved display name. System kinds use their canonical label;
     /// custom kinds use the user-supplied `name`.
@@ -178,6 +211,7 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         case coverEmoji = "cover_emoji"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case deletedAt = "deleted_at"
     }
 
     /// Custom decoder so existing rows (pre-Phase-1) and forward-compat
@@ -198,6 +232,7 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         self.coverEmoji = try c.decodeIfPresent(String.self, forKey: .coverEmoji)
         self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
         self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
+        self.deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
     }
 
     /// Explicit memberwise initializer used by tests and callers.
@@ -214,7 +249,8 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         coverImageUrl: String? = nil,
         coverEmoji: String? = nil,
         createdAt: Date? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        deletedAt: Date? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -229,5 +265,6 @@ struct UserList: Codable, Identifiable, Equatable, Hashable {
         self.coverEmoji = coverEmoji
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
     }
 }
