@@ -158,76 +158,70 @@ struct AllListsView: View {
     }
 
     // MARK: - Row
+    //
+    // Per QA feedback (2026-05-25): drop photo covers in row thumbnails — they
+    // make the list-of-lists feel busy. Use the list's coverEmoji (or a per-kind
+    // default for system lists) on the soft-blue tile so this screen reads as
+    // a clean directory, not a photo gallery. The photo cover still appears on
+    // the Profile carousel + List Detail header where the surface is bigger.
 
     private func listRow(_ list: UserList) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            coverThumbnail(for: list)
+        NavigationLink {
+            destinationView(for: list)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                emojiThumbnail(for: list)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(list.displayName)
-                    .font(.geist(size: 15, weight: .medium))
-                    .foregroundStyle(Color.spotsText)
-                    .lineLimit(1)
-                Text(metaLabel(for: list))
-                    .font(.geist(size: 12))
-                    .foregroundStyle(Color.spotsTextMuted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-
-            Button {
-                settingsTargetList = list
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(Color.spotsTextMuted)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Settings for \(list.displayName)")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.spotsBorder)
-                .frame(height: 1)
-                .padding(.leading, 76)
-        }
-    }
-
-    /// Cover thumbnail: photo if available (via auto-cover RPC), otherwise emoji.
-    @ViewBuilder
-    private func coverThumbnail(for list: UserList) -> some View {
-        let summary = tileSummaries[list.id]
-        let url = summary?.effectiveCoverUrl ?? list.coverImageUrl
-
-        if let url, let parsed = URL(string: url) {
-            AsyncImage(url: parsed) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .empty:
-                    Color.spotsAccentSoft
-                case .failure:
-                    emojiFallback(for: list)
-                @unknown default:
-                    Color.spotsAccentSoft
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(list.displayName)
+                        .font(.geist(size: 15, weight: .medium))
+                        .foregroundStyle(Color.spotsText)
+                        .lineLimit(1)
+                    Text(metaLabel(for: list))
+                        .font(.geist(size: 12))
+                        .foregroundStyle(Color.spotsTextMuted)
+                        .lineLimit(1)
                 }
+                Spacer(minLength: 8)
+
+                Button {
+                    settingsTargetList = list
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(Color.spotsTextMuted)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Settings for \(list.displayName)")
             }
-            .frame(width: 48, height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        } else {
-            emojiFallback(for: list)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.spotsBorder)
+                    .frame(height: 1)
+                    .padding(.leading, 76)
+            }
         }
+        .buttonStyle(.plain)
     }
 
-    private func emojiFallback(for list: UserList) -> some View {
+    /// Route a row tap to ListDetailView. System kinds pass the resolved
+    /// UserList via `.singleList`; this matches how Profile's destinationView
+    /// builds the same screen.
+    @ViewBuilder
+    private func destinationView(for list: UserList) -> some View {
+        ListDetailView(title: list.displayName, mode: .singleList(list))
+            .environmentObject(locationSavingVM)
+    }
+
+    /// Emoji-only thumbnail. Uses list.coverEmoji if set; otherwise a sane
+    /// per-kind default (❤️ Favorites, 👍 Liked, 🚩 Want to go, 📋 custom).
+    private func emojiThumbnail(for list: UserList) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.spotsAccentSoft)

@@ -148,11 +148,11 @@ struct ListSettingsSheet: View {
             action: { showingRename = true }
         )
 
-        // Change cover (emoji picker for now; future = full cover sheet)
+        // Change list icon — opens emoji keyboard sheet (full system picker + search).
         settingsRow(
             icon: "face.smiling",
             iconColor: Color.spotsTextMuted,
-            title: "Change cover",
+            title: "Change list icon",
             metaEmoji: list.coverEmoji,
             action: { showingChangeEmoji = true }
         )
@@ -202,22 +202,27 @@ struct ListSettingsSheet: View {
         }
     }
 
+    /// Visibility row uses a two-row layout (label + subtext on row 1, full-width
+    /// 3-segment pill on row 2) so the pill always has enough horizontal room
+    /// to render its longest segment ("Private") without text wrapping.
     private var visibilityRow: some View {
-        HStack(alignment: .center, spacing: 14) {
-            iconCircle(systemName: "lock", color: Color.spotsTextMuted)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Visibility")
-                    .font(.geist(size: 14, weight: .medium))
-                    .foregroundStyle(Color.spotsText)
-                Text(visibilitySubtext)
-                    .font(.geist(size: 12))
-                    .foregroundStyle(Color.spotsTextMuted)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 14) {
+                iconCircle(systemName: "lock", color: Color.spotsTextMuted)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Visibility")
+                        .font(.geist(size: 14, weight: .medium))
+                        .foregroundStyle(Color.spotsText)
+                    Text(visibilitySubtext)
+                        .font(.geist(size: 12))
+                        .foregroundStyle(Color.spotsTextMuted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 8)
             visibilityPill
+                .padding(.leading, 38) // align under the title (icon width + spacing)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -257,11 +262,12 @@ struct ListSettingsSheet: View {
             }
         } label: {
             Text(option.displayName)
-                .font(.geist(size: 11, weight: list.visibility == option ? .semibold : .medium))
+                .font(.geist(size: 13, weight: list.visibility == option ? .semibold : .medium))
                 .foregroundStyle(list.visibility == option ? Color.spotsText : Color.spotsTextMuted)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .frame(minWidth: 56)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(list.visibility == option ? Color.white : Color.clear)
@@ -290,9 +296,10 @@ struct ListSettingsSheet: View {
             HStack(alignment: .center, spacing: 14) {
                 iconCircle(systemName: icon, color: iconColor)
                 Text(title)
-                    .font(.geist(size: 14, weight: .medium))
+                    .font(.geist(size: 15, weight: .medium))
                     .foregroundStyle(titleColor)
-                Spacer(minLength: 8)
+                    .lineLimit(1)
+                Spacer(minLength: 12)
                 if let metaEmoji {
                     Text(metaEmoji)
                         .font(.system(size: 20))
@@ -309,7 +316,7 @@ struct ListSettingsSheet: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
             .contentShape(Rectangle())
             .opacity(disabled ? 0.4 : 1)
         }
@@ -480,7 +487,7 @@ private struct RenameListSheet: View {
     }
 }
 
-// MARK: - Change-cover-emoji sub-sheet
+// MARK: - Change-list-icon sub-sheet
 
 private struct ChangeCoverEmojiSheet: View {
     let currentEmoji: String?
@@ -488,6 +495,7 @@ private struct ChangeCoverEmojiSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var draft: String?
+    @State private var keyboardFocused: Bool = false
 
     init(currentEmoji: String?, onCommit: @escaping (String?) -> Void) {
         self.currentEmoji = currentEmoji
@@ -504,34 +512,46 @@ private struct ChangeCoverEmojiSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(Color.spotsAccentSoft)
-                            .frame(width: 72, height: 72)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(Color.spotsBorder, lineWidth: 1)
-                            )
-                        if let draft {
-                            Text(draft).font(.system(size: 34))
-                        } else {
-                            Image(systemName: "face.smiling")
-                                .font(.system(size: 26, weight: .light))
-                                .foregroundStyle(Color.spotsAccent.opacity(0.55))
+            VStack(alignment: .leading, spacing: 12) {
+                // Tile + CTA — single tap target raises the emoji keyboard.
+                Button {
+                    keyboardFocused = true
+                } label: {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color.spotsAccentSoft)
+                                .frame(width: 64, height: 64)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(Color.spotsBorder, lineWidth: 1)
+                                )
+                            if let draft {
+                                Text(draft).font(.system(size: 30))
+                            } else {
+                                Image(systemName: "face.smiling")
+                                    .font(.system(size: 24, weight: .light))
+                                    .foregroundStyle(Color.spotsAccent.opacity(0.55))
+                            }
                         }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(draft == nil ? "Pick an emoji" : "Change emoji")
+                                .font(.geist(size: 14, weight: .medium))
+                                .foregroundStyle(Color.spotsAccent)
+                            Text("Tap to open the emoji keyboard.")
+                                .font(.geist(size: 12))
+                                .foregroundStyle(Color.spotsTextMuted)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(draft == nil ? "Pick an emoji" : "Selected")
-                            .font(.geist(size: 14, weight: .medium))
-                            .foregroundStyle(Color.spotsAccent)
-                        Text("Shown when the list is empty or the most-recent spot has no photo.")
-                            .font(.geist(size: 12))
-                            .foregroundStyle(Color.spotsTextMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+
+                Text("Quick picks")
+                    .font(.geist(size: 11, weight: .medium))
+                    .foregroundStyle(Color.spotsTextMuted)
+                    .padding(.top, 4)
 
                 LazyVGrid(
                     columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 6),
@@ -542,9 +562,9 @@ private struct ChangeCoverEmojiSheet: View {
                             draft = (draft == emoji) ? nil : emoji
                         } label: {
                             Text(emoji)
-                                .font(.system(size: 26))
+                                .font(.system(size: 24))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
+                                .padding(.vertical, 8)
                                 .background(
                                     RoundedRectangle(cornerRadius: 8)
                                         .fill(draft == emoji ? Color.spotsAccentSoft : Color.clear)
@@ -557,9 +577,25 @@ private struct ChangeCoverEmojiSheet: View {
                         .buttonStyle(.plain)
                     }
                 }
+
+                // Invisible bridge that captures the keyboard's emoji selection.
+                EmojiKeyboardField(
+                    emoji: Binding(
+                        get: { draft },
+                        set: { if let new = $0 { draft = new } }
+                    ),
+                    isFocused: $keyboardFocused
+                )
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .accessibilityHidden(true)
+
+                Spacer(minLength: 0)
             }
-            .padding(20)
-            .navigationTitle("Cover emoji")
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
+            .navigationTitle("List icon")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

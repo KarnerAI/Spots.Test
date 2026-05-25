@@ -36,6 +36,11 @@ struct CreateListView: View {
     @State private var isSaving: Bool = false
     @State private var errorMessage: String? = nil
 
+    /// Drives the EmojiKeyboardField — tapping the emoji tile or "Choose emoji"
+    /// text flips this to true, which raises the iOS emoji keyboard. The
+    /// coordinator flips it back to false after the user picks an emoji.
+    @State private var emojiKeyboardFocused: Bool = false
+
     /// Curated 12-emoji starter grid. Covers the most common Maya use cases
     /// (food + drinks + culture + travel). v1 limitation — a full emoji picker
     /// is a P2 enhancement; for now Maya picks one of these or skips and lets
@@ -135,21 +140,30 @@ struct CreateListView: View {
                 .foregroundStyle(Color.spotsTextMuted)
                 .padding(.horizontal, 16)
 
-            HStack(spacing: 12) {
-                emojiTile
+            // Tile + CTA — both tap targets raise the iOS emoji keyboard
+            // with built-in search. The 12-emoji grid below stays as
+            // quick-tap shortcuts for the most common picks.
+            Button {
+                emojiKeyboardFocused = true
+            } label: {
+                HStack(spacing: 12) {
+                    emojiTile
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(coverEmoji == nil ? "Choose emoji" : "Change emoji")
-                        .font(.geist(size: 14, weight: .medium))
-                        .foregroundStyle(Color.spotsAccent)
-                    Text("Shows when the list has no spots yet.")
-                        .font(.geist(size: 12))
-                        .foregroundStyle(Color.spotsTextMuted)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(coverEmoji == nil ? "Choose emoji" : "Change emoji")
+                            .font(.geist(size: 14, weight: .medium))
+                            .foregroundStyle(Color.spotsAccent)
+                        Text("Tap to open the emoji keyboard (search included).")
+                            .font(.geist(size: 12))
+                            .foregroundStyle(Color.spotsTextMuted)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .padding(.horizontal, 16)
 
             // Auto-cover behavior hint
@@ -168,8 +182,22 @@ struct CreateListView: View {
             )
             .padding(.horizontal, 16)
 
+            // Quick-tap shortcuts.
             emojiGrid
                 .padding(.top, 4)
+
+            // Invisible UIKit bridge that receives the emoji-keyboard
+            // selection. Off-screen at 1pt so it never takes layout space.
+            EmojiKeyboardField(
+                emoji: Binding(
+                    get: { coverEmoji },
+                    set: { if let new = $0 { coverEmoji = new } }
+                ),
+                isFocused: $emojiKeyboardFocused
+            )
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .accessibilityHidden(true)
         }
     }
 
