@@ -209,3 +209,21 @@ Deferred work items captured during planning + reviews. Each item is self-contai
 **Effort:** Human ~15min / CC ~3min. Touch points: `Components/EmojiKeyboardField.swift`, callers in `CreateListView.swift` and `ListSettingsSheet.swift`.
 
 **Priority:** P3. **Depends on:** none.
+
+---
+
+## P2 — Optional description field in CreateListView
+
+**What:** When Maya taps "+ New list", the form asks for name, emoji, and visibility — but not a description. She can only add one later via Settings → Description. Add an optional description TextField (or expandable "Add description" link) inline in CreateListView so she can capture intent at create time without an extra trip.
+
+**Why:** Two-step capture (create now, describe later) loses the moment. Maya naming a list "Mexico City 2026" probably has the trip context in her head right then; a small field invites her to write it down. Schema already supports it (`description` column shipped in T21 QA round 2).
+
+**Pros:** One screen instead of two. Catches the high-energy moment when Maya's actually thinking about the trip.
+
+**Cons:** Adds a fifth form field to a form that's already 4 inputs deep. More friction at create. Most lists don't need a description.
+
+**Context:** Surfaced during T21 QA on 2026-05-25. User's instinct was to defer ("save that for later so the user doesn't have to add too much stuff right now"). Revisit once we have telemetry on how often Maya backfills descriptions via Settings — if usage is high, promote this; if low, leave Settings as the only entry point.
+
+**Effort:** Human ~30min / CC ~5min. Touch points: `Views/CreateListView.swift` (add TextEditor or expandable link), `ViewModels/LocationSavingViewModel.swift` (createList already accepts a description parameter via the service — just pass it through).
+
+**Priority:** P2. **Depends on:** none.

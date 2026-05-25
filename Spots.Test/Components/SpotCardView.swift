@@ -19,24 +19,30 @@ struct SpotCardView: View {
     private let imageSize: CGFloat = 120
     
     var body: some View {
-        Button(action: onCardTap) {
-            HStack(spacing: 0) {
-                // Left: Image
-                spotImage
-                
-                // Right: Content
-                contentSection
-            }
-            .frame(height: cardHeight)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
-                    .stroke(Color.gray200, lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
+        // Card-level tap uses contentShape + onTapGesture instead of an outer
+        // Button. The bookmark icon is a real Button (SaveSpotButton), and a
+        // Button-inside-a-Button collapses to a single hit target — the outer
+        // Button steals the tap, so tapping the bookmark mistakenly opened the
+        // Google Maps confirmation. SwiftUI gives precedence to inner Buttons
+        // inside an onTapGesture container, so this wiring lets each control
+        // own its own tap zone.
+        HStack(spacing: 0) {
+            // Left: Image
+            spotImage
+
+            // Right: Content
+            contentSection
         }
-        .buttonStyle(PlainButtonStyle())
+        .frame(height: cardHeight)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: CornerRadius.card, style: .continuous)
+                .stroke(Color.gray200, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
+        .contentShape(.rect)
+        .onTapGesture { onCardTap() }
     }
     
     // MARK: - Image Section
