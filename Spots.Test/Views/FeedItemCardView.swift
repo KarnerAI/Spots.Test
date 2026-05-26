@@ -57,6 +57,8 @@ struct FeedItemCardView: View {
             compactCard {
                 listPreview(payload: payload)
             }
+        case .visited(let payload):
+            visitedHeroCard(payload: payload)
         }
     }
 
@@ -73,7 +75,7 @@ struct FeedItemCardView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onTap() }
 
-            heroImage(payload: payload)
+            heroImageBase()
                 .contentShape(Rectangle())
                 .onTapGesture { onTap() }
 
@@ -91,6 +93,48 @@ struct FeedItemCardView: View {
             if let spot {
                 SpottedByView(spot: spot)
             }
+        }
+    }
+
+    // MARK: - Hero card (visited — T10)
+    //
+    // Reuses the spot-save hero card layout but with a single fixed verb
+    // ("visited") and no "spotted-by" footer. The visited activity is a
+    // per-user "Maya visited Sagrada Família" signal — co-saver counts
+    // aren't computed for this arm by the feed RPC, so we don't have data
+    // to show. The Save button stays so the viewer can save the spot they
+    // see in the visited card.
+    private func visitedHeroCard(payload: FeedItemPayload.VisitedPayload) -> some View {
+        VStack(spacing: 0) {
+            header(verb: "visited")
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+                .onTapGesture { onTap() }
+
+            heroImageBase()
+                .contentShape(Rectangle())
+                .onTapGesture { onTap() }
+
+            Divider()
+            visitedFooter
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+        }
+        .background(Color.white)
+    }
+
+    /// Save-button-only footer used by the visited card. Mirrors the right
+    /// half of `spottedByRow` (no stacked avatars, no co-saver label).
+    private var visitedFooter: some View {
+        HStack(spacing: 10) {
+            Spacer(minLength: 8)
+            SaveSpotButton(
+                placeId: spot?.placeId ?? "",
+                kind: kind,
+                hasLoadedSavedPlaces: hasLoadedSavedPlaces,
+                onTap: onTapSpot
+            )
         }
     }
 
@@ -169,8 +213,13 @@ struct FeedItemCardView: View {
     }()
 
     // MARK: - Hero image with overlay
-
-    private func heroImage(payload: FeedItemPayload.SpotSavePayload) -> some View {
+    //
+    // Payload-free: both spot_save and visited cards render the same hero
+    // image (spot photo + gradient + title overlay). The function was
+    // formerly `heroImage(payload:)` taking SpotSavePayload, but the
+    // payload was unused — the image and overlay text are sourced from
+    // `spot?.photoUrl/.photoReference/.name/...` already in scope.
+    private func heroImageBase() -> some View {
         // Use Color.gray200 as the sizing container. The 16:10 aspect ratio is
         // enforced on the placeholder color (which has a determinate intrinsic
         // size at any width) rather than on the AsyncImage subtree, where the
@@ -180,7 +229,7 @@ struct FeedItemCardView: View {
             .aspectRatio(16.0 / 10.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .overlay {
-                spotImage(payload: payload)
+                spotImageBase()
                     .scaledToFill()
             }
             .overlay(alignment: .bottom) {
@@ -230,8 +279,11 @@ struct FeedItemCardView: View {
             .clipped()
     }
 
+    /// Payload-free: same rationale as `heroImageBase` — reads `spot?.photoUrl`
+    /// / `spot?.photoReference` directly. Shared between spot_save and
+    /// visited cards.
     @ViewBuilder
-    private func spotImage(payload: FeedItemPayload.SpotSavePayload) -> some View {
+    private func spotImageBase() -> some View {
         if let urlString = spot?.photoUrl, let url = URL(string: urlString) {
             CachedAsyncImage(url: url) { phase in
                 switch phase {

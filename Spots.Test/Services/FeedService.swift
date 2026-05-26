@@ -57,8 +57,11 @@ class FeedService {
     /// Returns a dictionary keyed by `place_id` so cards can look up their spot in O(1).
     func loadSpots(for items: [FeedItem]) async throws -> [String: Spot] {
         let placeIds: [String] = items.compactMap { item in
-            if case .spotSave(let payload) = item.payload { return payload.spotId }
-            return nil
+            switch item.payload {
+            case .spotSave(let payload): return payload.spotId
+            case .visited(let payload):  return payload.spotId   // T10
+            case .listCreated:           return nil
+            }
         }
         let unique = Array(Set(placeIds))
         guard !unique.isEmpty else { return [:] }

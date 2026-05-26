@@ -3,8 +3,8 @@
 //  Spots.Test
 //
 //  Single feed entry returned by the `get_following_feed` Postgres RPC.
-//  Two activity kinds (spot save / list created) carried in a uniform shape
-//  with a discriminated payload.
+//  Three activity kinds (spot save / list created / visited) carried in a
+//  uniform shape with a discriminated payload.
 //
 
 import Foundation
@@ -12,11 +12,17 @@ import Foundation
 enum FeedItemKind: String, Codable {
     case spotSave = "spot_save"
     case listCreated = "list_created"
+    /// T10: first-ever Favorites/Liked add per (user, spot). Deduped at the
+    /// feed RPC layer. Replaces the spot_save card for favorites/liked
+    /// adds — the RPC excludes those kinds from spot_save to avoid surfacing
+    /// two near-identical cards for the same event.
+    case visited = "visited"
 }
 
 enum FeedItemPayload: Equatable, Hashable {
     case spotSave(SpotSavePayload)
     case listCreated(ListCreatedPayload)
+    case visited(VisitedPayload)
 
     struct SpotSavePayload: Equatable, Hashable {
         let listId: UUID
@@ -48,6 +54,24 @@ enum FeedItemPayload: Equatable, Hashable {
         let listName: String?
 
         var listDisplayName: String { listName ?? "a new list" }
+    }
+
+    /// T10 visited payload. `listKind` will be `.favorites` or `.liked` in
+    /// practice (the feed RPC filters to those kinds), but the field is
+    /// nullable for forward-compat with payloads that drop the column.
+    struct VisitedPayload: Equatable, Hashable {
+        let listId: UUID
+        let listKind: ListKind?
+        let listName: String?
+        let spotId: String
+
+        /// Display label for the list the spot first landed in. Favorites or
+        /// Liked use their canonical names; custom kinds (shouldn't happen
+        /// here, but defensive) fall back to listName.
+        var listDisplayName: String {
+            if let listKind, listKind.isSystemKind { return listKind.displayName }
+            return listName ?? "a list"
+        }
     }
 }
 
@@ -113,6 +137,14 @@ extension FeedItem: Decodable {
                 listId: raw.list_id,
                 listName: raw.list_name
             ))
+        case .visited:
+            let raw = try VisitedRaw(from: payloadDecoder)
+            payload = .visited(.init(
+                listId: raw.list_id,
+                listKind: raw.list_kind,
+                listName: raw.list_name,
+                spotId: raw.spot_id
+            ))
         }
     }
 
@@ -138,5 +170,12 @@ extension FeedItem: Decodable {
     private struct ListCreatedRaw: Decodable {
         let list_id: UUID
         let list_name: String?
+    }
+
+    private struct VisitedRaw: Decodable {
+        let list_id: UUID
+        let list_kind: ListKind?
+        let list_name: String?
+        let spot_id: String
     }
 }

@@ -202,10 +202,14 @@ struct NewsFeedView: View {
     private func feedRow(_ item: FeedItem) -> some View {
         let actor = viewModel.actorsById[item.actorId]
         let spot: Spot? = {
-            if case .spotSave(let payload) = item.payload {
+            switch item.payload {
+            case .spotSave(let payload):
                 return viewModel.spotsById[payload.spotId]
+            case .visited(let payload):
+                return viewModel.spotsById[payload.spotId]
+            case .listCreated:
+                return nil
             }
-            return nil
         }()
 
         // Saved-places state from the single-source-of-truth VM. The card
@@ -231,7 +235,11 @@ struct NewsFeedView: View {
                     navigationPath.append(
                         FeedRoute.list(actorId: item.actorId, listId: payload.listId, name: payload.listDisplayName)
                     )
-                case .spotSave:
+                case .spotSave, .visited:
+                    // Both spot-centric cards open the spot in maps on tap.
+                    // T10 visited card uses the same tap target — the
+                    // narrative is "Maya visited X", so the natural action
+                    // is to open X.
                     guard let spot else { return }
                     spotToOpenInMaps = spot
                 }

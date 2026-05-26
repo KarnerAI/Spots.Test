@@ -154,9 +154,14 @@ class FeedViewModel: ObservableObject {
     /// Concurrency is capped at `enrichmentConcurrencyLimit` so a feed page
     /// referencing many sparse spots doesn't burst the Google Places quota.
     private func enrichMissingSpotFields(for items: [FeedItem]) async {
-        let referencedPlaceIds: [String] = items.compactMap {
-            if case .spotSave(let p) = $0.payload { return p.spotId }
-            return nil
+        let referencedPlaceIds: [String] = items.compactMap { item in
+            // Both spot_save and visited (T10) carry a spotId that needs
+            // backfill enrichment. list_created has no spot.
+            switch item.payload {
+            case .spotSave(let p): return p.spotId
+            case .visited(let p):  return p.spotId
+            case .listCreated:     return nil
+            }
         }
         let needsEnrichment = Array(Set(referencedPlaceIds.filter { placeId in
             guard !enrichedPlaceIds.contains(placeId) else { return false }
