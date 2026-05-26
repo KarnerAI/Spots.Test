@@ -493,8 +493,41 @@ class LocationSavingViewModel: ObservableObject {
             let original = Set(try await service.getListsContainingSpot(placeId: placeId))
             let diff = ListSaveDiff(selected: coerced, original: original)
 
+            // T10 — Conversion routing (decision T10-D1):
+            // If this save commit's shape is a Want-to-Go → Favorites/Liked
+            // transition (a list with kind .wantToGo in toRemove AND a list
+            // with kind .favorites/.liked in toAdd), route that pair through
+            // `moveSpotBetweenLists` (one atomic RPC) instead of parallel
+            // add+remove. The RPC writes a `list_moves` row capturing the
+            // conversion signal for Phase 3 AI planner training; log failure
+            // never aborts the move (EXCEPTION-wrapped inside the RPC).
+            //
+            // The spot must already exist in the `spots` table (it was in
+            // Want-to-Go, so it was previously upserted) — so this is a
+            // pure list-membership operation, no upsert needed.
+            //
+            // Non-conversion adds (e.g. additional custom lists in the same
+            // save commit) fall through to the existing ADD loop below.
+            var remainingToAdd = diff.toAdd
+            var remainingToRemove = diff.toRemove
+
+            if let conversion = Self.detectWantToGoConversion(
+                toAdd: diff.toAdd,
+                toRemove: diff.toRemove,
+                userLists: userLists
+            ) {
+                try await service.moveSpotBetweenLists(
+                    placeId: placeId,
+                    fromListId: conversion.fromListId,
+                    toListId: conversion.toListId,
+                    source: .manual
+                )
+                remainingToAdd.remove(conversion.toListId)
+                remainingToRemove.remove(conversion.fromListId)
+            }
+
             // ADD first — never lose a save. If any add throws, rollback.
-            for id in diff.toAdd {
+            for id in remainingToAdd {
                 try await saveSpot(
                     placeId: spotData.placeId,
                     name: spotData.name,
@@ -512,7 +545,7 @@ class LocationSavingViewModel: ObservableObject {
             // REMOVE second — best-effort. A partial failure here leaves the
             // spot in a stale list, recoverable on next loadSavedPlaces. The
             // save still counts as successful from the user's perspective.
-            for id in diff.toRemove {
+            for id in remainingToRemove {
                 try? await service.removeSpotFromList(placeId: spotData.placeId, listId: id)
             }
         } catch {
@@ -520,6 +553,55 @@ class LocationSavingViewModel: ObservableObject {
             lastSaveError = "Couldn't save. Try again."
             throw error
         }
+    }
+
+    // MARK: - Conversion detection (pure helper, exposed for testing)
+
+    /// Result of `detectWantToGoConversion`. A non-nil value means the save
+    /// commit's diff represents a Want-to-Go → Favorites/Liked conversion
+    /// and should be re-routed through `moveSpotBetweenLists`.
+    struct WantToGoConversion: Equatable {
+        let fromListId: UUID
+        let toListId: UUID
+        let toKind: ListKind   // .favorites or .liked
+    }
+
+    /// Detect whether a save commit's add/remove diff represents a
+    /// Want-to-Go → Favorites/Liked conversion (decision T10-D1).
+    ///
+    /// Returns a `WantToGoConversion` describing the matched pair, or `nil`
+    /// if the diff doesn't fit the conversion shape. Pure function — exposed
+    /// so the conversion semantic is unit-testable without a Supabase client.
+    ///
+    /// Tie-breaker: if multiple visited-kind lists are in `toAdd` alongside
+    /// one Want-to-Go in `toRemove`, the match prefers Favorites over Liked
+    /// (matches `coerceToSingleDefault`'s priority). The remaining
+    /// visited-kind additions stay as plain adds — they don't produce a
+    /// second move event because the spot has already left Want-to-Go.
+    static func detectWantToGoConversion(
+        toAdd: Set<UUID>,
+        toRemove: Set<UUID>,
+        userLists: [UserList]
+    ) -> WantToGoConversion? {
+        // Find a Want-to-Go list being removed.
+        guard let wantToGoList = userLists.first(where: {
+            $0.kind == .wantToGo && toRemove.contains($0.id)
+        }) else { return nil }
+
+        // Find a visited-kind list being added. Prefer favorites over liked.
+        let visitedAdds = userLists.filter { list in
+            (list.kind == .favorites || list.kind == .liked)
+                && toAdd.contains(list.id)
+        }
+        let winner = visitedAdds.first(where: { $0.kind == .favorites })
+            ?? visitedAdds.first(where: { $0.kind == .liked })
+        guard let toList = winner else { return nil }
+
+        return WantToGoConversion(
+            fromListId: wantToGoList.id,
+            toListId: toList.id,
+            toKind: toList.kind
+        )
     }
 
     /// Pure diff calculation. Public for unit testing.
@@ -537,9 +619,24 @@ class LocationSavingViewModel: ObservableObject {
 
     /// If the input contains more than one of the three system default lists
     /// (.favorites / .liked / .wantToGo), drop the extras and keep one using
-    /// the same priority order as `displayKind` (wantToGo wins, then
-    /// favorites, then liked). Custom / trip / date_plan lists always pass
-    /// through unfiltered.
+    /// the priority order: favorites > liked > wantToGo.
+    /// Custom / trip / date_plan lists always pass through unfiltered.
+    ///
+    /// **T10 — Decision T10-D1 (priority flipped 2026-05-26):** favorites and
+    /// liked beat wantToGo so that checking a visited-kind list while
+    /// wantToGo is also selected causes wantToGo to drop out of the coerced
+    /// selection. Combined with the conversion-routing pre-pass in
+    /// `_saveSpotToListsImpl`, that produces a Want-to-Go → Favorites/Liked
+    /// transition the routing layer then re-routes through the atomic
+    /// `move_spot_between_lists` RPC. Before T10, wantToGo silently won here,
+    /// which meant checking Favorites while Want-to-Go was selected had no
+    /// effect — the conversion bug E4 was meant to fix.
+    ///
+    /// Note: `displayKind(for:)` (in UserList.swift) keeps its own priority
+    /// (wantToGo > favorites > liked) — that's about which icon to show on a
+    /// spot that's saved to multiple lists. Different question, different
+    /// answer. Don't try to "unify" them.
+    ///
     /// Defensive — the picker UI prevents users from selecting >1 default,
     /// but this guarantees the invariant for non-UI callers (share extension,
     /// deep links, tests).
@@ -552,8 +649,9 @@ class LocationSavingViewModel: ObservableObject {
         }
         guard defaultListsInSelection.count > 1 else { return selected }
 
-        // Pick the canonical default by priority.
-        let priorityOrder: [ListKind] = [.wantToGo, .favorites, .liked]
+        // Pick the canonical default by priority. T10: favorites/liked win
+        // over wantToGo so the conversion routing fires.
+        let priorityOrder: [ListKind] = [.favorites, .liked, .wantToGo]
         var winner: UserList?
         for type in priorityOrder {
             if let match = defaultListsInSelection.first(where: { $0.kind == type }) {
