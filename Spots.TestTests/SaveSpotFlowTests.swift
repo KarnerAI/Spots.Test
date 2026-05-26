@@ -128,6 +128,10 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
     }
 
     var moveSpotCalls: [(placeId: String, from: UUID?, to: UUID?, source: SpotSaveSource)] = []
+    /// If set, moveSpotBetweenLists throws this error. Used by the T10
+    /// failure-mode test that asserts the VM surfaces the error rather than
+    /// silently degrading to a plain add+remove.
+    var moveSpotShouldThrow: Error?
 
     func moveSpotBetweenLists(
         placeId: String,
@@ -135,7 +139,16 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
         toListId: UUID?,
         source: SpotSaveSource
     ) async throws {
+        if let err = moveSpotShouldThrow {
+            moveSpotCalls.append((placeId, fromListId, toListId, source))
+            throw err
+        }
         moveSpotCalls.append((placeId, fromListId, toListId, source))
+        // Mirror DB state so getListsContainingSpot reflects the move.
+        var current = listsContainingSpot[placeId] ?? []
+        if let from = fromListId { current.removeAll { $0 == from } }
+        if let to = toListId, !current.contains(to) { current.append(to) }
+        listsContainingSpot[placeId] = current
     }
 
     // MARK: - T21 Custom Lists CRUD mocks
@@ -312,16 +325,18 @@ struct CoerceToSingleDefaultTests {
         #expect(result == [Fixtures.likedId, Fixtures.customListId])
     }
 
-    @Test func dropsExtraDefaultsKeepingBucketListWinner() {
-        // bucketList wins per priority order (matches displayKind resolver).
+    @Test func dropsExtraDefaultsKeepingFavoritesWinner() {
+        // T10 (2026-05-26): favorites wins per the flipped priority — the
+        // conversion-routing semantic. Before T10, wantToGo silently won
+        // here, which is the bug E4 + T10 fix.
         let result = LocationSavingViewModel.coerceToSingleDefault(
             [Fixtures.likedId, Fixtures.favoritesId, Fixtures.wantToGoId],
             userLists: Fixtures.allLists
         )
-        #expect(result == [Fixtures.wantToGoId])
+        #expect(result == [Fixtures.favoritesId])
     }
 
-    @Test func dropsExtraDefaultsKeepingStarredOverFavorites() {
+    @Test func dropsExtraDefaultsKeepingFavoritesOverLiked() {
         let result = LocationSavingViewModel.coerceToSingleDefault(
             [Fixtures.likedId, Fixtures.favoritesId],
             userLists: Fixtures.allLists
@@ -330,11 +345,34 @@ struct CoerceToSingleDefaultTests {
     }
 
     @Test func keepsCustomListAlongsideCoercedDefault() {
+        // T10: liked wins over wantToGo (favorites not in selection).
         let result = LocationSavingViewModel.coerceToSingleDefault(
             [Fixtures.likedId, Fixtures.wantToGoId, Fixtures.customListId],
             userLists: Fixtures.allLists
         )
-        #expect(result == [Fixtures.wantToGoId, Fixtures.customListId])
+        #expect(result == [Fixtures.likedId, Fixtures.customListId])
+    }
+
+    @Test func dropsWantToGoWhenFavoritesAlsoSelected_T10Conversion() {
+        // The canonical T10 conversion-detection shape at the coerce layer:
+        // user has spot in Want-to-Go, opens picker (WTG shown checked),
+        // checks Favorites. selected = {WTG, Favorites}. After T10, the
+        // coercion drops WTG so the diff against `original = {WTG}` becomes
+        // toAdd={Favorites}, toRemove={WTG} — the pattern the routing
+        // pre-pass recognises as a conversion.
+        let result = LocationSavingViewModel.coerceToSingleDefault(
+            [Fixtures.wantToGoId, Fixtures.favoritesId],
+            userLists: Fixtures.allLists
+        )
+        #expect(result == [Fixtures.favoritesId])
+    }
+
+    @Test func dropsWantToGoWhenLikedAlsoSelected_T10Conversion() {
+        let result = LocationSavingViewModel.coerceToSingleDefault(
+            [Fixtures.wantToGoId, Fixtures.likedId],
+            userLists: Fixtures.allLists
+        )
+        #expect(result == [Fixtures.likedId])
     }
 }
 
@@ -388,14 +426,16 @@ struct SaveSpotToListsTests {
             listIds: [Fixtures.likedId, Fixtures.wantToGoId]
         )
 
-        // bucketList wins per priority. Optimistic map reflects the winner.
-        #expect(vm.spotListKindMap[placeId] == .wantToGo)
+        // T10 (2026-05-26): liked wins over wantToGo per the flipped
+        // priority (favorites not in selection). Optimistic map reflects
+        // the winner.
+        #expect(vm.spotListKindMap[placeId] == .liked)
         // Only one default add hits the service.
         let defaultAdds = svc.saveSpotToListCalls.filter { call in
             call.listId == Fixtures.likedId || call.listId == Fixtures.wantToGoId
         }
         #expect(defaultAdds.count == 1)
-        #expect(defaultAdds.first?.listId == Fixtures.wantToGoId)
+        #expect(defaultAdds.first?.listId == Fixtures.likedId)
     }
 
     @Test func addFails_revertsMapAndSetsError() async throws {
@@ -518,4 +558,231 @@ struct RemoveSpotTests {
         #expect(vm.spotListKindMap[placeId] == .liked)       // restored
         #expect(vm.lastSaveError != nil)
     }
+}
+
+// MARK: - T10: detectWantToGoConversion (pure helper)
+//
+// Pure-function tests for the conversion-detection helper added in T10
+// Phase A. No async, no mocks — just the routing decision logic.
+
+@MainActor
+struct DetectWantToGoConversionTests {
+
+    @Test func returnsNilWhenNoWantToGoInRemove() {
+        // toAdd has Favorites but no Want-to-Go in toRemove.
+        let result = LocationSavingViewModel.detectWantToGoConversion(
+            toAdd: [Fixtures.favoritesId],
+            toRemove: [Fixtures.customListId],
+            userLists: Fixtures.allLists
+        )
+        #expect(result == nil)
+    }
+
+    @Test func returnsNilWhenNoVisitedKindInAdd() {
+        // Want-to-Go in toRemove, but only a custom list is being added.
+        // That's a non-conversion remove → plain remove path.
+        let result = LocationSavingViewModel.detectWantToGoConversion(
+            toAdd: [Fixtures.customListId],
+            toRemove: [Fixtures.wantToGoId],
+            userLists: Fixtures.allLists
+        )
+        #expect(result == nil)
+    }
+
+    @Test func detectsWantToGoToFavorites() {
+        let result = LocationSavingViewModel.detectWantToGoConversion(
+            toAdd: [Fixtures.favoritesId],
+            toRemove: [Fixtures.wantToGoId],
+            userLists: Fixtures.allLists
+        )
+        #expect(result?.fromListId == Fixtures.wantToGoId)
+        #expect(result?.toListId == Fixtures.favoritesId)
+        #expect(result?.toKind == .favorites)
+    }
+
+    @Test func detectsWantToGoToLiked() {
+        let result = LocationSavingViewModel.detectWantToGoConversion(
+            toAdd: [Fixtures.likedId],
+            toRemove: [Fixtures.wantToGoId],
+            userLists: Fixtures.allLists
+        )
+        #expect(result?.fromListId == Fixtures.wantToGoId)
+        #expect(result?.toListId == Fixtures.likedId)
+        #expect(result?.toKind == .liked)
+    }
+
+    @Test func prefersFavoritesOverLikedAsTieBreaker() {
+        // Both Favorites and Liked in toAdd — Favorites wins.
+        let result = LocationSavingViewModel.detectWantToGoConversion(
+            toAdd: [Fixtures.favoritesId, Fixtures.likedId],
+            toRemove: [Fixtures.wantToGoId],
+            userLists: Fixtures.allLists
+        )
+        #expect(result?.toListId == Fixtures.favoritesId)
+        #expect(result?.toKind == .favorites)
+    }
+
+    @Test func ignoresCustomListAddsAlongsideConversion() {
+        // Custom list also in toAdd. Detection still finds the conversion;
+        // the custom list will be handled by the residual ADD loop.
+        let result = LocationSavingViewModel.detectWantToGoConversion(
+            toAdd: [Fixtures.favoritesId, Fixtures.customListId],
+            toRemove: [Fixtures.wantToGoId],
+            userLists: Fixtures.allLists
+        )
+        #expect(result?.toListId == Fixtures.favoritesId)
+    }
+}
+
+// MARK: - T10: saveSpotToLists routing through moveSpotBetweenLists
+//
+// VM-level tests for the conversion routing pre-pass added in
+// `_saveSpotToListsImpl`. The mock service records `moveSpotBetweenLists`
+// calls so we can assert (1) the right RPC fires with the right params,
+// (2) the conversion is NOT double-issued via the add+remove loops,
+// (3) errors surface to the VM.
+
+@MainActor
+struct T10ConversionRoutingTests {
+
+    @Test func wantToGoToFavorites_routesThroughMoveRPC() async throws {
+        // Spot is currently in Want-to-Go. User checks Favorites.
+        // After coerceToSingleDefault (favorites wins), the diff is
+        // toAdd={Favorites}, toRemove={WTG}. The pre-pass should rewrite
+        // that into ONE moveSpotBetweenLists call — NOT a save+remove pair.
+        let svc = MockLocationSavingService()
+        let placeId = "place-1"
+        svc.listsContainingSpot[placeId] = [Fixtures.wantToGoId]
+        let vm = Fixtures.makeVM(service: svc)
+
+        try await vm.saveSpotToLists(
+            spotData: Fixtures.spotData(placeId: placeId),
+            listIds: [Fixtures.favoritesId]
+        )
+
+        // Exactly one move call with the right params.
+        #expect(svc.moveSpotCalls.count == 1)
+        let move = svc.moveSpotCalls.first
+        #expect(move?.placeId == placeId)
+        #expect(move?.from == Fixtures.wantToGoId)
+        #expect(move?.to == Fixtures.favoritesId)
+        #expect(move?.source == .manual)
+
+        // No parallel saveSpotToList(Favorites) — the move owns that add.
+        #expect(svc.saveSpotToListCalls.contains { $0.listId == Fixtures.favoritesId } == false)
+        // No parallel removeSpotFromList(WTG) — the move owns that remove.
+        #expect(svc.removeSpotFromListCalls.contains { $0.listId == Fixtures.wantToGoId } == false)
+
+        // Optimistic map flipped to favorites.
+        #expect(vm.spotListKindMap[placeId] == .favorites)
+        #expect(vm.lastSaveError == nil)
+    }
+
+    @Test func wantToGoToLiked_routesThroughMoveRPC() async throws {
+        let svc = MockLocationSavingService()
+        let placeId = "place-1"
+        svc.listsContainingSpot[placeId] = [Fixtures.wantToGoId]
+        let vm = Fixtures.makeVM(service: svc)
+
+        try await vm.saveSpotToLists(
+            spotData: Fixtures.spotData(placeId: placeId),
+            listIds: [Fixtures.likedId]
+        )
+
+        #expect(svc.moveSpotCalls.count == 1)
+        #expect(svc.moveSpotCalls.first?.to == Fixtures.likedId)
+        #expect(vm.spotListKindMap[placeId] == .liked)
+    }
+
+    @Test func conversionAlongsideCustomList_movesAndAddsBoth() async throws {
+        // Spot in Want-to-Go. User checks Favorites AND a custom list.
+        // The conversion routes through move RPC; the custom list addition
+        // still flows through the residual ADD loop.
+        let svc = MockLocationSavingService()
+        let placeId = "place-1"
+        svc.listsContainingSpot[placeId] = [Fixtures.wantToGoId]
+        let vm = Fixtures.makeVM(service: svc)
+
+        try await vm.saveSpotToLists(
+            spotData: Fixtures.spotData(placeId: placeId),
+            listIds: [Fixtures.favoritesId, Fixtures.customListId]
+        )
+
+        // One move (for the conversion pair).
+        #expect(svc.moveSpotCalls.count == 1)
+        #expect(svc.moveSpotCalls.first?.to == Fixtures.favoritesId)
+        // One plain add (for the custom list).
+        #expect(svc.saveSpotToListCalls.contains { $0.listId == Fixtures.customListId })
+        // No double-issue: Favorites wasn't also added via saveSpotToList.
+        #expect(svc.saveSpotToListCalls.contains { $0.listId == Fixtures.favoritesId } == false)
+    }
+
+    @Test func directAddToFavorites_doesNotRoute() async throws {
+        // Spot has no prior Want-to-Go membership. User adds to Favorites.
+        // Diff: toAdd={Favorites}, toRemove={}. Not a conversion shape.
+        // Path: plain saveSpotToList(Favorites). The visited feed activity
+        // for this case is generated server-side by the feed RPC's dedupe
+        // logic — NOT by a list_moves row (correct per T10-D2).
+        let svc = MockLocationSavingService()
+        let placeId = "place-1"
+        let vm = Fixtures.makeVM(service: svc)
+
+        try await vm.saveSpotToLists(
+            spotData: Fixtures.spotData(placeId: placeId),
+            listIds: [Fixtures.favoritesId]
+        )
+
+        #expect(svc.moveSpotCalls.isEmpty)
+        #expect(svc.saveSpotToListCalls.contains { $0.listId == Fixtures.favoritesId })
+    }
+
+    @Test func moveRPCFailure_surfacesErrorAndRollsBack() async throws {
+        // The move RPC throws (e.g. network drop, RLS rejection). The VM
+        // must surface the error AND roll back the optimistic spotListKindMap
+        // to its prior value — NOT silently degrade to a plain add+remove.
+        let svc = MockLocationSavingService()
+        svc.moveSpotShouldThrow = NSError(domain: "test", code: 42)
+        let placeId = "place-1"
+        svc.listsContainingSpot[placeId] = [Fixtures.wantToGoId]
+        let vm = Fixtures.makeVM(service: svc)
+        // Prior optimistic value reflects the spot being in WTG.
+        vm.spotListKindMap[placeId] = .wantToGo
+
+        await #expect(throws: Error.self) {
+            try await vm.saveSpotToLists(
+                spotData: Fixtures.spotData(placeId: placeId),
+                listIds: [Fixtures.favoritesId]
+            )
+        }
+
+        // Map rolled back to prior (.wantToGo, not nil and not .favorites).
+        #expect(vm.spotListKindMap[placeId] == .wantToGo)
+        #expect(vm.lastSaveError != nil)
+
+        // The move was attempted (and threw).
+        #expect(svc.moveSpotCalls.count == 1)
+        // Critical: no fallback add+remove happened. The save fully aborted.
+        #expect(svc.saveSpotToListCalls.contains { $0.listId == Fixtures.favoritesId } == false)
+        #expect(svc.removeSpotFromListCalls.contains { $0.listId == Fixtures.wantToGoId } == false)
+    }
+
+    // MARK: - TODO: server-side dedupe tests (require real Supabase scaffolding)
+    //
+    // Two acceptance criteria from the T10 plan still need coverage:
+    //
+    //   1. testConversion_directAddToFavorites_emitsNoMoveRow
+    //      Direct add to Favorites (no prior WTG) → assert no list_moves
+    //      row is written. The visited feed activity should still surface
+    //      via get_following_feed dedupe. Requires real DB.
+    //
+    //   2. testConversion_dedupeAcrossReAdd
+    //      Add → remove → re-add → assert get_following_feed returns
+    //      exactly ONE visited activity for the (user, spot) pair.
+    //      Requires real DB.
+    //
+    // The codebase doesn't currently have a Supabase-integration test
+    // harness — `MockLocationSavingService` mocks at the protocol layer and
+    // doesn't touch SQL. Wiring up integration tests would add real value
+    // here (and unlock similar coverage for other DB-touching features),
+    // but is out of scope for T10 itself. Track in TODOS.md.
 }
