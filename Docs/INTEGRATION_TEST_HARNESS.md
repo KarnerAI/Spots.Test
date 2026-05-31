@@ -144,22 +144,62 @@ Lifecycle guarantees:
 
 ---
 
-## Applying the existing SQL migrations to local Supabase
+## Applying the SQL migrations to local Supabase
 
-The historical migrations in `Spots.Test/SQL/` aren't yet wired into `supabase/migrations/`. PR-A doesn't need them (the smoke test only exercises Supabase Auth). PR-B will wire them up.
+**As of PR-B**, every historical SQL file in `Spots.Test/SQL/` is wired into `supabase/migrations/` with sequential `20260101_*` timestamp prefixes, plus the 6 new PR-B activity-model migrations (`20260101005000_*` through `20260101005500_*`). `supabase db reset` is a one-command full reset:
 
-Two paths when you get there:
+```bash
+cd Spots.Test/
+supabase db reset
+```
 
-- **Recommended (PR-B):** copy/rename the existing `SQL/*.sql` files into `supabase/migrations/` with timestamp prefixes the CLI expects (`YYYYMMDDHHMMSS_<name>.sql`). Then `supabase db reset` becomes a one-command reset.
-- **Manual / one-off:** use `Docs/scripts/apply-migrations-to-test.sh` with `DB_URL` set to the local Postgres connection string (`postgresql://postgres:postgres@127.0.0.1:54322/postgres`). Works against both local and cloud, depending on the DB_URL.
+This drops the local database, re-applies all 45 migrations in order, and restarts the auth/storage containers. Takes ~30 seconds. Run it before any integration test session if you've been mucking with rows manually.
+
+Four ordering fixes were applied during the wiring vs. raw git commit dates — see the `chore(db): wire 39 SQL/ files` commit message for the specifics. Three `upsert_spot` updaters gained a `DROP FUNCTION IF EXISTS prior_signature` prefix so the trailing `COMMENT ON FUNCTION` stays unambiguous as overloads stack.
+
+The original `Docs/scripts/apply-migrations-to-test.sh` is still around for one-off applications against cloud (e.g. prod). For local-stack work, use `supabase db reset` instead.
+
+---
+
+## Cross-user test patterns (PR-B)
+
+The PR-B activity-model tests introduced `FeedActivityIntegrationTestCase`, a subclass of `SupabaseIntegrationTestCase` that adds multi-user lifecycle helpers. The pattern for tests that need an actor + a follower:
+
+```swift
+final class MyTest: FeedActivityIntegrationTestCase {
+    func test_actorSavesAndFollowerSees() async throws {
+        let primary  = try await signInPrimaryUser(prefix: "actor")
+        let follower = try await createAdditionalUser(prefix: "follower")
+        try await makeFollowAccepted(follower: follower.id, followee: primary.id)
+
+        // ... actor's writes via anonClient (currently signed in as primary) ...
+
+        try await signInAnon(as: follower)
+        // ... follower's reads via anonClient (now signed in as follower) ...
+    }
+}
+```
+
+Both users are deleted in tearDown via the service-role client; CASCADE FKs handle profiles / lists / spot_list_items / feed_activities cleanup.
+
+---
+
+## Foot-gun: service-role UPDATEs via supabase-swift
+
+Discovered empirically during PR-B test development: the supabase-swift PostgrestClient's `.from("...").update(...).eq(...).execute()` against the local CLI's newer `sb_secret_*` service-role key format **silently no-ops** — returns success but doesn't actually update the row. The same PATCH via `curl` with both `apikey` AND `Authorization: Bearer` headers set works correctly.
+
+Reads via the service client work fine. Inserts via the service client work fine. Only UPDATE is affected, and only via the SDK on the local stack.
+
+`FeedActivityIntegrationTestCase` works around this with a direct `URLSession` PostgREST helper (`serviceRoleRequest`) for the few setup-time mutations that need service-role bypass. New tests that need to mutate rows as the service role should use this helper, not the SDK's `.update()`.
+
+This may resolve in a future supabase-swift release. If you re-discover it, don't waste time second-guessing — go around the SDK.
 
 ---
 
 ## What this harness deliberately does NOT do (yet)
 
-- **CI wiring.** Out of scope for PR-A per D16 ("small, low-risk, independently reviewable"). When CI lands, the GitHub Actions workflow installs Supabase CLI, runs `supabase start`, and the tests use a CI-provided `secrets.json` written to the runner's home directory.
-- **Per-test schema reset.** Comes in PR-B alongside the activity-model migrations. The current model is "tests use a fresh auth user per test; orphaned table rows survive across tests." PR-B will add truncation helpers.
-- **Migration wiring.** See above — comes in PR-B.
+- **CI wiring.** Out of scope per D16 ("small, low-risk, independently reviewable"). When CI lands, the GitHub Actions workflow installs Supabase CLI, runs `supabase start`, and the tests use a CI-provided `secrets.json` written to the runner's home directory.
+- **Per-test schema reset.** Each test creates fresh auth users (and the user-deletion CASCADE handles their app data). For tests that need a fully-clean slate across the whole DB, run `supabase db reset` manually before the test run.
 
 ---
 
