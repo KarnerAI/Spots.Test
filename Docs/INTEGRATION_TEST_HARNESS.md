@@ -1,6 +1,6 @@
 # Supabase Integration Test Harness
 
-This harness lets us write tests that hit a **real** Supabase project (a dedicated test project, never prod). It's the foundation the Newsfeed Activity Model redesign tests sit on (see `0. Strategy/spots-newsfeed-activity-model.html` §07.3, D11 + D16).
+This harness lets us write tests that hit a **real** Postgres + Supabase stack, but running locally via Docker — not against the prod project. It's the foundation the Newsfeed Activity Model redesign tests sit on (see `0. Strategy/spots-newsfeed-activity-model.html` §07, D11 + D16).
 
 The harness lives entirely in `Spots.TestTests/Integration/` and is built so:
 
@@ -10,46 +10,68 @@ The harness lives entirely in `Spots.TestTests/Integration/` and is built so:
 
 ---
 
+## Why local Supabase via Docker (not the cloud)
+
+We evaluated three approaches in the eng-review follow-up:
+
+1. **Dedicated cloud test Supabase project** — Free-tier slot, no Docker, but blocked by Supabase's 2-project per-org limit.
+2. **Supabase Pro** — $25/mo, removes the quota; rejected as premature for current scale.
+3. **Local Supabase via Docker** — chosen. $0 forever, no vendor quota, faster tests, no network dependency.
+
+**Switching paths later is trivial**: only `supabase_url` and the keys in `secrets.json` change. The Swift code is identical.
+
+---
+
 ## One-time setup
 
-### 1. Create the dedicated test Supabase project
+### 1. Install Docker Desktop
 
-1. Go to <https://supabase.com/dashboard>.
-2. Click **New project**. Use the same organization as prod.
-3. Name: `spots-test` (or similar — never reuse the prod project).
-4. Database password: generate a strong one, save in 1Password.
-5. Region: same as prod.
-6. Pricing plan: **Free** is fine. The project pauses after a week idle and wakes automatically when tests run.
-7. Wait ~2 minutes for provisioning.
+- Download from <https://www.docker.com/products/docker-desktop/>. Pick "Mac — Apple Silicon" for M1/M2/M3/M4 chips; Intel otherwise.
+- Drag Docker to Applications. Launch it. Accept defaults. Skip Docker Hub sign-in.
+- Wait for the 🐳 whale icon in the menu bar to stop animating.
+- **Cap disk usage:** Settings → Resources → Virtual disk limit → **30 GB**. Optional: cap Memory at 4 GB and CPUs at 4 so Docker doesn't compete with Xcode.
 
-### 2. Configure the project for testing
+### 2. Install the Supabase CLI
 
-Once the test project is up, change two settings so tests can sign users up cleanly:
+```bash
+brew install supabase/tap/supabase
+supabase --version   # verify install
+```
 
-- **Authentication → Providers → Email:**
-  - Enable **Email** provider.
-  - **Disable** "Confirm email" (we want auto-confirm — otherwise sign-up returns no session and the smoke test fails).
-- **Authentication → URL Configuration:**
-  - Add `http://localhost` to the redirect URLs (avoids occasional warnings during sign-up).
+If Homebrew isn't installed yet, get it from <https://brew.sh> first (~5 min).
 
-### 3. Apply the existing SQL migrations
+### 3. Initialize Supabase in the repo
 
-The smoke test only exercises Supabase Auth, so it works on an empty project. But PR-B and beyond expect the full schema. Apply migrations either:
+From the repo root (`Spots.Test/`):
 
-- **Via the Supabase dashboard SQL editor** — paste each file from `Spots.Test/SQL/` in chronological order, oldest first. ~25 files; takes 10 minutes.
-- **Via the script** (`Docs/scripts/apply-migrations-to-test.sh`) — requires `psql`. Run once after grabbing the test project's connection string from **Project Settings → Database**.
+```bash
+supabase init
+# Answer N to the VS Code / IntelliJ settings prompts.
+```
 
-If you're only landing PR-A (the harness itself), you can skip this step until PR-B opens.
+This creates a `supabase/` directory holding `config.toml` and a `migrations/` folder. Commit it — future contributors get the same local config.
 
-### 4. Create the local secrets file
+### 4. Start the local stack
 
-In **Project Settings → API**, copy three values:
+```bash
+supabase start
+```
 
-- **Project URL** (e.g. `https://abcd1234.supabase.co`)
-- **anon public** key (long JWT)
-- **service_role secret** key (long JWT — keep private; this can bypass RLS)
+The first run downloads ~500 MB of Docker images (~3–5 min). Subsequent runs are ~30 sec. When it finishes, the CLI prints a credentials block. On recent CLI versions (2.x+) it looks like:
 
-Then create the file (outside the repo, so it can never be committed):
+```
+Project URL:  http://127.0.0.1:54321
+Publishable:  sb_publishable_...
+Secret:       sb_secret_...
+```
+
+Older CLI versions printed `anon key` / `service_role key` instead — those are the equivalents. Either way, the Swift SDK accepts both formats.
+
+If you lose this output, run `supabase status` any time to re-print it. Open <http://127.0.0.1:54323> as a sanity check — that's the local Supabase Studio dashboard.
+
+### 5. Create the secrets file
+
+The secrets file lives outside the repo so it can never be committed by accident. Same path as the cloud path would have used; the values just point at localhost.
 
 ```bash
 mkdir -p ~/.config/spots-test-harness
@@ -60,21 +82,35 @@ Paste:
 
 ```json
 {
-  "supabase_url": "https://YOUR-TEST-PROJECT.supabase.co",
-  "supabase_anon_key": "eyJ...",
-  "supabase_service_role_key": "eyJ..."
+  "supabase_url": "http://127.0.0.1:54321",
+  "supabase_anon_key": "<paste Publishable key here>",
+  "supabase_service_role_key": "<paste Secret key here>"
 }
 ```
 
-The harness refuses to run if `supabase_url` matches the prod URL — belt-and-suspenders so a misconfigured secrets file can't nuke prod data.
+The JSON keys in `secrets.json` are local to this harness — they map to the SDK's `supabaseKey` argument regardless of whether the underlying credential is `sb_publishable_*` (newer) or a JWT-format `anon` key (older). Same for `supabase_service_role_key` → `sb_secret_*` or JWT-format `service_role`.
 
-### 5. Run the smoke test
+These local keys are not real secrets — every Supabase CLI install uses the same defaults, and the local stack only listens on `127.0.0.1`. The harness still refuses to run if `supabase_url` ever matches the prod URL, so misconfiguration can't nuke prod data.
 
-In Xcode: pick the `Spots.Test` scheme, hit **Cmd+U**, find `SupabaseConnectionSmokeTest` in the Test navigator. It should pass in ~1–2 seconds (one network round trip to the test project's `/auth/v1/signup` + `/auth/v1/token`).
+### 6. Run the smoke test
 
-If you see `Skipped: Integration test secrets not found at …` — the secrets file is missing or unreadable. Re-check step 4.
+In Xcode: pick the `Spots.Test` scheme, hit **Cmd+U**, find `SupabaseConnectionSmokeTest` in the Test navigator (`Spots.TestTests/Integration/`). It should pass in ~1 sec.
 
-If you see a failure mentioning "Email signups are disabled" or similar — re-check step 2.
+If you see `Skipped: Integration test secrets not found at …` — Step 5 didn't land.
+
+If you see `Could not connect to host` — `supabase start` isn't running.
+
+---
+
+## Day-to-day workflow
+
+| Action | Command |
+|---|---|
+| Run integration tests | Ensure Docker Desktop is up, then `supabase start` if needed. Run tests in Xcode. |
+| Check stack status | `supabase status` |
+| Reset DB to a clean state | `supabase db reset` (re-runs every file in `supabase/migrations/`) |
+| Stop the stack (reclaim memory) | `supabase stop` |
+| Quit Docker entirely | 🐳 whale icon → Quit Docker Desktop |
 
 ---
 
@@ -108,14 +144,22 @@ Lifecycle guarantees:
 
 ---
 
-## What this harness deliberately does NOT do
+## Applying the existing SQL migrations to local Supabase
 
-These were called out in the eng review (§07.3, §07.4) but split out:
+The historical migrations in `Spots.Test/SQL/` aren't yet wired into `supabase/migrations/`. PR-A doesn't need them (the smoke test only exercises Supabase Auth). PR-B will wire them up.
 
-- **Local Supabase via Docker.** Considered, rejected: extra dependency for a non-technical founder. Switching later is a swap-the-URL change.
-- **CI wiring.** Out of scope for PR-A per D16 ("small, low-risk, independently reviewable"). When CI lands, secrets move to GitHub Actions secrets and `IntegrationTestConfig` reads them via env vars.
-- **Schema reset between tests.** Comes in PR-B alongside the migrations that touch `feed_activities`, `spot_list_items`, etc.
-- **Test data fixtures.** Will grow case-by-case as PR-B and later PRs need them.
+Two paths when you get there:
+
+- **Recommended (PR-B):** copy/rename the existing `SQL/*.sql` files into `supabase/migrations/` with timestamp prefixes the CLI expects (`YYYYMMDDHHMMSS_<name>.sql`). Then `supabase db reset` becomes a one-command reset.
+- **Manual / one-off:** use `Docs/scripts/apply-migrations-to-test.sh` with `DB_URL` set to the local Postgres connection string (`postgresql://postgres:postgres@127.0.0.1:54322/postgres`). Works against both local and cloud, depending on the DB_URL.
+
+---
+
+## What this harness deliberately does NOT do (yet)
+
+- **CI wiring.** Out of scope for PR-A per D16 ("small, low-risk, independently reviewable"). When CI lands, the GitHub Actions workflow installs Supabase CLI, runs `supabase start`, and the tests use a CI-provided `secrets.json` written to the runner's home directory.
+- **Per-test schema reset.** Comes in PR-B alongside the activity-model migrations. The current model is "tests use a fresh auth user per test; orphaned table rows survive across tests." PR-B will add truncation helpers.
+- **Migration wiring.** See above — comes in PR-B.
 
 ---
 
@@ -123,7 +167,8 @@ These were called out in the eng review (§07.3, §07.4) but split out:
 
 | File | Purpose |
 |---|---|
-| `Spots.TestTests/Integration/IntegrationTestConfig.swift` | Loads `~/.config/spots-test-harness/secrets.json`. Skips test if missing. |
+| `Spots.TestTests/Integration/IntegrationTestConfig.swift` | Loads `~/.config/spots-test-harness/secrets.json`. Skips test if missing. Refuses to run if URL matches prod. |
 | `Spots.TestTests/Integration/SupabaseIntegrationTestCase.swift` | Base `XCTestCase`. Builds `anonClient` + `serviceClient`. Provides `signInAsFreshUser()` + tearDown user cleanup. |
 | `Spots.TestTests/Integration/SupabaseConnectionSmokeTest.swift` | One proof-of-life test exercising sign-up + sign-in + admin delete. |
-| `Docs/scripts/apply-migrations-to-test.sh` | Applies the `SQL/` migrations to the test project in chronological order. Needed before PR-B-style tests. |
+| `supabase/` (created by `supabase init`) | Local-dev config (`config.toml`) + `migrations/` folder the CLI watches. |
+| `Docs/scripts/apply-migrations-to-test.sh` | `psql`-based migration applier. Takes a `DB_URL` env var; works against either local or a future cloud test project. |

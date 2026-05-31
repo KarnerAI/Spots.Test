@@ -15,9 +15,18 @@ import XCTest
 
 enum IntegrationTestConfig {
     /// Path to the local secrets file. Outside the repo so it can never be committed.
+    ///
+    /// Resolution is platform-aware:
+    /// - **iOS Simulator** (where these tests run): `homeDirectoryForCurrentUser` /
+    ///   `NSHomeDirectory()` both return the simulator's sandbox container, not
+    ///   the Mac user's home. Xcode sets the `SIMULATOR_HOST_HOME` env var to
+    ///   the actual Mac home for exactly this reason — read from there.
+    /// - **macOS test runners**: fall back to `NSHomeDirectory()`, which returns
+    ///   the user's home directly.
     static let secretsPath: URL = {
-        FileManager.default
-            .homeDirectoryForCurrentUser
+        let homePath = ProcessInfo.processInfo.environment["SIMULATOR_HOST_HOME"]
+            ?? NSHomeDirectory()
+        return URL(fileURLWithPath: homePath)
             .appendingPathComponent(".config/spots-test-harness/secrets.json")
     }()
 

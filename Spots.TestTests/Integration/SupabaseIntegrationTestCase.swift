@@ -45,7 +45,7 @@ class SupabaseIntegrationTestCase: XCTestCase {
         try super.setUpWithError()
         secrets = try IntegrationTestConfig.loadOrSkip()
         guard let url = URL(string: secrets.supabaseURL) else {
-            throw XCTSkip("Invalid supabase_url in secrets.json: \(secrets.supabaseURL ?? "nil")")
+            throw XCTSkip("Invalid supabase_url in secrets.json: \(secrets.supabaseURL)")
         }
         supabaseURL = url
 
@@ -59,7 +59,7 @@ class SupabaseIntegrationTestCase: XCTestCase {
         // that user_id and become unreachable; truncation helpers for app tables
         // land in PR-B alongside the activity-model schema.
         if let userId = currentTestUserId {
-            try? await serviceClient.auth.admin.deleteUser(id: userId.uuidString)
+            try? await serviceClient.auth.admin.deleteUser(id: userId)
             currentTestUserId = nil
         }
         try await super.tearDown()
