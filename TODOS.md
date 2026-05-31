@@ -227,3 +227,25 @@ Deferred work items captured during planning + reviews. Each item is self-contai
 **Effort:** Human ~30min / CC ~5min. Touch points: `Views/CreateListView.swift` (add TextEditor or expandable link), `ViewModels/LocationSavingViewModel.swift` (createList already accepts a description parameter via the service — just pass it through).
 
 **Priority:** P2. **Depends on:** none.
+
+---
+
+## P2 — Supabase-integration test scaffolding for DB-touching code paths
+
+**What:** Stand up a real-Supabase XCTest harness — a dedicated test Supabase project (or schema), automatic per-test cleanup (truncate + reseed), and a `LocationSavingService` factory that hits the test project instead of prod. Today, every DB-touching code path is tested only at the protocol-mock layer, which silently swallows SQL-behavior regressions.
+
+**Why:** Two T10 acceptance criteria couldn't be implemented as runnable tests because the harness doesn't exist:
+- `testConversion_directAddToFavorites_emitsNoMoveRow` — needs to assert no `list_moves` row is written when the spot enters Favorites directly (no prior Want-to-Go). Pure SQL-side behavior; mocks can't catch a regression here.
+- `testConversion_dedupeAcrossReAdd` — needs to assert `get_following_feed` returns exactly one `visited` activity per (user, spot) pair, even after add → remove → re-add. The dedupe lives entirely in the feed RPC's DISTINCT ON; a mock can't validate it.
+
+Both gaps are captured as comments in `T10ConversionRoutingTests`. The same harness would also enable T21's "Soft-delete RLS prevents non-owner restore" test, the `move_spot_between_lists` EXCEPTION-wrapper assertion, etc.
+
+**Pros:** Closes a structural gap in coverage. Catches schema regressions (column rename / RLS policy change / RPC signature drift) at PR time instead of in TestFlight. Unblocks T10's full acceptance-criteria coverage.
+
+**Cons:** Operational lift — Supabase test project setup, CI secrets, per-test isolation, slow test runs (~seconds vs milliseconds). Test-data lifecycle is non-trivial.
+
+**Context:** Surfaced during T10 implementation (2026-05-26). Founder's project memory says DB-touching code "uses real Supabase, not mocks" — but the existing codebase pattern is all mocks. This TODO closes that gap.
+
+**Effort:** Human ~1 day / CC ~3hr. Touch points: new `Spots.TestTests/Helpers/SupabaseTestProject.swift` factory, CI config for test project credentials, schema-truncate helper, port T10 + T21 SQL tests onto the harness.
+
+**Priority:** P2. **Depends on:** decision on test-project SKU (existing free Supabase project vs new tier).

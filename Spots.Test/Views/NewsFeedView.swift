@@ -231,7 +231,7 @@ struct NewsFeedView: View {
                     navigationPath.append(
                         FeedRoute.list(actorId: item.actorId, listId: payload.listId, name: payload.listDisplayName)
                     )
-                case .spotSave:
+                case .spotSave, .conversion:
                     guard let spot else { return }
                     spotToOpenInMaps = spot
                 }

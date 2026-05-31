@@ -286,7 +286,7 @@ struct AllListsView: View {
         UserList(id: UUID(), userId: UUID(), kind: .favorites, name: nil, visibility: .private, coverEmoji: "❤️"),
         UserList(id: UUID(), userId: UUID(), kind: .liked, name: nil, visibility: .private, coverEmoji: "👍"),
         UserList(id: UUID(), userId: UUID(), kind: .wantToGo, name: nil, visibility: .private, coverEmoji: "🚩"),
-        UserList(id: UUID(), userId: UUID(), kind: .custom, name: "Mexico City 2026", visibility: .shared, coverEmoji: "🌮"),
+        UserList(id: UUID(), userId: UUID(), kind: .custom, name: "Mexico City 2026", visibility: .followers, coverEmoji: "🌮"),
         UserList(id: UUID(), userId: UUID(), kind: .custom, name: "Pizza in NYC", visibility: .public, coverEmoji: "🍕"),
         UserList(id: UUID(), userId: UUID(), kind: .custom, name: "Coffee crawl", visibility: .private, coverEmoji: "☕️")
     ]

@@ -284,9 +284,9 @@ struct ListSettingsSheet: View {
 
     private var visibilitySubtext: String {
         switch list.visibility {
-        case .private: return "Private — only you can see this list"
-        case .shared: return "Shared — you and people you invited"
-        case .public: return "Public — anyone can find and follow"
+        case .private:   return "Private — only you can see this list"
+        case .followers: return "Followers — anyone who follows you can see this list"
+        case .public:    return "Public — anyone can find and follow"
         }
     }
 
@@ -845,7 +845,7 @@ private struct CollaboratorsPlaceholderSheet: View {
         userId: UUID(),
         kind: .custom,
         name: "Mexico City 2026",
-        visibility: .shared,
+        visibility: .followers,
         coverEmoji: "🌮"
     )
     return ListSettingsSheet(list: sample)

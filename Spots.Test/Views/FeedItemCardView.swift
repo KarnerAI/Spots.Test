@@ -52,7 +52,9 @@ struct FeedItemCardView: View {
     var body: some View {
         switch item.payload {
         case .spotSave(let payload):
-            heroCard(payload: payload)
+            heroCard(payload: payload, verb: spotSaveVerb(payload: payload))
+        case .conversion(let payload):
+            heroCard(payload: payload, verb: conversionVerb(payload: payload))
         case .listCreated(let payload):
             compactCard {
                 listPreview(payload: payload)
@@ -60,14 +62,14 @@ struct FeedItemCardView: View {
         }
     }
 
-    // MARK: - Hero card (spot save)
+    // MARK: - Hero card (spot save / conversion)
 
-    private func heroCard(payload: FeedItemPayload.SpotSavePayload) -> some View {
+    private func heroCard(payload: FeedItemPayload.SpotSavePayload, verb: String) -> some View {
         VStack(spacing: 0) {
             // Header + photo navigate to the list-detail when tapped. Footer
             // stays untouched so the Spot button's own tap target works
             // without being swallowed by a card-wide gesture.
-            header(verb: spotSaveVerb(payload: payload))
+            header(verb: verb)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .contentShape(Rectangle())
@@ -141,13 +143,63 @@ struct FeedItemCardView: View {
     /// mid "Liked", .wantToGo = wishlist "Want to Go". Verbs follow tier
     /// semantics — "favorited" reads as the strongest love verb, "liked" as
     /// the lighter approval verb.
+    ///
+    /// Consolidation (PR-B): when a save commit lands a spot in multiple
+    /// visible lists at once (Scenario C), the card reads
+    /// "favorited and added to Mexico City" — system-kind verb first, then
+    /// "added to <custom name>" for the remaining lists.
     private func spotSaveVerb(payload: FeedItemPayload.SpotSavePayload) -> String {
-        switch payload.listKind {
-        case .favorites:    return "favorited"
-        case .liked:        return "liked"
-        case .wantToGo:     return "wants to go"
-        case .custom, .trip, .datePlan, .none:
-            return "saved to \(payload.listDisplayName)"
+        let systemList = payload.lists.first { $0.kind?.isSystemKind == true }
+        let customLists = payload.lists.filter { $0.kind?.isSystemKind != true }
+
+        let systemVerb: String? = systemList.flatMap { list in
+            switch list.kind {
+            case .favorites:  return "favorited"
+            case .liked:      return "liked"
+            case .wantToGo:   return "wants to go"
+            default:          return nil
+            }
+        }
+
+        let customClause = customListClause(customLists)
+
+        switch (systemVerb, customClause) {
+        case let (verb?, clause?):
+            return "\(verb) and \(clause)"
+        case let (verb?, nil):
+            return verb
+        case let (nil, clause?):
+            return clause
+        case (nil, nil):
+            // Fallback: shouldn't happen (lists is always non-empty), but
+            // produces a sane string if it does.
+            return "saved this spot"
+        }
+    }
+
+    /// Verb for the v3 conversion card (WTG -> Favorites/Liked). The
+    /// destination list is always a single system-kind list per D20
+    /// (other moves stay silent).
+    private func conversionVerb(payload: FeedItemPayload.SpotSavePayload) -> String {
+        switch payload.lists.first?.kind {
+        case .favorites:  return "favorited"
+        case .liked:      return "liked"
+        default:
+            // Defensive: shouldn't fire per D20, but render something
+            // intelligible instead of a blank verb.
+            return "moved"
+        }
+    }
+
+    /// Builds the "added to X" / "added to X and Y" / "added to X and N
+    /// others" clause for the non-system-kind lists in a consolidated save.
+    private func customListClause(_ lists: [FeedItemPayload.ListRef]) -> String? {
+        guard !lists.isEmpty else { return nil }
+        let names = lists.map { $0.displayName }
+        switch names.count {
+        case 1:  return "added to \(names[0])"
+        case 2:  return "added to \(names[0]) and \(names[1])"
+        default: return "added to \(names[0]) and \(names.count - 1) others"
         }
     }
 
