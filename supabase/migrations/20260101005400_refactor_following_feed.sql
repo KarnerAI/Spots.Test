@@ -219,13 +219,16 @@ BEGIN
       AND ul.visibility IN ('followers', 'public')
       AND (p_cursor IS NULL OR ul.created_at < p_cursor)
   )
-  SELECT id, actor_id, kind, created_at, payload
+  -- Qualify column refs against the subquery alias `merged` — in a
+  -- LANGUAGE plpgsql function with RETURNS TABLE, unqualified `id` /
+  -- `actor_id` / etc. would be ambiguous with the implicit OUT params.
+  SELECT merged.id, merged.actor_id, merged.kind, merged.created_at, merged.payload
   FROM (
     SELECT * FROM spot_activities
     UNION ALL
     SELECT * FROM list_creations
   ) merged
-  ORDER BY created_at DESC
+  ORDER BY merged.created_at DESC
   LIMIT GREATEST(1, LEAST(p_limit, 100));
 END;
 $$;

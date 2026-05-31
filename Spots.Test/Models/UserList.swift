@@ -94,36 +94,38 @@ enum ListKind: String, Codable, CaseIterable {
 
 // MARK: - List Visibility
 
-/// Who can see this list. Three-state per E1 revised 2026-05-25.
+/// Who can see this list. v4 model (PR-B / §08): three values that map
+/// cleanly to broadcast scope; collaboration is orthogonal via `list_editors`.
 ///
-/// - `.private`: only the owner sees it. Default.
-/// - `.shared`: owner + invited collaborators (rows in `list_editors`).
-///   Not publicly discoverable. Coupled in UX with `list_editors` —
-///   a list with non-empty `list_editors` displays as "Shared" in the UI
-///   regardless of the underlying enum value (T4 owns that derivation).
-/// - `.public`: visible via share link to anyone; surfaces in Discover (T18).
-///   Independent of `list_editors` — a list can be `.public` without any
-///   collaborators, or `.shared` without being publicly findable.
+/// - `.private`: only the owner has ambient access. Invitees (rows in
+///   `list_editors`) get explicit access regardless. Default for custom lists.
+/// - `.followers`: owner + accepted followers. Not discoverable to strangers.
+///   Default for the 3 system lists (favorites / liked / want_to_go) on signup.
+/// - `.public`: anyone on Spots can find and follow. Discoverable via
+///   Discover/search/share-link; gated by the owner's `profiles.is_private`.
 enum ListVisibility: String, Codable, CaseIterable {
     case `private` = "private"
-    case shared = "shared"
+    case followers = "followers"
     case `public` = "public"
 
     /// User-facing label for the visibility pill on List Settings.
     var displayName: String {
         switch self {
-        case .private: return "Private"
-        case .shared: return "Shared"
-        case .public: return "Public"
+        case .private:   return "Private"
+        case .followers: return "Followers"
+        case .public:    return "Public"
         }
     }
 
     /// One-line description shown under the visibility pill on Create / Settings.
     var description: String {
         switch self {
-        case .private: return "Only you can view and edit."
-        case .shared: return "You and people you invite can view and add spots."
-        case .public: return "Anyone on Spots can find and follow this list."
+        case .private:
+            return "Only you can view this list. Invite others to view or edit."
+        case .followers:
+            return "Anyone who follows you can see this list. Not discoverable to others."
+        case .public:
+            return "Anyone on Spots can find and follow this list. Subject to your profile privacy."
         }
     }
 }

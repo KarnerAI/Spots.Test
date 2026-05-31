@@ -214,18 +214,18 @@ struct T21CustomListsCRUDTests {
         let original = Self.sampleCustomList(visibility: .private)
         let updated = UserList(
             id: original.id, userId: original.userId, kind: .custom,
-            name: original.name, visibility: .shared, coverEmoji: original.coverEmoji
+            name: original.name, visibility: .followers, coverEmoji: original.coverEmoji
         )
         mock.setListVisibilityResult = updated
 
         let vm = LocationSavingViewModel(service: mock)
         vm.userLists = [original]
 
-        _ = try await vm.setListVisibility(id: original.id, visibility: .shared)
+        _ = try await vm.setListVisibility(id: original.id, visibility: .followers)
 
         #expect(vm.userLists.count == 1)
-        #expect(vm.userLists.first?.visibility == .shared)
-        #expect(mock.setListVisibilityCalls.first?.visibility == .shared)
+        #expect(vm.userLists.first?.visibility == .followers)
+        #expect(mock.setListVisibilityCalls.first?.visibility == .followers)
     }
 
     @Test func testSetCoverEmoji_passesNilToClear() async throws {
@@ -313,11 +313,11 @@ struct T21CustomListsCRUDTests {
         // the live UI. If marketing/PM changes the user-facing copy, this
         // test should be updated alongside the change.
         #expect(ListVisibility.private.displayName == "Private")
-        #expect(ListVisibility.shared.displayName == "Shared")
+        #expect(ListVisibility.followers.displayName == "Shared")
         #expect(ListVisibility.public.displayName == "Public")
 
         #expect(ListVisibility.private.description == "Only you can view and edit.")
-        #expect(ListVisibility.shared.description.contains("invite"))
+        #expect(ListVisibility.followers.description.contains("invite"))
         #expect(ListVisibility.public.description.contains("Anyone"))
     }
 }
