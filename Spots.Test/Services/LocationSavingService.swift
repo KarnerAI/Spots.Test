@@ -20,6 +20,15 @@ protocol LocationSavingServiceProtocol: AnyObject {
     func getListsContainingSpot(placeId: String) async throws -> [UUID]
     func saveSpotToList(placeId: String, listId: UUID) async throws
     func removeSpotFromList(placeId: String, listId: UUID) async throws
+    /// Atomic batched first-save (PR-B / D14). Inserts N spot_list_items
+    /// rows + one feed_activities row in a single transaction. Idempotent.
+    /// Use this instead of per-list `saveSpotToList` for the picker save
+    /// flow so the feed card writes are atomic with the membership writes.
+    func recordFirstSave(
+        placeId: String,
+        listIds: [UUID],
+        source: SpotSaveSource
+    ) async throws
     func moveSpotBetweenLists(
         placeId: String,
         fromListId: UUID?,
@@ -1265,6 +1274,36 @@ class LocationSavingService: LocationSavingServiceProtocol {
             .eq("spot_id", value: placeId)
             .eq("list_id", value: listId.uuidString)
             .execute()
+        ProfileSnapshotCache.shared.markStale()
+    }
+
+    /// Atomic batched first-save via the `record_first_save` RPC (PR-B /
+    /// D14). Inserts one `spot_list_items` row per `listIds` element and
+    /// a single `feed_activities` row (kind=spot_save) in one transaction,
+    /// keyed by the (user, spot, kind) UNIQUE constraint so re-runs are
+    /// no-ops. Import sources skip the feed_activities write (D15).
+    ///
+    /// Use this from the picker save flow so the feed card and the list
+    /// memberships land atomically — replaces the per-list loop that
+    /// previously called `saveSpotToList` once per destination.
+    func recordFirstSave(
+        placeId: String,
+        listIds: [UUID],
+        source: SpotSaveSource = .manual
+    ) async throws {
+        struct Params: Encodable {
+            let p_spot_id: String
+            let p_list_ids: [String]
+            let p_source: String
+        }
+
+        let params = Params(
+            p_spot_id: placeId,
+            p_list_ids: listIds.map { $0.uuidString },
+            p_source: source.rawValue
+        )
+
+        try await supabase.rpc("record_first_save", params: params).execute()
         ProfileSnapshotCache.shared.markStale()
     }
 

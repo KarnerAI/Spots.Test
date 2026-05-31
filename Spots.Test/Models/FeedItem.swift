@@ -3,38 +3,53 @@
 //  Spots.Test
 //
 //  Single feed entry returned by the `get_following_feed` Postgres RPC.
-//  Two activity kinds (spot save / list created) carried in a uniform shape
-//  with a discriminated payload.
+//  Three activity kinds (spot save / conversion / list created) carried in
+//  a uniform shape with a discriminated payload.
+//
+//  spot_save and conversion share the same SpotSavePayload shape — both
+//  emit a `lists` JSONB array (one element for conversion, 1..N for
+//  spot_save). The renderer picks the verb based on FeedItemKind.
 //
 
 import Foundation
 
 enum FeedItemKind: String, Codable {
-    case spotSave = "spot_save"
+    case spotSave    = "spot_save"
+    case conversion  = "conversion"
     case listCreated = "list_created"
 }
 
 enum FeedItemPayload: Equatable, Hashable {
     case spotSave(SpotSavePayload)
+    case conversion(SpotSavePayload)
     case listCreated(ListCreatedPayload)
 
+    /// One list mentioned in a spot_save or conversion card. Order in the
+    /// `lists` array is the order the feed RPC's per-viewer privacy CTE
+    /// returned (matches the user's original save order).
+    struct ListRef: Equatable, Hashable {
+        let id: UUID
+        let kind: ListKind?
+        let name: String?
+
+        /// Display label. System kinds use their canonical label; custom
+        /// kinds fall back to the user-supplied name.
+        var displayName: String {
+            if let kind, kind.isSystemKind { return kind.displayName }
+            return name ?? "a list"
+        }
+    }
+
     struct SpotSavePayload: Equatable, Hashable {
-        let listId: UUID
-        /// System / custom kind of the destination list. Comes from the feed
-        /// RPC's `list_kind` field (renamed from `list_type` in Phase 1).
-        let listKind: ListKind?
-        let listName: String?
+        /// All destination lists the viewer is allowed to see. The feed
+        /// RPC's per-viewer privacy CTE filters this to only the lists
+        /// visible to the current viewer (private lists owned by others
+        /// don't appear here). Always non-empty — if all lists were
+        /// filtered out, the row is suppressed entirely upstream.
+        let lists: [ListRef]
         let spotId: String
         let otherSaversCount: Int
         let otherSavers: [OtherSaver]
-
-        /// Display label for the destination list ("Favorites", or the custom
-        /// list's name). System kinds use their canonical label; custom kinds
-        /// fall back to the user-supplied name.
-        var listDisplayName: String {
-            if let listKind, listKind.isSystemKind { return listKind.displayName }
-            return listName ?? "a list"
-        }
     }
 
     struct OtherSaver: Equatable, Hashable {
@@ -52,8 +67,8 @@ enum FeedItemPayload: Equatable, Hashable {
 }
 
 struct FeedItem: Identifiable, Equatable, Hashable {
-    /// Stable composite id from the RPC ("save:<uuid>" / "list:<uuid>").
-    /// Used as the join key for likes/comments in Phase 2.
+    /// Stable composite id from the RPC ("save:<uuid>" / "conv:<uuid>" /
+    /// "list:<uuid>"). Used as the join key for likes/comments in Phase 2.
     let id: String
     let actorId: UUID
     let kind: FeedItemKind
@@ -92,21 +107,9 @@ extension FeedItem: Decodable {
         let payloadDecoder = try c.superDecoder(forKey: .payload)
         switch kind {
         case .spotSave:
-            let raw = try SpotSaveRaw(from: payloadDecoder)
-            payload = .spotSave(.init(
-                listId: raw.list_id,
-                listKind: raw.list_kind,
-                listName: raw.list_name,
-                spotId: raw.spot_id,
-                otherSaversCount: raw.other_savers_count ?? 0,
-                otherSavers: (raw.other_savers ?? []).map {
-                    FeedItemPayload.OtherSaver(
-                        userId: $0.user_id,
-                        username: $0.username,
-                        avatarUrl: $0.avatar_url
-                    )
-                }
-            ))
+            payload = .spotSave(try Self.decodeSpotSavePayload(from: payloadDecoder))
+        case .conversion:
+            payload = .conversion(try Self.decodeSpotSavePayload(from: payloadDecoder))
         case .listCreated:
             let raw = try ListCreatedRaw(from: payloadDecoder)
             payload = .listCreated(.init(
@@ -116,17 +119,37 @@ extension FeedItem: Decodable {
         }
     }
 
+    private static func decodeSpotSavePayload(
+        from decoder: Decoder
+    ) throws -> FeedItemPayload.SpotSavePayload {
+        let raw = try SpotSaveRaw(from: decoder)
+        return .init(
+            lists: raw.lists.map {
+                FeedItemPayload.ListRef(id: $0.id, kind: $0.kind, name: $0.name)
+            },
+            spotId: raw.spot_id,
+            otherSaversCount: raw.other_savers_count ?? 0,
+            otherSavers: (raw.other_savers ?? []).map {
+                FeedItemPayload.OtherSaver(
+                    userId: $0.user_id,
+                    username: $0.username,
+                    avatarUrl: $0.avatar_url
+                )
+            }
+        )
+    }
+
     private struct SpotSaveRaw: Decodable {
-        let list_id: UUID
-        /// `list_kind` field on the feed RPC payload (renamed from
-        /// `list_type` in the Phase 1 / Ticket T2 migration). Nullable so a
-        /// payload missing the field (legacy clients reading new-server data
-        /// or vice versa) decodes as nil rather than throwing.
-        let list_kind: ListKind?
-        let list_name: String?
+        let lists: [ListRefRaw]
         let spot_id: String
         let other_savers_count: Int?
         let other_savers: [OtherSaverRaw]?
+    }
+
+    private struct ListRefRaw: Decodable {
+        let id: UUID
+        let kind: ListKind?
+        let name: String?
     }
 
     private struct OtherSaverRaw: Decodable {

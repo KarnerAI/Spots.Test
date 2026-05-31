@@ -526,20 +526,22 @@ class LocationSavingViewModel: ObservableObject {
                 remainingToRemove.remove(conversion.fromListId)
             }
 
-            // ADD first — never lose a save. If any add throws, rollback.
-            for id in remainingToAdd {
-                try await saveSpot(
-                    placeId: spotData.placeId,
-                    name: spotData.name,
-                    address: spotData.address,
-                    city: spotData.city,
-                    locality: spotData.locality,
-                    latitude: spotData.coordinate?.latitude,
-                    longitude: spotData.coordinate?.longitude,
-                    types: spotData.types,
-                    photoUrl: spotData.photoUrl,
-                    photoReference: spotData.photoReference,
-                    toListId: id
+            // ADD: batched first-save (PR-B / D14). Upsert the spot once,
+            // then write all destination list memberships + the feed_activities
+            // row in ONE record_first_save RPC call. Replaces the prior per-list
+            // saveSpot() loop, which lost atomicity between feed-card writes
+            // and membership writes (the eng-review subagent challenge).
+            //
+            // `recordFirstSave` is idempotent (UNIQUE on (user, spot, kind))
+            // and skips the feed_activities row entirely for import sources
+            // (D15) so the same code path handles bulk imports without
+            // firing 200 feed cards.
+            if !remainingToAdd.isEmpty {
+                try await upsertSpotWithEnrichment(spotData: spotData)
+                try await service.recordFirstSave(
+                    placeId: placeId,
+                    listIds: Array(remainingToAdd),
+                    source: .manual
                 )
             }
             // REMOVE second — best-effort. A partial failure here leaves the
@@ -553,6 +555,61 @@ class LocationSavingViewModel: ObservableObject {
             lastSaveError = "Couldn't save. Try again."
             throw error
         }
+    }
+
+    /// Upsert the spots row once for a batched save (PR-B / D14). Mirrors
+    /// the enrichment chain in `saveSpot(placeId:...)` but runs exactly
+    /// once for a multi-list save commit so we don't pay the Place Details
+    /// API cost N times. Caller is responsible for the subsequent list
+    /// membership writes (via `recordFirstSave`).
+    private func upsertSpotWithEnrichment(spotData: PlaceAutocompleteResult) async throws {
+        var resolvedCity = spotData.city
+        var resolvedLocality = spotData.locality
+        var resolvedCountry: String? = nil
+        var resolvedTypes = spotData.types
+        var resolvedPhotoUrl = spotData.photoUrl
+        var resolvedPhotoReference = spotData.photoReference
+        var resolvedRating: Double? = nil
+
+        let needsDetails = (resolvedCountry?.isEmpty ?? true)
+            || (resolvedRating == nil)
+            || (resolvedCity?.isEmpty ?? true)
+            || (resolvedLocality?.isEmpty ?? true)
+            || (resolvedTypes?.isEmpty ?? true)
+        if needsDetails {
+            do {
+                if let details = try await PlacesAPIService.shared.fetchPlaceDetails(placeId: spotData.placeId) {
+                    if (resolvedCity?.isEmpty ?? true) { resolvedCity = details.city }
+                    if (resolvedLocality?.isEmpty ?? true) { resolvedLocality = details.locality }
+                    if (resolvedCountry?.isEmpty ?? true) { resolvedCountry = details.country }
+                    if (resolvedTypes?.isEmpty ?? true), !details.category.isEmpty {
+                        resolvedTypes = [details.category.lowercased().replacingOccurrences(of: " ", with: "_")]
+                    }
+                    if (resolvedPhotoUrl?.isEmpty ?? true) { resolvedPhotoUrl = details.photoUrl }
+                    if (resolvedPhotoReference?.isEmpty ?? true) { resolvedPhotoReference = details.photoReference }
+                    if resolvedRating == nil { resolvedRating = details.rating }
+                }
+            } catch {
+                // Same policy as saveSpot: enrichment failures don't abort
+                // the save. The backfill script picks up NULL columns later.
+                print("⚠️ LocationSavingViewModel.upsertSpotWithEnrichment: Place Details failed for \(spotData.placeId): \(error.localizedDescription).")
+            }
+        }
+
+        try await service.upsertSpot(
+            placeId: spotData.placeId,
+            name: spotData.name,
+            address: spotData.address,
+            city: resolvedCity,
+            locality: resolvedLocality,
+            country: resolvedCountry,
+            latitude: spotData.coordinate?.latitude,
+            longitude: spotData.coordinate?.longitude,
+            types: resolvedTypes,
+            photoUrl: resolvedPhotoUrl,
+            photoReference: resolvedPhotoReference,
+            rating: resolvedRating
+        )
     }
 
     // MARK: - Conversion detection (pure helper, exposed for testing)

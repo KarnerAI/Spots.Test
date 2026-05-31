@@ -109,6 +109,28 @@ final class MockLocationSavingService: LocationSavingServiceProtocol, @unchecked
         listsContainingSpot[placeId] = current
     }
 
+    /// Batched record_first_save call (PR-B / D14). Records the batched
+    /// (placeId, listIds, source) tuple AND mirrors the per-list state
+    /// changes via the existing saveSpotToList path so legacy assertions on
+    /// `saveSpotToListCalls` keep working unchanged. New PR-B tests assert
+    /// on `recordFirstSaveCalls` for the batched semantic itself.
+    var recordFirstSaveCalls: [(placeId: String, listIds: [UUID], source: SpotSaveSource)] = []
+    var recordFirstSaveShouldThrow: Error?
+    func recordFirstSave(
+        placeId: String,
+        listIds: [UUID],
+        source: SpotSaveSource
+    ) async throws {
+        recordFirstSaveCalls.append((placeId, listIds, source))
+        if let err = recordFirstSaveShouldThrow { throw err }
+        // Mirror DB state per list so getListsContainingSpot reflects the
+        // batched add. Routes through saveSpotToList to keep the existing
+        // recorder + once-throw hooks behaving identically.
+        for id in listIds {
+            try await saveSpotToList(placeId: placeId, listId: id)
+        }
+    }
+
     func upsertSpot(
         placeId: String,
         name: String,
